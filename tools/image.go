@@ -1,0 +1,144 @@
+// image.go read_image 工具：读取 PNG/JPEG/WebP/GIF 图像并作为多模态
+// 内容回传。PNG/JPEG/GIF 用标准库解码校验，过大时按比例缩小（最长边
+// 1568）后重编码 PNG；WebP 无法本地解码，小文件直接透传（base64）。
+package tools
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"fmt"
+	"image"
+	"image/color"
+	_ "image/gif"
+	_ "image/jpeg"
+	"image/png"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+const (
+	maxImageDim    = 1568 // 最长边上限（与常见 API 建议一致）
+	maxPassthrough = 4 << 20
+)
+
+// ReadImageFile 读取图像文件，返回 (mime, base64, error)。
+func ReadImageFile(path string) (string, string, error) {
+	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(path), "."))
+	switch ext {
+	case "png", "jpg", "jpeg", "gif", "webp":
+	default:
+		return "", "", fmt.Errorf("unsupported image type %q (supported: png/jpg/jpeg/webp/gif)", ext)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", "", err
+	}
+	if len(data) > 20<<20 {
+		return "", "", fmt.Errorf("image file too large (%d bytes)", len(data))
+	}
+	if ext == "webp" {
+		if len(data) > maxPassthrough {
+			return "", "", fmt.Errorf("webp file too large to pass through (%d bytes)", len(data))
+		}
+		return "image/webp", base64.StdEncoding.EncodeToString(data), nil
+	}
+
+	img, format, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return "", "", fmt.Errorf("decode %s image: %w", ext, err)
+	}
+	b := img.Bounds()
+	needsResize := b.Dx() > maxImageDim || b.Dy() > maxImageDim
+	if format == "gif" {
+		// GIF 取首帧重新编码为 PNG（动画无意义且体积大）
+		needsResize = true
+	}
+	if needsResize {
+		img = downscale(img, maxImageDim)
+		var buf bytes.Buffer
+		if err := png.Encode(&buf, img); err != nil {
+			return "", "", err
+		}
+		return "image/png", base64.StdEncoding.EncodeToString(buf.Bytes()), nil
+	}
+	switch format {
+	case "png":
+		return "image/png", base64.StdEncoding.EncodeToString(data), nil
+	case "jpeg":
+		return "image/jpeg", base64.StdEncoding.EncodeToString(data), nil
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return "", "", err
+	}
+	return "image/png", base64.StdEncoding.EncodeToString(buf.Bytes()), nil
+}
+
+// downscale 等比缩小（最长边 ≤ max；区域平均采样，标准库实现）。
+func downscale(img image.Image, maxDim int) image.Image {
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	if w <= maxDim && h <= maxDim {
+		return img
+	}
+	scale := float64(maxDim) / float64(max(w, h))
+	nw, nh := max(1, int(float64(w)*scale)), max(1, int(float64(h)*scale))
+	dst := image.NewRGBA(image.Rect(0, 0, nw, nh))
+	sx := float64(w) / float64(nw)
+	sy := float64(h) / float64(nh)
+	for y := 0; y < nh; y++ {
+		y0 := b.Min.Y + int(float64(y)*sy)
+		y1 := b.Min.Y + int(float64(y+1)*sy)
+		if y1 <= y0 {
+			y1 = y0 + 1
+		}
+		for x := 0; x < nw; x++ {
+			x0 := b.Min.X + int(float64(x)*sx)
+			x1 := b.Min.X + int(float64(x+1)*sx)
+			if x1 <= x0 {
+				x1 = x0 + 1
+			}
+			var rs, gs, bs, as, n uint64
+			for yy := y0; yy < y1; yy++ {
+				for xx := x0; xx < x1; xx++ {
+					r, g, bl, a := img.At(xx, yy).RGBA()
+					rs += uint64(r)
+					gs += uint64(g)
+					bs += uint64(bl)
+					as += uint64(a)
+					n++
+				}
+			}
+			if n == 0 {
+				n = 1
+			}
+			dst.Set(x, y, color.RGBA{R: uint8(rs / n >> 8), G: uint8(gs / n >> 8), B: uint8(bs / n >> 8), A: uint8(as / n >> 8)})
+		}
+	}
+	return dst
+}
+
+// RegisterReadImage 注册 read_image 工具。
+func RegisterReadImage(r *Registry) {
+	r.Register("read_image", func(ctx context.Context, args string) (Result, error) {
+		var a struct {
+			FilePath string `json:"file_path"`
+		}
+		if err := decodeArgs(args, &a); err != nil {
+			return Result{}, err
+		}
+		if a.FilePath == "" {
+			return Result{}, fmt.Errorf("file_path is required")
+		}
+		mime, b64, err := ReadImageFile(a.FilePath)
+		if err != nil {
+			return Result{}, err
+		}
+		return Result{
+			Text:   fmt.Sprintf("image %s (%s) loaded and will be attached to your next context as an image part; describe/analyze it directly", a.FilePath, mime),
+			Images: []Image{{Mime: mime, B64: b64}},
+		}, nil
+	})
+}
