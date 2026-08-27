@@ -14,6 +14,10 @@ func Size(fd int) (int, int) { return 80, 24 }
 
 func IsTTY(fd int) bool { return false }
 
+// resizeSignal 非 unix 平台无窗口尺寸变化信号（Screen 的重绘监听退化为
+// 仅等待关闭）。
+func resizeSignal() os.Signal { return nil }
+
 type Raw struct{}
 
 func OpenRaw(fd int) (*Raw, error) { return nil, errors.New("raw mode unsupported on this platform") }

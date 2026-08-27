@@ -11,7 +11,6 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
-	"syscall"
 )
 
 // Screen 备用屏幕渲染器。
@@ -70,10 +69,12 @@ func (s *Screen) Start(mouse bool) error {
 	s.out.WriteString(b.String())
 	s.out.Flush()
 
-	// SIGWINCH → 同步尺寸并通知重绘
+	// SIGWINCH → 同步尺寸并通知重绘（非 unix 平台无此信号，仅等待关闭）
 	go func() {
 		sig := make(chan os.Signal, 1)
-		signal.Notify(sig, syscall.SIGWINCH)
+		if rs := resizeSignal(); rs != nil {
+			signal.Notify(sig, rs)
+		}
 		defer signal.Stop(sig)
 		for {
 			select {
