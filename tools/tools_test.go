@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"grf/llm"
 )
 
 func newTestPolicy(t *testing.T, workspace string) *FsPolicy {
@@ -161,5 +163,70 @@ func TestWebSearchParse(t *testing.T) {
 	}
 	if s := htmlText("<b>Hello</b> &amp; &quot;world&quot;"); s != `Hello & "world"` {
 		t.Fatalf("htmlText: %q", s)
+	}
+}
+
+func noopHandler(ctx context.Context, args string) (Result, error) { return Result{}, nil }
+
+func TestRegisterCustom(t *testing.T) {
+	r := NewRegistry()
+	r.RegisterCustom(llm.Tool{
+		Name:        "export_report",
+		Description: "导出报表",
+		Parameters:  map[string]any{"type": "object"},
+	}, func(ctx context.Context, args string) (Result, error) {
+		return TextResult("done:" + args), nil
+	})
+	if !r.Has("export_report") {
+		t.Fatal("custom tool not registered")
+	}
+	names := r.Registered()
+	if len(names) != 1 || names[0] != "export_report" {
+		t.Fatalf("Registered: %v", names)
+	}
+	defs := r.Defs()
+	if len(defs) != 1 || defs[0].Name != "export_report" || defs[0].Description != "导出报表" {
+		t.Fatalf("Defs: %+v", defs)
+	}
+	res := r.Execute(context.Background(), "export_report", `{"x":1}`)
+	if res.Text != `done:{"x":1}` {
+		t.Fatalf("Execute: %q", res.Text)
+	}
+	// 禁用后不再下发、不可执行
+	r.Disable("export_report")
+	if r.Has("export_report") || len(r.Defs()) != 0 {
+		t.Fatalf("disable custom failed: %v", r.Registered())
+	}
+	if res := r.Execute(context.Background(), "export_report", "{}"); !strings.Contains(res.Text, "unknown tool") {
+		t.Fatalf("disabled custom should be unknown: %q", res.Text)
+	}
+}
+
+func TestRegisterCustomGuards(t *testing.T) {
+	r := NewRegistry()
+	cases := []struct {
+		name string
+		def  llm.Tool
+	}{
+		{"empty name", llm.Tool{Description: "x"}},
+		{"spec conflict", llm.Tool{Name: "bash", Description: "x"}},
+	}
+	for _, c := range cases {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("%s: expected panic", c.name)
+				}
+			}()
+			r.RegisterCustom(c.def, noopHandler)
+		}()
+	}
+	// spec 内名字仍走 Register（且不受 custom 影响）
+	r.Register("bash", noopHandler)
+	if !r.Has("bash") {
+		t.Fatal("spec Register broken")
+	}
+	if len(r.Defs()) != 1 || r.Defs()[0].Name != "bash" {
+		t.Fatalf("Defs after spec Register: %+v", r.Defs())
 	}
 }

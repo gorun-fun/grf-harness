@@ -52,7 +52,8 @@ type formField struct {
 	value *Editor
 }
 
-// RunModelPage 启动配置页；返回是否保存了修改。
+// RunModelPage 启动模型配置页（全屏 TTY）；修改经 config 落盘，返回
+// 启动/运行错误。
 func RunModelPage() error {
 	scr := term.NewScreen()
 	if err := scr.Start(false); err != nil {

@@ -35,9 +35,12 @@ type Handler func(ctx context.Context, args string) (Result, error)
 type Registry struct {
 	mu       sync.RWMutex
 	handlers map[string]Handler
+	custom   map[string]llm.Tool // spec 之外的自定义工具定义（嵌入方扩展）
 }
 
-func NewRegistry() *Registry { return &Registry{handlers: map[string]Handler{}} }
+func NewRegistry() *Registry {
+	return &Registry{handlers: map[string]Handler{}, custom: map[string]llm.Tool{}}
+}
 
 // Register 按工具名注册处理器（定义取自 spec，不存在则 panic——保证
 // 实现与文档一一对齐）。
@@ -48,6 +51,23 @@ func (r *Registry) Register(name string, h Handler) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.handlers[name] = h
+}
+
+// RegisterCustom 注册 spec 之外的自定义工具（嵌入方扩展入口）：定义由
+// 调用方完整给出（随请求发给模型），名字不得与内置 25 个冲突——内置
+// 工具定义的唯一来源仍是 spec，不允许借道覆盖。注册后的自定义工具与
+// 内置工具在 Disable/Execute/Defs/Registered 里同等对待。
+func (r *Registry) RegisterCustom(def llm.Tool, h Handler) {
+	if def.Name == "" {
+		panic("tools: custom tool definition needs a name")
+	}
+	if _, ok := SpecDef(def.Name); ok {
+		panic("tools: custom tool name conflicts with spec: " + def.Name)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.custom[def.Name] = def
+	r.handlers[def.Name] = h
 }
 
 // Disable 按名移除已注册工具（未注册的名静默忽略）。禁用后工具不再随
@@ -68,23 +88,37 @@ func (r *Registry) Has(name string) bool {
 	return ok
 }
 
-// Registered 已注册的工具名（按 spec 顺序）。
+// Registered 已注册的工具名（内置按 spec 顺序在前，自定义按字典序在后）。
 func (r *Registry) Registered() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	var names []string
 	for _, n := range SpecNames() {
-		if r.Has(n) {
+		if _, ok := r.handlers[n]; ok {
 			names = append(names, n)
 		}
 	}
-	return names
+	var custom []string
+	for n := range r.custom {
+		if _, ok := r.handlers[n]; ok {
+			custom = append(custom, n)
+		}
+	}
+	sort.Strings(custom)
+	return append(names, custom...)
 }
 
-// Defs 返回已注册工具的定义（spec 顺序），随请求发送给 API。
+// Defs 返回已注册工具的定义（内置按 spec 顺序，自定义按字典序），
+// 随请求发送给 API。
 func (r *Registry) Defs() []llm.Tool {
-	var defs []llm.Tool
-	for _, n := range SpecNames() {
-		if r.Has(n) {
-			d, _ := SpecDef(n)
+	names := r.Registered()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	defs := make([]llm.Tool, 0, len(names))
+	for _, n := range names {
+		if d, ok := SpecDef(n); ok {
+			defs = append(defs, d)
+		} else if d, ok := r.custom[n]; ok {
 			defs = append(defs, d)
 		}
 	}
@@ -98,7 +132,7 @@ func (r *Registry) Execute(ctx context.Context, name, args string) (res Result) 
 	h, ok := r.handlers[name]
 	r.mu.RUnlock()
 	if !ok {
-		return TextResult(fmt.Sprintf("error: unknown tool %q, available: %v", name, SpecNames()))
+		return TextResult(fmt.Sprintf("error: unknown tool %q, available: %v", name, r.Registered()))
 	}
 	defer func() {
 		if rec := recover(); rec != nil {

@@ -24,7 +24,8 @@ ANSI→验证帧），历史会话输出落在 `.grf/sessions/`。
 - **无 `internal/` 目录**：所有包必须可被其他 Go 应用导入（模块路径 `grf`）。
 - **工具定义唯一来源**：`tools/spec/tools.json` 是 `docs/tools.json` 的嵌入副本，
   两份必须保持一致；`tools.Registry.Register` 会拒绝 spec 里不存在的名字。
-  改工具行为不改 spec 文本。
+  改工具行为不改 spec 文本。嵌入方扩展走 `RegisterCustom`（自带定义、
+  不得与内置 25 个重名），内置工具不借道覆盖。
 - 回复**不做 markdown 渲染**，只显示原始文本（需求如此，勿加渲染）。
 
 ## 分层（依赖方向自上而下）

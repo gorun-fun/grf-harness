@@ -30,10 +30,16 @@ type Options struct {
 	Client        *llm.Client               // 指定客户端；nil 时从配置加载
 	Host          tools.Host                // 交互宿主；nil 时按交互性自动选择
 	MaxSteps      int                       // 循环上限；0 用配置/默认
-	SystemPrompt  string                    // 自定义静态提示词
+	SystemPrompt  string                    // 自定义静态提示词；空用配置文件/内置
 	DepthLimit    int                       // 子代理深度上限
 	DisabledTools []string                  // 按场景禁用的工具名
-	VerboseEvents func(kind, detail string) // 全部事件回调（嵌入方监听）
+	VerboseEvents func(kind, detail string) // 全部事件回调（挂到根 agent；RunTask 会覆盖，见其注释）
+
+	// 运行策略覆盖：仅本次构建生效、不写回配置文件；空/nil 沿用
+	// ~/.grf/settings.json（嵌入方可用它摆脱对机器全局配置的依赖）。
+	Sandbox     string // bash 文件沙箱："off" | "workspace-write"
+	FsPolicy    string // 写前先读策略："observe" | "off"
+	AutoApprove *bool  // 非交互自动批准沙箱升级/计划
 }
 
 // App 应用门面。
@@ -53,20 +59,47 @@ func New(opts Options) (*App, error) {
 		}
 		client = llm.NewClient(llm.Config{BaseURL: eff.BaseURL, APIKey: eff.APIKey, Model: eff.Model})
 	}
+	applyPolicyOverrides(settings, opts)
+	// 提示词优先级：Options.SystemPrompt > 配置文件 system_prompt（gh
+	// config prompt set 落盘）> 内置默认。
+	sysPrompt := opts.SystemPrompt
+	if sysPrompt == "" && settings != nil {
+		sysPrompt = settings.SystemPrompt
+	}
 	h, err := agent.Build(agent.Options{
-		Workspace:    opts.Workspace,
-		Client:       client,
-		Settings:     settings,
-		Host:         opts.Host,
-		MaxSteps:     opts.MaxSteps,
-		SystemPrompt: opts.SystemPrompt,
-		DepthLimit:   opts.DepthLimit,
+		Workspace:     opts.Workspace,
+		Client:        client,
+		Settings:      settings,
+		Host:          opts.Host,
+		MaxSteps:      opts.MaxSteps,
+		SystemPrompt:  sysPrompt,
+		DepthLimit:    opts.DepthLimit,
 		DisabledTools: opts.DisabledTools,
 	})
 	if err != nil {
 		return nil, err
 	}
+	if opts.VerboseEvents != nil {
+		h.Root.SetOnEvent(opts.VerboseEvents)
+	}
 	return &App{Harness: h, opts: opts}, nil
+}
+
+// applyPolicyOverrides 把 Options 的运行策略覆盖到 settings（仅内存，
+// 不落盘）。
+func applyPolicyOverrides(s *config.Settings, opts Options) {
+	if s == nil {
+		return
+	}
+	if opts.Sandbox != "" {
+		s.Sandbox = opts.Sandbox
+	}
+	if opts.FsPolicy != "" {
+		s.FsPolicy = opts.FsPolicy
+	}
+	if opts.AutoApprove != nil {
+		s.AutoApprove = *opts.AutoApprove
+	}
 }
 
 // Root 根 agent。
@@ -240,12 +273,15 @@ func (s *stdoutUI) attach(ag *agent.Agent) {
 }
 
 // RunTask 单次任务模式：执行任务、流式直出到 stdout、保存会话。
+// 注意：内部会为根 agent 挂上自己的 stdout 渲染（覆盖之前设置的
+// OnEvent/StreamHooks 回调）——需要自定义回调的嵌入方直接用
+// Root().Run / RunAutoGoal 驱动，不要经过本方法。
 func (a *App) RunTask(ctx context.Context, task string) error {
 	ui := &stdoutUI{tty: term.IsTTY(int(os.Stdout.Fd())), w: os.Stdout}
 	ui.attach(a.Root())
 	host := a.opts.Host
 	if host == nil {
-		host = &TaskHost{AutoApprove: a.Harness.Settings.AutoApprove, ttyOut: ui.tty}
+		host = NewTaskHost(a.Harness.Settings.AutoApprove)
 		a.Root().SetHost(host)
 	}
 	_, err := a.Root().RunAutoGoal(ctx, task)
@@ -283,11 +319,21 @@ func firstLineOf(s string) string {
 
 // ---- 交互宿主（任务模式）----
 
-// TaskHost stdout/stdin 交互宿主：提问打印到终端、从 stdin 读一行作答；
+// TaskHost stdin/stdout 交互宿主：提问打印到终端、从 stdin 读一行作答；
 // 沙箱升级/计划审批按 AutoApprove（或 TTY 下 y/n 询问）。
+//
+// 用 NewTaskHost 构造（自动探测 stdout 是否 TTY）。直接构造零值时视为
+// 非 TTY：AskUser 在 stdin 可交互时仍可用，三类审批一律按 AutoApprove
+// 处理（false 即静默拒绝）。
 type TaskHost struct {
 	AutoApprove bool
 	ttyOut      bool
+}
+
+// NewTaskHost 构建 stdin/stdout 交互宿主，按当前 stdout 是否 TTY 决定
+// 审批是否可交互询问。
+func NewTaskHost(autoApprove bool) *TaskHost {
+	return &TaskHost{AutoApprove: autoApprove, ttyOut: term.IsTTY(int(os.Stdout.Fd()))}
 }
 
 func (h *TaskHost) AskUser(ctx context.Context, qs []tools.Question) (map[string]any, error) {
