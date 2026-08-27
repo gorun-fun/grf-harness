@@ -141,7 +141,7 @@ func (a *App) ModelCmd(arg string) (string, error) {
 			return "", err
 		}
 		if len(s.Providers) == 0 {
-			return "（尚未配置任何提供商）\n添加: grf model", nil
+			return "（尚未配置任何提供商）\n添加: gh model", nil
 		}
 		var b strings.Builder
 		if m := a.Root().Model(); m != "" {

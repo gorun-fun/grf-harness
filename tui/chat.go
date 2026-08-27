@@ -243,7 +243,7 @@ func NewChat(a *app.App) *Chat {
 	}
 }
 
-// resolveMouseOn 鼠标初始状态：GRF_MOUSE > settings.mouse > 非 Apple 终端默认开。
+// resolveMouseOn 鼠标初始状态：GRF_MOUSE > settings.mouse > 默认开启。
 func resolveMouseOn() bool {
 	if v := os.Getenv("GRF_MOUSE"); v != "" {
 		return v != "0" && !strings.EqualFold(v, "false")
@@ -251,7 +251,7 @@ func resolveMouseOn() bool {
 	if s, err := loadSettings(); err == nil && s.Mouse != nil {
 		return *s.Mouse
 	}
-	return !strings.Contains(os.Getenv("TERM_PROGRAM"), "Apple")
+	return true
 }
 
 // Run 启动全屏交互（阻塞至退出）。
@@ -284,9 +284,6 @@ func (c *Chat) Run(ctx context.Context) error {
 	}
 
 	c.emitBlock(block{kind: blkDim, text: fmt.Sprintf("grf-harness %s - 输入消息开始对话，/help 查看命令（Tab 切换模式 · Ctrl+O 思考 · Shift+Tab 鼠标）", app.Version)})
-	if !c.mouseOn {
-		c.emitBlock(block{kind: blkDim, text: "（本终端默认关闭鼠标：用终端原生方式选择复制；Shift+Tab 开启滚轮与点击）"})
-	}
 	// -resume 启动：上方重放已恢复的历史聊天
 	if len(c.app.Root().History()) > 1 {
 		c.replayHistory()

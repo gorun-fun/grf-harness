@@ -1,4 +1,4 @@
-# grf（grf-harness）
+# grf-harness（gh）
 
 零依赖的终端 agent harness：**纯 Go 标准库实现**（无任何第三方依赖），
 按 `docs/tools.json` 完整实现 25 个工具（一个不少），OpenAI 兼容接口驱动，
@@ -21,7 +21,7 @@
   （不渲染 markdown，只显示原文）、连续工具事件合并折叠（Ctrl+O/单击展开）、
   todo/goal 状态面板、斜杠指令提示、模型/会话弹窗、ask 表单、计划审批、
   鼠标滚轮/单击/拖选复制（OSC52）
-- **单任务模式**：`grf "<任务描述>"` 直接流式输出结果后退出
+- **单任务模式**：`gh "<任务描述>"` 直接流式输出结果后退出
 - **子代理系统**：subagent / subagent_fork（后台默认 + 通知注入）、
   send_message 续聊、interrupt_agent 取消、list_agents 树状列表
 - **goal 自动续跑**：create/get/update_goal 严格 revision 校验、
@@ -37,21 +37,21 @@
 ## 用法
 
 ```sh
-go build -o grf .      # 或 ./build.sh
+go build -o gh .      # 或 ./build.sh
 
-grf                     # 全屏交互（默认模式）
-grf -resume             # 恢复上一次会话
-grf -plan               # 以计划模式启动（exit_plan_mode 呈交计划）
-grf "统计当前目录 go 文件行数"   # 单任务模式：直接输出结果后退出
-grf model               # 模型配置页（多提供商 / 自动检测模型）
-grf model set <p/m>     # 脚本化设置默认模型
-grf model list          # 列出已配置 提供商/模型
-grf config              # 配置摘要
-grf config prompt [set|reset]
-grf config steps [n|reset]
-grf config sandbox [off|workspace-write]
-grf config fspolicy [observe|off]
-grf version
+gh                     # 全屏交互（默认模式）
+gh -resume             # 恢复上一次会话
+gh -plan               # 以计划模式启动（exit_plan_mode 呈交计划）
+gh "统计当前目录 go 文件行数"   # 单任务模式：直接输出结果后退出
+gh model               # 模型配置页（多提供商 / 自动检测模型）
+gh model set <p/m>     # 脚本化设置默认模型
+gh model list          # 列出已配置 提供商/模型
+gh config              # 配置摘要
+gh config prompt [set|reset]
+gh config steps [n|reset]
+gh config sandbox [off|workspace-write]
+gh config fspolicy [observe|off]
+gh version
 ```
 
 非 TTY（管道/重定向）自动回退纯文本行模式 REPL。
@@ -169,7 +169,7 @@ docs/                 规范文档（prompt.md / tools.json）
 ```sh
 ./build.sh            # vet + build + test
 go test ./...         # 全部测试（无需网络与 API key，agent 回环用 httptest）
-go build -o grf .
+go build -o gh .
 ```
 
 ## 与原 gh 项目的关系

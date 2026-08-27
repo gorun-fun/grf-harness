@@ -103,6 +103,40 @@ func TestAll25ToolsRegistered(t *testing.T) {
 	}
 }
 
+func TestDisabledTools(t *testing.T) {
+	f := newFakeLLM([]string{"ok"})
+	defer f.Close()
+	h, err := Build(Options{
+		Workspace:     t.TempDir(),
+		Client:        llm.NewClient(llm.Config{BaseURL: f.URL(), APIKey: "t", Model: "test-model"}),
+		Settings:      &config.Settings{Sandbox: "off", FsPolicy: "observe"},
+		Host:          &tools.NoopHost{},
+		DisabledTools: []string{"bash", "web_search", "not_a_tool"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close()
+	if h.Root.reg.Has("bash") || h.Root.reg.Has("web_search") {
+		t.Fatal("disabled tools should be removed from root registry")
+	}
+	if got := len(h.Root.reg.Defs()); got != 23 {
+		t.Fatalf("root agent should expose 23 tools after disabling 2, got %d", got)
+	}
+	if err := h.VerifyAllToolsRegistered(); err != nil {
+		t.Fatalf("verify should skip disabled tools: %v", err)
+	}
+	// 子代理同样剔除
+	child := h.Manager.NewChild(h.Root, "sub", nil)
+	if child.reg.Has("bash") {
+		t.Fatal("disabled tools should be removed from child registry")
+	}
+	res := h.Root.reg.Execute(context.Background(), "bash", "{}")
+	if !strings.Contains(res.Text, "unknown tool") {
+		t.Fatalf("execute of disabled tool should report unknown, got %q", res.Text)
+	}
+}
+
 func TestRunLoopExecutesTool(t *testing.T) {
 	ws := t.TempDir()
 	os.WriteFile(filepath.Join(ws, "hello.txt"), []byte("你好 world\n"), 0o644)

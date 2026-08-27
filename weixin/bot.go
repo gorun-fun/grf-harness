@@ -27,7 +27,7 @@ const replyOnLlmError = "⚠️ AI 服务暂时不可用,请稍后再试"
 // (全部 25 个工具)处理并回复。阻塞直到 ctx 取消;退出前发送 notifystop。
 // workspace 为 agent 工作区;空串用用户 home 目录。
 func Run(ctx context.Context, systemPrompt, workspace string) error {
-	// agent 使用 grf 当前生效的模型配置(~/.grf/settings.json)
+	// agent 使用 gh 当前生效的模型配置(~/.grf/settings.json)
 	eff, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("加载模型配置失败: %w", err)

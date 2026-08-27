@@ -1,4 +1,4 @@
-// modelpage.go `grf model` 全屏配置页：提供商列表 → 模型列表（异步
+// modelpage.go `gh model` 全屏配置页：提供商列表 → 模型列表（异步
 // GET /models 检测，手动添加，删除）；添加提供商走表单流程。非 TTY 时
 // 由 main 回退到编号输入（脚本化路径）。
 package tui
@@ -218,7 +218,7 @@ func (m *ModelPage) fetchModels(name string) {
 }
 
 // applyFetched 应用检测结果：以服务端为准并保留本地手动添加过的模型，
-// 写回 settings 持久化（否则 `grf model list` 看不到检测出的模型）。
+// 写回 settings 持久化（否则 `gh model list` 看不到检测出的模型）。
 func (m *ModelPage) applyFetched(server []string) []string {
 	s := m.settings()
 	p := s.Providers[m.curProvider()]

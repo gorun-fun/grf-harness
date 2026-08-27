@@ -20,8 +20,13 @@ var (
 	reAttrToolCallOpen = regexp.MustCompile(`(?s)<tool_call\b([^>]*)>`)
 	// 正文形式：<tool_call>{"name":"read","arguments":{...}}</tool_call>
 	reBodyToolCall = regexp.MustCompile(`(?s)<tool_call\s*>(.*?)</tool_call>`)
-	reAttrName     = regexp.MustCompile(`name\s*[:=]\s*["']?([A-Za-z0-9_.-]+)`)
-	reAttrArgs     = regexp.MustCompile(`arguments\s*[:=]\s*`)
+	// 宽松体形式的开标签（无属性、精确 ">" 结尾），供闭合残缺时的兜底扫描
+	reOpenToolCall = regexp.MustCompile(`<tool_call\s*>`)
+	// 闭合标签变体穷举：</tool_call>、</tool_call（缺 >）、任意程度截断的
+	// 名称（</tool_c>）、混用 DSML 风格的 </｜｜DSML｜｜tool_c...> 及其截断
+	reLooseCloser = regexp.MustCompile(`\s*</(?:(?:[｜|]\s*[｜|]\s*DSML\s*[｜|]\s*[｜|])?tool\w*|[｜|]\s*[｜|]\s*DSML\s*[｜|]\s*[｜|]\w+)\s*>?`)
+	reAttrName    = regexp.MustCompile(`name\s*[:=]\s*["']?([A-Za-z0-9_.-]+)`)
+	reAttrArgs    = regexp.MustCompile(`arguments\s*[:=]\s*`)
 )
 
 // fallbackContentToolCalls 从正文提取 XML 风格工具调用并从正文中移除
@@ -35,7 +40,9 @@ func fallbackContentToolCalls(m *Message) bool {
 	// 内容——部分模型把工具调用写进 reasoning 流，不在正文里解析会话
 	// 就会静默结束。
 	for _, src := range []*string{&m.Content, &m.Reasoning} {
-		if strings.Contains(*src, dsmlMarker) {
+		// DSML 标记检测放宽到 "DSML" 关键字：竖线可能是全半角/空格变体，
+		// 归一化在 extractDSMLCalls 内部进行
+		if strings.Contains(*src, "DSML") {
 			extracted, cleaned := extractDSMLCalls(*src)
 			calls = append(calls, extracted...)
 			*src = strings.TrimSpace(cleaned)
@@ -94,9 +101,37 @@ func fallbackContentToolCalls(m *Message) bool {
 func extractToolCalls(text string) (calls []ToolCall, cleaned string) {
 	remove := map[string]bool{} // 待剔除的片段
 
-	// 正文形式优先（结构化最完整）
+	// 宽松体形式优先：开标签后紧跟配平 JSON 体即可解析，闭合标签残缺
+	// （</tool_cal>、混用 DSML 风格或流截断整体缺失）也能处理；
+	// 结构完整的写法会被这里提前消费，后续 pass 靠 remove 判重跳过
+	for _, loc := range reOpenToolCall.FindAllStringIndex(text, -1) {
+		rest := text[loc[1]:]
+		i := strings.Index(rest, "{")
+		if i < 0 {
+			continue
+		}
+		obj := balancedJSONObject(rest[i:])
+		if obj == "" {
+			continue
+		}
+		c, ok := bodyJSONCall(obj)
+		if !ok {
+			continue
+		}
+		end := loc[1] + i + len(obj)
+		whole := text[loc[0]:end]
+		if m := reLooseCloser.FindStringIndex(text[end:]); m != nil {
+			whole = text[loc[0] : end+m[1]]
+		}
+		calls = append(calls, c)
+		remove[whole] = true
+	}
+	// 正文形式（结构化最完整）
 	for _, blk := range reBodyToolCall.FindAllStringSubmatchIndex(text, -1) {
 		whole := text[blk[0]:blk[1]]
+		if remove[whole] {
+			continue
+		}
 		body := strings.TrimSpace(text[blk[2]:blk[3]])
 		if c, ok := bodyJSONCall(body); ok {
 			calls = append(calls, c)
@@ -163,7 +198,9 @@ func balancedJSONObject(s string) string {
 	return ""
 }
 
-// bodyJSONCall 解析 <tool_call>{...}</tool_call> 的 JSON 体。
+// bodyJSONCall 解析 <tool_call>{...}</tool_call> 的 JSON 体。两种写法：
+// 标准的 {"name":..,"arguments":{...}}，以及 name 平铺在顶层、其余键
+// 直接作为参数的写法（与 DSML 单数形式一致）。
 func bodyJSONCall(body string) (ToolCall, bool) {
 	obj := balancedJSONObject(body)
 	if obj == "" {
@@ -178,7 +215,16 @@ func bodyJSONCall(body string) (ToolCall, bool) {
 	}
 	args := strings.TrimSpace(string(parsed.Arguments))
 	if args == "" {
-		args = "{}"
+		var flat map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(obj), &flat); err != nil {
+			return ToolCall{}, false
+		}
+		delete(flat, "name")
+		data, err := json.Marshal(flat)
+		if err != nil {
+			return ToolCall{}, false
+		}
+		args = string(data)
 	}
 	return ToolCall{Function: FunctionCall{Name: parsed.Name, Arguments: args}}, true
 }

@@ -50,6 +50,16 @@ func (r *Registry) Register(name string, h Handler) {
 	r.handlers[name] = h
 }
 
+// Disable 按名移除已注册工具（未注册的名静默忽略）。禁用后工具不再随
+// Defs 发给模型、Execute 返回 unknown tool，用于宿主按场景裁剪工具链。
+func (r *Registry) Disable(names ...string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, name := range names {
+		delete(r.handlers, name)
+	}
+}
+
 // Has 是否已注册。
 func (r *Registry) Has(name string) bool {
 	r.mu.RLock()

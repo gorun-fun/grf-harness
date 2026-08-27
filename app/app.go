@@ -32,6 +32,7 @@ type Options struct {
 	MaxSteps      int                       // 循环上限；0 用配置/默认
 	SystemPrompt  string                    // 自定义静态提示词
 	DepthLimit    int                       // 子代理深度上限
+	DisabledTools []string                  // 按场景禁用的工具名
 	VerboseEvents func(kind, detail string) // 全部事件回调（嵌入方监听）
 }
 
@@ -60,6 +61,7 @@ func New(opts Options) (*App, error) {
 		MaxSteps:     opts.MaxSteps,
 		SystemPrompt: opts.SystemPrompt,
 		DepthLimit:   opts.DepthLimit,
+		DisabledTools: opts.DisabledTools,
 	})
 	if err != nil {
 		return nil, err
@@ -113,7 +115,7 @@ func (a *App) NewSession() {
 func (a *App) LatestSession() (store.Session, error) { return a.Harness.Store.LatestSessionFull() }
 
 // SwitchModel 切换会话模型并换 client（仅当前会话生效，不写回配置；
-// 默认模型只能经 grf model 子命令修改）。
+// 默认模型只能经 gh model 子命令修改）。
 func (a *App) SwitchModel(provider, model string) error {
 	s, err := config.LoadFileForUpdate()
 	if err != nil {

@@ -1,15 +1,15 @@
-// grf（grf-harness）：零依赖的终端 agent harness。默认进入全屏交互界面；
-// `grf <任务描述>` 为单任务模式直接输出结果；亦可作为 Go 模块被其他应用
+// grf-harness（gh）：零依赖的终端 agent harness。默认进入全屏交互界面；
+// `gh <任务描述>` 为单任务模式直接输出结果；亦可作为 Go 模块被其他应用
 // 引用（grf/app、grf/agent、grf/tools、grf/llm 等包）。
 //
 // 用法：
 //
-//	grf                     全屏交互（-resume 恢复上次会话，-plan 计划模式）
-//	grf <任务描述>          单任务模式：流式直出，完成后退出
-//	grf model               模型配置页（TTY 全屏；model set/list 脚本化）
-//	grf config [...]        配置摘要 / prompt / steps / sandbox / fspolicy
-//	grf connect weixin      连接微信 ClawBot(后台守护进程);disconnect 停止
-//	grf version             版本与当前生效配置
+//	gh                     全屏交互（-resume 恢复上次会话，-plan 计划模式）
+//	gh <任务描述>          单任务模式：流式直出，完成后退出
+//	gh model               模型配置页（TTY 全屏；model set/list 脚本化）
+//	gh config [...]        配置摘要 / prompt / steps / sandbox / fspolicy
+//	gh connect weixin      连接微信 ClawBot(后台守护进程);disconnect 停止
+//	gh version             版本与当前生效配置
 package main
 
 import (
@@ -64,7 +64,7 @@ func main() {
 		}
 	}
 
-	fs := flag.NewFlagSet("grf", flag.ExitOnError)
+	fs := flag.NewFlagSet("gh", flag.ExitOnError)
 	resume := fs.Bool("resume", false, "恢复上一次会话的上下文")
 	plan := fs.Bool("plan", false, "以计划模式启动（exit_plan_mode 呈交计划）")
 	_ = fs.Parse(args)
@@ -76,24 +76,24 @@ func main() {
 	runPlain(*resume)
 }
 
-const usageText = `grf-harness %s - 零依赖终端 agent harness（grf）
+const usageText = `grf-harness %s - 零依赖终端 agent harness（gh）
 
 用法:
-  grf                     全屏交互（默认模式）
-  grf -resume             恢复上一次会话
-  grf -plan               以计划模式启动
-  grf <任务描述>           单任务模式：直接流式输出结果后退出
-  grf model               模型配置页（多提供商管理）
-  grf model set <p/m>     设置默认模型（provider/model）
-  grf model list          逐行列出已配置 提供商/模型（* 为默认）
-  grf config              配置摘要
-  grf config prompt [set|reset]      自定义系统提示词
-  grf config steps [n|reset]         工具循环轮次上限
-  grf config sandbox [off|workspace-write]  bash 文件沙箱
-  grf config fspolicy [observe|off]         写前先读策略
-  grf connect weixin      连接微信 ClawBot(后台守护进程,消息由本地 agent 回答)
-  grf disconnect weixin   断开并停止微信 ClawBot 守护进程
-  grf version             版本号与当前生效配置
+  gh                     全屏交互（默认模式）
+  gh -resume             恢复上一次会话
+  gh -plan               以计划模式启动
+  gh <任务描述>           单任务模式：直接流式输出结果后退出
+  gh model               模型配置页（多提供商管理）
+  gh model set <p/m>     设置默认模型（provider/model）
+  gh model list          逐行列出已配置 提供商/模型（* 为默认）
+  gh config              配置摘要
+  gh config prompt [set|reset]      自定义系统提示词
+  gh config steps [n|reset]         工具循环轮次上限
+  gh config sandbox [off|workspace-write]  bash 文件沙箱
+  gh config fspolicy [observe|off]         写前先读策略
+  gh connect weixin      连接微信 ClawBot(后台守护进程,消息由本地 agent 回答)
+  gh disconnect weixin   断开并停止微信 ClawBot 守护进程
+  gh version             版本号与当前生效配置
 
 全屏快捷键: ↑↓ 历史 · PgUp/PgDn/滚轮 翻页 · Ctrl+O 展开思考/工具块 ·
 F2 计划模式 · Tab 补全指令/切换鼠标 · Ctrl+C 中断执行（空闲退出） ·
@@ -166,11 +166,11 @@ func runTaskCmd(args []string) {
 	}
 }
 
-// runModelCmd grf model 子命令。
+// runModelCmd gh model 子命令。
 func runModelCmd(args []string) {
 	if len(args) == 0 {
 		if !interactive() {
-			fmt.Fprintln(os.Stderr, "非终端环境请使用: grf model list / grf model set <provider/model>")
+			fmt.Fprintln(os.Stderr, "非终端环境请使用: gh model list / gh model set <provider/model>")
 			os.Exit(2)
 		}
 		if err := tui.RunModelPage(); err != nil {
@@ -181,7 +181,7 @@ func runModelCmd(args []string) {
 	switch args[0] {
 	case "set":
 		if len(args) != 2 {
-			fmt.Fprintln(os.Stderr, "用法: grf model set <provider/model>")
+			fmt.Fprintln(os.Stderr, "用法: gh model set <provider/model>")
 			os.Exit(2)
 		}
 		s, err := config.LoadFileForUpdate()
@@ -193,7 +193,7 @@ func runModelCmd(args []string) {
 		if !ok {
 			names := s.SortedProviderNames()
 			if len(names) == 0 {
-				fatal(fmt.Errorf("没有已配置的提供商，先运行 grf model 添加"))
+				fatal(fmt.Errorf("没有已配置的提供商，先运行 gh model 添加"))
 			}
 			fatal(fmt.Errorf("提供商 %q 不存在，可用: %v", provider, names))
 		}
@@ -212,7 +212,7 @@ func runModelCmd(args []string) {
 			fatal(err)
 		}
 		if len(s.Providers) == 0 {
-			fmt.Println("（尚未配置任何提供商，运行 grf model 添加）")
+			fmt.Println("（尚未配置任何提供商，运行 gh model 添加）")
 			return
 		}
 		for _, pn := range s.SortedProviderNames() {
@@ -231,7 +231,7 @@ func runModelCmd(args []string) {
 	}
 }
 
-// runConfigCmd grf config 子命令组。
+// runConfigCmd gh config 子命令组。
 func runConfigCmd(args []string) {
 	s, err := config.LoadFileForUpdate()
 	if err != nil {
@@ -249,9 +249,9 @@ func runConfigCmd(args []string) {
 		fmt.Printf("写前先读策略: %s\n", s.FsPolicy)
 		fmt.Printf("非交互自动批准: %v\n", s.AutoApprove)
 		if s.SystemPrompt != "" {
-			fmt.Println("提示词: 自定义（grf config prompt 预览）")
+			fmt.Println("提示词: 自定义（gh config prompt 预览）")
 		} else {
-			fmt.Println("提示词: 内置默认（grf config prompt set 自定义）")
+			fmt.Println("提示词: 内置默认（gh config prompt set 自定义）")
 		}
 		return
 	}
@@ -431,7 +431,7 @@ func runConnectCmd(args []string) {
 	fresh := fs.Bool("fresh", false, "内部:丢弃旧登录态,新建 ClawBot")
 	_ = fs.Parse(append(flags, pos...))
 	if fs.NArg() == 0 || fs.Arg(0) != "weixin" {
-		fmt.Fprintln(os.Stderr, "用法: grf connect weixin [-prompt 提示词] [-workspace 目录]")
+		fmt.Fprintln(os.Stderr, "用法: gh connect weixin [-prompt 提示词] [-workspace 目录]")
 		os.Exit(2)
 	}
 
@@ -448,7 +448,7 @@ func runConnectCmd(args []string) {
 
 	// 已在运行则不重复拉起
 	if pid := weixinDaemonPID(); pid > 0 {
-		fmt.Printf("微信 agent 已在运行(pid %d),如需重启请先 grf disconnect weixin\n", pid)
+		fmt.Printf("微信 agent 已在运行(pid %d),如需重启请先 gh disconnect weixin\n", pid)
 		return
 	}
 
@@ -508,7 +508,7 @@ func runConnectCmd(args []string) {
 		fmt.Println("   模式: 新建 ClawBot(旧登录态已丢弃)")
 	}
 	fmt.Printf("   日志: %s(扫码链接/运行过程见此)\n", logPath)
-	fmt.Printf("   停止: grf disconnect weixin\n")
+	fmt.Printf("   停止: gh disconnect weixin\n")
 }
 
 // askWeixinReuse 检测到旧登录态时询问:继续用之前的 ClawBot 还是新建。
@@ -533,7 +533,7 @@ func askWeixinReuse() string {
 // runDisconnectCmd disconnect 子命令:停止 weixin 守护进程。
 func runDisconnectCmd(args []string) {
 	if len(args) == 0 || args[0] != "weixin" {
-		fmt.Fprintln(os.Stderr, "用法: grf disconnect weixin")
+		fmt.Fprintln(os.Stderr, "用法: gh disconnect weixin")
 		os.Exit(2)
 	}
 	pid := weixinDaemonPID()

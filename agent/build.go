@@ -33,18 +33,20 @@ type Harness struct {
 	Settings  *config.Settings
 	root      string
 	seq       atomic.Int64
-	cacheKey  string // 会话级 prompt_cache_key；随会话文件持久化，resume 复用
+	cacheKey  string   // 会话级 prompt_cache_key；随会话文件持久化，resume 复用
+	disabled  []string // 按场景禁用的工具名（Options.DisabledTools）
 }
 
 // Options 组装参数。
 type Options struct {
-	Workspace    string
-	Client       *llm.Client
-	Settings     *config.Settings // 可为 nil（用默认）
-	Host         tools.Host       // 交互宿主；nil 用 NoopHost
-	MaxSteps     int
-	SystemPrompt string // 用户自定义静态提示词；空用内置
-	DepthLimit   int    // 子代理深度上限；0 用默认
+	Workspace     string
+	Client        *llm.Client
+	Settings      *config.Settings // 可为 nil（用默认）
+	Host          tools.Host       // 交互宿主；nil 用 NoopHost
+	MaxSteps      int
+	SystemPrompt  string   // 用户自定义静态提示词；空用内置
+	DepthLimit    int      // 子代理深度上限；0 用默认
+	DisabledTools []string // 按场景禁用的工具名（根与子代理统一剔除）
 }
 
 // Build 组装根 harness（全部 25 个工具就位）。
@@ -83,6 +85,7 @@ func Build(opts Options) (*Harness, error) {
 		Settings:  st,
 		root:      opts.Workspace,
 		cacheKey:  newCacheKey(),
+		disabled:  opts.DisabledTools,
 	}
 	h.bindClient(opts.Client)
 	observe := st.FsPolicy != "off"
@@ -194,6 +197,9 @@ func (h *Harness) registerTools(a *Agent, root bool) {
 		tools.RegisterAskUserDenied(r)
 	}
 	tools.RegisterExitPlanMode(r, planCtl{a}, a.host)
+	if len(h.disabled) > 0 {
+		r.Disable(h.disabled...)
+	}
 }
 
 // managedEnv bash 子进程注入的 harness 事实变量。
@@ -258,10 +264,18 @@ func (h *Harness) Close() {
 	}
 }
 
-// VerifyAllToolsRegistered 校验根 agent 工具齐备（测试/自检用）。
+// VerifyAllToolsRegistered 校验根 agent 工具齐备（测试/自检用；
+// Options.DisabledTools 列出的除外）。
 func (h *Harness) VerifyAllToolsRegistered() error {
 	reg := h.Root.reg
+	skip := map[string]bool{}
+	for _, n := range h.disabled {
+		skip[n] = true
+	}
 	for _, name := range tools.SpecNames() {
+		if skip[name] {
+			continue
+		}
 		if !reg.Has(name) {
 			return fmt.Errorf("tool %q not registered", name)
 		}

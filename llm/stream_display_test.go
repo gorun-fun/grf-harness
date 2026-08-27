@@ -45,3 +45,19 @@ func TestDisplayFilterSuppressesToolCallTag(t *testing.T) {
 		t.Errorf("shown = %q", got.String())
 	}
 }
+
+// 流式增量中混搭/残缺闭合标签不得闪现在终端
+func TestDisplayFilterMixedCloserNoLeak(t *testing.T) {
+	full := "正在查找文件。\n<tool_call>\n{\"name\": \"glob\", \"arguments\": {\"pattern\": \"**/*\"}}\n</｜｜DSML｜｜tool_cal>"
+	var f displayFilter
+	leaked := ""
+	for i := 1; i <= len(full); i++ {
+		leaked += f.delta(full[:i])
+	}
+	if strings.Contains(leaked, "tool_call") || strings.Contains(leaked, "DSML") {
+		t.Fatalf("标签泄漏到显示: %q", leaked)
+	}
+	if strings.TrimSpace(leaked) != "正在查找文件。" {
+		t.Fatalf("leaked = %q", leaked)
+	}
+}

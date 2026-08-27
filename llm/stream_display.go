@@ -14,7 +14,8 @@ type displayFilter struct {
 // delta 输入到目前为止累积的全文，返回本次应当放行给 UI 的新增正文。
 func (f *displayFilter) delta(full string) string {
 	cleaned := full
-	if strings.Contains(cleaned, dsmlMarker) {
+	// "DSML" 而非精确标记：竖线变体（||DSML|| 等）也要拦下
+	if strings.Contains(cleaned, "DSML") {
 		_, cleaned = extractDSMLCalls(cleaned)
 	}
 	if strings.Contains(cleaned, "<tool_call") {
@@ -38,9 +39,16 @@ func (f *displayFilter) delta(full string) string {
 // 标记前缀，如 "<tool_c"），等闭合后由 extract 整体剔除。
 func holdUnclosedTag(s string) string {
 	cut := len(s)
-	for _, m := range []string{dsmlMarker, "<tool_call"} {
+	for _, m := range []string{dsmlMarker, "<tool_call", "</｜｜DSML｜｜"} {
 		if i := strings.LastIndex(s, m); i >= 0 && i < cut {
 			cut = i
+		}
+	}
+	// 变体标记（||DSML|| 等）：尾部的 "DSML" 若紧跟在一个 "<"（含 "</"）后
+	// 不远处，扣住从 "<" 开始的尾巴；否则正常正文里出现 DSML 不受影响
+	if i := strings.LastIndex(s, "DSML"); i >= 0 {
+		if lt := strings.LastIndex(s[:i], "<"); lt >= 0 && i-lt < 16 && lt < cut {
+			cut = lt
 		}
 	}
 	if cut < len(s) {
@@ -49,8 +57,10 @@ func holdUnclosedTag(s string) string {
 	// 无完整标记：检查尾部是否是某个标记的真前缀（从 "<" 开始）
 	for n := len(s); n > 0; n-- {
 		tail := s[len(s)-n:]
-		if strings.HasPrefix(dsmlMarker, tail) || strings.HasPrefix("<tool_call", tail) {
-			return s[:len(s)-n]
+		for _, m := range []string{"<tool_call", "</tool_call", dsmlMarker, "</｜｜DSML｜｜", "<||", "<｜", "</｜", "</|"} {
+			if strings.HasPrefix(m, tail) {
+				return s[:len(s)-n]
+			}
 		}
 	}
 	return s

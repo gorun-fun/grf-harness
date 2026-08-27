@@ -22,18 +22,28 @@ import (
 const dsmlMarker = "<｜｜DSML｜｜"
 
 var (
-	reDSMLWrapper = regexp.MustCompile(`(?s)<｜｜DSML｜｜tool_calls>\s*(.*?)</｜｜DSML｜｜tool_calls>`)
+	// 闭合标签容忍写法：名称可能被截断（tool_c/tool_cal/tool_calls 任意
+	// 程度）、">" 可能因流截断缺失；整体缺失时懒惰体匹配到结尾（$ 兜底）。
+	// 闭合只认 tool 前缀的同名标签，避免 invoke 体被体内 parameter 的
+	// 闭合标签提前截断；DSML 开标签也可能配普通 </tool_call> 闭合（混搭）
+	dsmlCloser = `(?:</(?:｜｜DSML｜｜)?tool\w*\s*>?|$)`
+	reDSMLWrapper = regexp.MustCompile(`(?s)<｜｜DSML｜｜tool_calls>\s*(.*?)` + dsmlCloser)
 	// 单数形式：标签体直接是一个 JSON 对象（name 平铺在顶层，其余键为参数）
-	reDSMLSingle = regexp.MustCompile(`(?s)<｜｜DSML｜｜tool_call>\s*(.*?)</｜｜DSML｜｜tool_call>`)
-	reDSMLInvoke  = regexp.MustCompile(`(?s)<｜｜DSML｜｜invoke\s+name\s*=\s*"([^"]+)"[^>]*>(.*?)</｜｜DSML｜｜invoke>`)
+	reDSMLSingle = regexp.MustCompile(`(?s)<｜｜DSML｜｜tool_call>\s*(.*?)` + dsmlCloser)
+	reDSMLInvoke  = regexp.MustCompile(`(?s)<｜｜DSML｜｜invoke\s+name\s*=\s*"([^"]+)"[^>]*>(.*?)(?:</｜｜DSML｜｜inv\w*\s*>?|$)`)
 	reDSMLParam   = regexp.MustCompile(`(?s)<｜｜DSML｜｜parameter\b([^>]*)>(.*?)(?:</｜｜DSML｜｜parameter>|$)`)
 	reDSMLAttr    = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*"([^"]*)"`)
+	// 标记分隔符变体：竖线可能是 ASCII | 与全角 ｜ 的任意组合、夹带空格
+	// （如 <||DSML||tool_call>），统一归一为全角标准形式再匹配
+	reDSMLVariant = regexp.MustCompile(`[｜|]\s*[｜|]\s*DSML\s*[｜|]\s*[｜|]`)
 )
 
 // extractDSMLCalls 从一段文本提取全部 DSML 工具调用，并返回剔除标签后
 // 的文本。先剥掉 tool_calls 包装块再扫 invoke，保证包装块里的调用不会
 // 因为外层标签被整体删除而丢失；正文里散落的裸 invoke 块也容忍。
 func extractDSMLCalls(text string) (calls []ToolCall, cleaned string) {
+	// 先把竖线/空格变体标记归一为标准全角形式，后续正则只需处理一种写法
+	text = reDSMLVariant.ReplaceAllString(text, "｜｜DSML｜｜")
 	// 单数形式 <｜｜DSML｜｜tool_call>{...}</｜｜DSML｜｜tool_call>：体是
 	// JSON 对象，name 平铺在顶层，其余键即参数（兼容嵌套 arguments）。
 	for _, blk := range reDSMLSingle.FindAllStringSubmatchIndex(text, -1) {
@@ -73,6 +83,13 @@ func extractDSMLCalls(text string) (calls []ToolCall, cleaned string) {
 //   - 体是 parameter 子标签：name 与 arguments 各用一个 parameter 表达。
 func dsmlSingleCall(body string) (ToolCall, bool) {
 	var obj map[string]interface{}
+	// 闭合标签完全无法识别时（$ 兜底），体里可能带着残缺闭合尾巴，
+	// 整体 Unmarshal 会失败——体以 "{" 开头时先取第一个配平 JSON 对象
+	if trimmed := strings.TrimLeft(body, " \t\r\n"); strings.HasPrefix(trimmed, "{") {
+		if balanced := balancedJSONObject(trimmed); balanced != "" {
+			body = balanced
+		}
+	}
 	if err := json.Unmarshal([]byte(body), &obj); err == nil {
 		name, _ := obj["name"].(string)
 		if name == "" {

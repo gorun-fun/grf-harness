@@ -18,7 +18,7 @@ import (
 )
 
 // DefaultMaxSteps 工具调用循环默认轮次上限。
-const DefaultMaxSteps = 80
+const DefaultMaxSteps = 100
 
 // OnEvent 过程事件回调（UI 展示）。kind：
 //
@@ -111,6 +111,9 @@ func (a *Agent) SetMaxSteps(n int) {
 func (a *Agent) MaxSteps() int { a.mu.Lock(); defer a.mu.Unlock(); return a.maxSteps }
 
 func (a *Agent) SetOnEvent(fn OnEvent) { a.onEvent = fn }
+
+// Reg 工具注册表访问器（嵌入方替换 Handler / 运行期 Disable 用）。
+func (a *Agent) Reg() *tools.Registry { return a.reg }
 
 // SetHost 运行期替换交互宿主（TUI 接管时）。
 func (a *Agent) SetHost(h tools.Host) { a.host = h }

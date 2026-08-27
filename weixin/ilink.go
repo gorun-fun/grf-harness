@@ -1,5 +1,5 @@
 // Package weixin 微信 ClawBot(腾讯官方 iLink Bot API)客户端:
-// 扫码登录 + 长轮询收消息,配合 grf 的 LLM 配置回复微信消息。
+// 扫码登录 + 长轮询收消息,配合 gh 的 LLM 配置回复微信消息。
 package weixin
 
 import (

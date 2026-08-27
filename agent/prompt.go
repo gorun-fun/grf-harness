@@ -34,6 +34,11 @@ func BuildSystemPrompt(o PromptOptions, customBase string) string {
 		fmt.Fprintf(&b, "You are running as a background subagent (label %q). You do not see the parent conversation; rely only on the prompt you were given and the workspace. Complete the self-contained task and reply with the final result — not your intermediate steps. You may not ask the user questions and may not create session goals.\n", o.Label)
 	}
 	if o.Skills != nil && len(o.Skills.Names()) > 0 {
+		if content, ok := o.Skills.Load(DefaultSkill); ok {
+			b.WriteString("\n## 默认技能（已加载全文）\n")
+			b.WriteString(content)
+			b.WriteString("\n")
+		}
 		b.WriteString("\n## 可用技能（skill 工具加载全文）\n")
 		for _, name := range o.Skills.Names() {
 			fmt.Fprintf(&b, "- %s: %s\n", name, o.Skills.Summary(name))
@@ -41,6 +46,10 @@ func BuildSystemPrompt(o PromptOptions, customBase string) string {
 	}
 	return b.String()
 }
+
+// DefaultSkill 默认加载技能名：目录中存在该技能时，全文直接注入系统
+// 提示词（无需模型主动调用 skill 工具）。
+const DefaultSkill = "grf-usage"
 
 func rootPromptBody(o PromptOptions) string {
 	var b strings.Builder
@@ -57,8 +66,6 @@ func rootPromptBody(o PromptOptions) string {
 
 	b.WriteString("Use the edit tool for targeted changes to existing UTF-8 text files. It replaces literal old_string with new_string; by default old_string must appear exactly once. If old_string appears multiple times, provide a more specific old_string or set replace_all to true. Read the file first (the default fs-observation-policy requires it), unless you just created or edited it in this session.\n\n")
 
-	b.WriteString("Use the glob tool — not shell find — to discover files by path pattern. A pattern with no \"/\" matches basenames at any depth, so \"*\" matches every file in the tree rather than its top level. Results are files only, never directories, and include hidden and ignored files: a result that fits comes back in modification-time order, while a larger one keeps the modification-time-ordered head.\n\n")
-
 	b.WriteString("Use the grep tool — not shell grep or rg — to search file contents. Use read on a matched file when you need surrounding context.\n\n")
 
 	b.WriteString("Check the [exit code: N] marker on every bash result; investigate failures before moving on.\n\n")
@@ -70,12 +77,6 @@ func rootPromptBody(o PromptOptions) string {
 	b.WriteString("Use goal tools for one long-running completion objective in the current session. create_goal may infer goal intent from a direct human request in any language; do not create a goal for routine single-turn work. Call get_goal before update_goal and copy its exact goal_id and revision. After session resume or fork, an active goal is disarmed: when a human asks to continue or resume in any wording or language, use update_goal action resume to rearm it. Mark complete only when the objective is actually achieved. Mark blocked only after the same blocking condition persists for at least 3 consecutive goal rounds, and report that concrete condition in blocked_reason; difficulty, uncertainty, or useful remaining work is not blocked.\n\n")
 
 	b.WriteString("Use the workflow tool ONLY when the user explicitly asks for a workflow or for large multi-agent orchestration: you write a JavaScript script (the tool description documents the exact format) that fans work out across many subagents with phases and structured results. For one or two delegations, prefer plain subagent calls.\n\n")
-
-	b.WriteString("Use the ralph tool ONLY when the direct human explicitly asks for a Ralph loop or fresh-agent iterative execution. Each Ralph round starts a fresh child with no conversation seed and uses the shared workspace as durable memory. Completion and blockers are worker reports, not independent evaluation. Use same-session goal tools for ordinary long-running objectives, and plain subagents or workflows for bounded delegation and fan-out.\n\n")
-
-	b.WriteString("Use subagent in the background by default. Start independent delegations together in one assistant message and continue useful work while they run. Set `run_in_background: false` only when your next action depends on that subagent's result. When a background run settles, the runtime sends you a notice containing its outcome and any final assistant message.\n\n")
-
-	b.WriteString("Use subagent_fork in the background by default. It seeds the child with all completed turns so far (not the current in-flight turn) — prefer it when the subtask builds on this conversation. Set `run_in_background: false` only when your next action depends on that subagent's result.\n\n")
 
 	b.WriteString("Plan mode (when the user enables it): investigate freely but change nothing; present your implementation plan with exit_plan_mode and wait for the user's approval before executing it.\n\n")
 

@@ -245,7 +245,7 @@ func MarshalTodos(todos []Todo) string {
 	return string(data)
 }
 
-// userGrfHome 用户级 grf 目录（GRF_HOME 覆盖 ~/.grf）。
+// userGrfHome 用户级配置目录（GRF_HOME 覆盖 ~/.grf）。
 func userGrfHome() string {
 	if v := os.Getenv("GRF_HOME"); v != "" {
 		return v

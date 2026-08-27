@@ -1,4 +1,4 @@
-# grf（grf-harness）工作区说明
+# grf-harness（gh）工作区说明
 
 零依赖终端 agent harness：纯 Go 标准库重构自 `~/AiProjects/gh`（bubbletea/glamour 版）。
 25 个工具的**定义（名称/描述/参数 Schema）严格来自 `docs/tools.json`**，一个不能少；
@@ -7,13 +7,13 @@
 ## 构建与测试
 
 ```sh
-./build.sh                # vet + test + build（产物 ./grf）
-go build -o grf .
+./build.sh                # vet + build（产物 ./gh，跳过测试；macOS 会重做 adhoc 签名）
+go build -o gh .
 go test ./...             # 无需网络与 API key（agent 回环用 httptest 模拟 LLM）
 go test -race ./agent ./tools ./term ./js ./llm
 ```
 
-注意：本机 `~/.grf/settings.json` 已有可用的真实模型端点，直接 `./grf "任务"`
+注意：本机 `~/.grf/settings.json` 已有可用的真实模型端点，直接 `./gh "任务"`
 即可做端到端冒烟；全屏 UI 冒烟可用 python3 pty.fork 驱动（打字→截图式解析
 ANSI→验证帧），历史会话输出落在 `.grf/sessions/`。
 
@@ -41,6 +41,8 @@ main.go → tui → app → agent → {tools, js, llm, config, store}
   image/misc）在 `tools` 包。
 - `app`：库入口（`app.New(app.Options{...})`）+ 单任务直出渲染 + 非 TTY REPL。
 - `tui`：全屏聊天与模型配置页。
+- `weixin`：微信 ClawBot 消息渠道（`gh connect weixin` 拉起守护进程，日志在
+  `~/.grf/weixin.log`；消息由本地 agent 回答）。
 
 ## 关键约定与坑
 

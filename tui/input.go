@@ -118,10 +118,11 @@ func (c *Chat) handleKey(k term.KeyEv) bool {
 		c.scr.SetMouse(c.mouseOn)
 		c.saveMousePref(c.mouseOn)
 		if c.mouseOn {
-			c.emitBlock(block{kind: blkDim, text: "（鼠标交互已开启：滚轮滚动、单击展开、拖选复制；Shift+Tab 关闭）"})
+			c.status = "鼠标交互已开启：滚轮滚动、单击展开、拖选复制（Shift+Tab 关闭）"
 		} else {
-			c.emitBlock(block{kind: blkDim, text: "（鼠标交互已关闭：用终端原生选择/复制；Shift+Tab 重新开启）"})
+			c.status = "鼠标交互已关闭：用终端原生选择/复制（Shift+Tab 重新开启）"
 		}
+		c.statusAt = timeNow().Add(3 * time.Second)
 		return false
 	case "up":
 		if hints := c.slashHints(); len(hints) > 0 {

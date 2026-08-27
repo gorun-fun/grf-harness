@@ -257,7 +257,7 @@ func (c *Chat) openModelPopup() {
 		return
 	}
 	if len(items) == 0 {
-		c.emitBlock(block{kind: blkDim, text: "（尚未配置任何提供商，先运行 grf model 添加）"})
+		c.emitBlock(block{kind: blkDim, text: "（尚未配置任何提供商，先运行 gh model 添加）"})
 		return
 	}
 	c.pop = &popup{title: "选择模型", items: items, mark: cur, kind: "model",

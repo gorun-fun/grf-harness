@@ -122,3 +122,53 @@ func TestFallbackArgsWithRedirect(t *testing.T) {
 		t.Fatalf("参数被截断: %q", m.ToolCalls[0].Arguments())
 	}
 }
+
+// 用户实测：开标签是 <tool_call>、闭合却混用截断的 DSML 风格标签
+func TestFallbackMixedDSMLCloser(t *testing.T) {
+	m := Message{Content: "<tool_call>\n{\"name\": \"glob\", \"arguments\": {\"pattern\": \"**/*\", \"path\": \"/Users/wenjun/AiProjects/test\"}}\n</｜｜DSML｜｜tool_cal>"}
+	if !fallbackContentToolCalls(&m) {
+		t.Fatal("应识别出混搭闭合的工具调用")
+	}
+	if len(m.ToolCalls) != 1 || m.ToolCalls[0].Name() != "glob" {
+		t.Fatalf("调用解析错误: %+v", m.ToolCalls)
+	}
+	var args map[string]any
+	if err := json.Unmarshal([]byte(m.ToolCalls[0].Arguments()), &args); err != nil || args["pattern"] != "**/*" {
+		t.Fatalf("arguments = %s (err %v)", m.ToolCalls[0].Arguments(), err)
+	}
+	if strings.Contains(m.Content, "tool_call") || strings.Contains(m.Content, "DSML") {
+		t.Fatalf("正文残留标签: %q", m.Content)
+	}
+}
+
+// 闭合被截断（缺 l / 缺 >）与整体缺失（流截断到 EOF）
+func TestFallbackTruncatedCloser(t *testing.T) {
+	for name, text := range map[string]string{
+		"缺l":  "<tool_call>{\"name\": \"read\", \"arguments\": {\"path\": \"a.go\"}}</tool_cal>",
+		"缺>":  "<tool_call>{\"name\": \"read\", \"arguments\": {\"path\": \"a.go\"}}</tool_call",
+		"无闭合": "<tool_call>{\"name\": \"read\", \"arguments\": {\"path\": \"a.go\"}}",
+	} {
+		m := Message{Content: text}
+		if !fallbackContentToolCalls(&m) {
+			t.Fatalf("%s：应识别出工具调用", name)
+		}
+		if len(m.ToolCalls) != 1 || m.ToolCalls[0].Name() != "read" {
+			t.Fatalf("%s：调用解析错误: %+v", name, m.ToolCalls)
+		}
+		if strings.Contains(m.Content, "tool_call") {
+			t.Fatalf("%s：正文残留标签: %q", name, m.Content)
+		}
+	}
+}
+
+// name 平铺在顶层、无 arguments 包裹的体写法
+func TestFallbackFlatBody(t *testing.T) {
+	m := Message{Content: "<tool_call>\n{\"name\": \"bash\", \"command\": \"date\"}\n</tool_call>"}
+	if !fallbackContentToolCalls(&m) {
+		t.Fatal("应识别出平铺参数形式")
+	}
+	var args map[string]any
+	if err := json.Unmarshal([]byte(m.ToolCalls[0].Arguments()), &args); err != nil || args["command"] != "date" {
+		t.Fatalf("arguments = %s (err %v)", m.ToolCalls[0].Arguments(), err)
+	}
+}
