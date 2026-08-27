@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"grf/llm"
+	"git.gorun.fun/share/grf-harness/llm"
 )
 
 // Image 工具结果携带的图像（data URL 的 mime 与 base64）。
@@ -19,10 +19,12 @@ type Image struct {
 	B64  string
 }
 
-// Result 工具执行结果：文本为主，read_image 等可附带图像。
+// Result 工具执行结果：文本为主，read_image 等可附带图像。Err 非空表示
+// 执行失败（文本仍完整回给模型），供结构化工具事件区分 done/error。
 type Result struct {
 	Text   string
 	Images []Image
+	Err    string
 }
 
 // TextResult 纯文本结果快捷构造。
@@ -126,22 +128,28 @@ func (r *Registry) Defs() []llm.Tool {
 }
 
 // Execute 执行工具。未知工具/执行错误/处理器 panic 都转为文本结果，
-// 保证任何失败都作为工具结果反馈给模型而不是中断会话。
+// 保证任何失败都作为工具结果反馈给模型而不是中断会话；失败时 Err 字段
+// 携带错误信息（Text 保持完整反馈文本不变）。
 func (r *Registry) Execute(ctx context.Context, name, args string) (res Result) {
 	r.mu.RLock()
 	h, ok := r.handlers[name]
 	r.mu.RUnlock()
 	if !ok {
-		return TextResult(fmt.Sprintf("error: unknown tool %q, available: %v", name, r.Registered()))
+		msg := fmt.Sprintf("error: unknown tool %q, available: %v", name, r.Registered())
+		return Result{Text: msg, Err: msg}
 	}
 	defer func() {
 		if rec := recover(); rec != nil {
-			res = TextResult(fmt.Sprintf("error: tool %q panicked: %v", name, rec))
+			msg := fmt.Sprintf("error: tool %q panicked: %v", name, rec)
+			res = Result{Text: msg, Err: msg}
 		}
 	}()
 	res, err := h(ctx, args)
 	if err != nil {
-		return TextResult("error: " + err.Error())
+		return Result{Text: "error: " + err.Error(), Err: err.Error()}
+	}
+	if res.Err != "" && res.Text == "" {
+		res.Text = "error: " + res.Err
 	}
 	if res.Text == "" && len(res.Images) == 0 {
 		res.Text = "(no output)"

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"grf/llm"
+	"git.gorun.fun/share/grf-harness/llm"
 )
 
 func TestSessionRoundTrip(t *testing.T) {

@@ -14,10 +14,10 @@ import (
 	"sync"
 	"time"
 
-	"grf/app"
-	"grf/llm"
-	"grf/term"
-	"grf/tools"
+	"git.gorun.fun/share/grf-harness/app"
+	"git.gorun.fun/share/grf-harness/llm"
+	"git.gorun.fun/share/grf-harness/term"
+	"git.gorun.fun/share/grf-harness/tools"
 )
 
 // termKey 按键事件别名。

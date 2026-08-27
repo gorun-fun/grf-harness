@@ -59,6 +59,19 @@ func TestFallbackDedupWithProtocolCalls(t *testing.T) {
 	}
 }
 
+func TestFallbackIDsUniqueAcrossMessages(t *testing.T) {
+	// 回退 ID 进程级唯一：按消息内编号（call_fallback_0…）会在跨消息时重号，
+	// 下游按 CallID 关联工具事件时会把两次调用混为一次
+	m1 := Message{Content: `<tool_call name="read" arguments={"file_path":"a"} />`}
+	m2 := Message{Content: `<tool_call name="read" arguments={"file_path":"b"} />`}
+	if !fallbackContentToolCalls(&m1) || !fallbackContentToolCalls(&m2) {
+		t.Fatal("两条消息都应解析出调用")
+	}
+	if m1.ToolCalls[0].ID == "" || m2.ToolCalls[0].ID == "" || m1.ToolCalls[0].ID == m2.ToolCalls[0].ID {
+		t.Fatalf("跨消息 fallback ID 重号: %q vs %q", m1.ToolCalls[0].ID, m2.ToolCalls[0].ID)
+	}
+}
+
 func TestFallbackNoTag(t *testing.T) {
 	m := Message{Content: "普通回复，没有标签"}
 	if fallbackContentToolCalls(&m) {

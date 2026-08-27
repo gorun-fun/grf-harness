@@ -1,7 +1,7 @@
 # grf-harness（gh）
 
 零依赖的终端 agent harness：**纯 Go 标准库实现**（无任何第三方依赖），
-按 `docs/tools.json` 完整实现 25 个工具（一个不少），OpenAI 兼容接口驱动，
+完整实现 25 个工具（定义内嵌于 `tools/spec/tools.json`，一个不少），OpenAI 兼容接口驱动，
 默认全屏交互（终端宽度变化自动整帧重排重绘），亦可作为 Go 模块被其他应用
 嵌入使用。
 
@@ -10,8 +10,8 @@
 - **零依赖**：终端 raw 模式、备用屏幕、输入解析（按键/粘贴/SGR 鼠标）、
   CJK 宽度软换行、SSE 流式解析、迷你 JavaScript 解释器（workflow 用）
   全部原生实现
-- **25 个工具**：定义内嵌自 `docs/tools.json`（`tools/spec/tools.json`），
-  与文档严格一一对齐——ask_user_question / bash / create_goal / edit /
+- **25 个工具**：定义内嵌自 `tools/spec/tools.json`（工具定义唯一来源），
+  与 spec 严格一一对齐——ask_user_question / bash / create_goal / edit /
   exit_plan_mode / get_goal / glob / grep / interrupt_agent / job_kill /
   job_list / job_output / list_agents / ralph / read / read_image /
   send_message / skill / subagent / subagent_fork / todo_write / update_goal /
@@ -105,19 +105,26 @@ gh version
 
 ## 作为 Go 模块嵌入
 
-模块路径 `grf`（本仓库内相对引用；`go.mod` 可改为你自己的路径）。
-所有包均可公开导入（无 internal/）：
+完整的接入说明见 **`docs/integration.md`（对接文档）**：go get 安装、
+`app.New` 选项、工具扩展/禁用、事件与流式回调、多会话并存、CLI 子进程。
+
+模块路径 `git.gorun.fun/share/grf-harness`（与公开仓库地址一致，可直接
+`go get`）；所有包均可公开导入（无 internal/）：
+
+```sh
+GOPRIVATE=git.gorun.fun go get git.gorun.fun/share/grf-harness@v0.0.1-alpha.2
+```
 
 ```go
 import (
-    "grf/app"    // 应用组装（库入口）
-    "grf/agent"  // 核心循环 / goals / 子代理 / ralph / workflow
-    "grf/tools"  // 25 个工具与注册表
-    "grf/llm"    // OpenAI 兼容客户端（SSE / tool calls / 多模态）
-    "grf/config" // ~/.grf/settings.json
-    "grf/term"   // 终端底层（raw/尺寸/输入解析/宽度换行/全屏渲染）
-    "grf/tui"    // 全屏聊天 / 模型配置页
-    "grf/js"     // 迷你 JS 解释器
+    "git.gorun.fun/share/grf-harness/app"    // 应用组装（库入口）
+    "git.gorun.fun/share/grf-harness/agent"  // 核心循环 / goals / 子代理 / ralph / workflow
+    "git.gorun.fun/share/grf-harness/tools"  // 25 个工具与注册表
+    "git.gorun.fun/share/grf-harness/llm"    // OpenAI 兼容客户端（SSE / tool calls / 多模态）
+    "git.gorun.fun/share/grf-harness/config" // ~/.grf/settings.json
+    "git.gorun.fun/share/grf-harness/term"   // 终端底层（raw/尺寸/输入解析/宽度换行/全屏渲染）
+    "git.gorun.fun/share/grf-harness/tui"    // 全屏聊天 / 模型配置页
+    "git.gorun.fun/share/grf-harness/js"     // 迷你 JS 解释器
 )
 
 a, err := app.New(app.Options{
@@ -133,7 +140,7 @@ err = a.RunTask(ctx, "做点什么")          // 单次执行
 `ApproveEscalation`（沙箱升级审批）、`ApprovePlan`（计划审批）、
 `NotifyEvent`（事件流）。
 
-## 工具说明（25 个，定义见 docs/tools.json）
+## 工具说明（25 个，定义见 tools/spec/tools.json）
 
 | 类别 | 工具 |
 |---|---|
@@ -154,14 +161,15 @@ llm/                  OpenAI 兼容客户端（SSE 流式、tool_calls、图像 
 config/               ~/.grf/settings.json
 store/                会话持久化（.grf/sessions）
 tools/                工具注册表 + 25 个工具实现；spec/tools.json 为
-                      docs/tools.json 的嵌入副本（工具定义唯一来源）
+                      工具定义唯一来源（go:embed 内嵌）
 js/                   迷你 JavaScript 解释器（workflow 脚本执行）
 agent/                Agent 循环、goal 状态机、子代理管理器、ralph、
                       workflow 接线、系统提示词构建
 app/                  应用门面（库 API）、单任务直出渲染、非 TTY REPL
 tui/                  全屏聊天（思考/工具折叠、ask 表单、计划审批、
                       弹窗、鼠标、resize 重绘）、模型配置页
-docs/                 规范文档（prompt.md / tools.json）
+docs/                 对接文档（integration.md：go get 安装、库接入、
+                      事件、多会话）
 ```
 
 ## 开发
@@ -177,8 +185,8 @@ go build -o gh .
 本仓库是对 `~/AiProjects/gh`（bubbletea + glamour 版）的重构：
 - 去除全部第三方依赖（bubbletea/glamour/ansi → 自研 term 包）
 - 工具链从 gh 的 7 个（read_file/write_file/edit_file/delete_file/
-  list_dir/run_command/http_request + 记忆三件套）替换为 docs/tools.json
-  规定的 25 个工具，agent 核心按其文档语义重写（通知/子代理/goal/
+  list_dir/run_command/http_request + 记忆三件套）替换为新定的 25 个工具规范
+  （现内嵌于 tools/spec/tools.json），agent 核心按其文档语义重写（通知/子代理/goal/
   workflow/ralph/沙箱等）
 - markdown 不再渲染（原 glamour），按需求显示原始 md 文本
 - 保留：多提供商配置、会话持久化/恢复、输入历史、模型配置页

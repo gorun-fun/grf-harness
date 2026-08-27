@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"grf/agent"
-	"grf/config"
-	"grf/llm"
-	"grf/store"
+	"git.gorun.fun/share/grf-harness/agent"
+	"git.gorun.fun/share/grf-harness/config"
+	"git.gorun.fun/share/grf-harness/llm"
+	"git.gorun.fun/share/grf-harness/store"
 )
 
 // PlainREPL 行模式 REPL（stdin/stdout 非 TTY 时使用）。

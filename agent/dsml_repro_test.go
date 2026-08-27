@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"grf/config"
-	"grf/llm"
-	"grf/tools"
+	"git.gorun.fun/share/grf-harness/config"
+	"git.gorun.fun/share/grf-harness/llm"
+	"git.gorun.fun/share/grf-harness/tools"
 )
 
 // 回归：DSML invoke 变体（parameter 带 string="true"）+ goal 自动续跑 +

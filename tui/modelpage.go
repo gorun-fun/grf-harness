@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"grf/config"
-	"grf/llm"
-	"grf/term"
+	"git.gorun.fun/share/grf-harness/config"
+	"git.gorun.fun/share/grf-harness/llm"
+	"git.gorun.fun/share/grf-harness/term"
 )
 
 // ModelPage 模型配置页状态机。

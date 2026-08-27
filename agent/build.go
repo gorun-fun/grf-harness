@@ -1,4 +1,4 @@
-// build.go 组装完整的 harness：注册全部 25 个工具（与 docs/tools.json
+// build.go 组装完整的 harness：注册全部 25 个工具（与内嵌 spec
 // 一一对齐）、构建根 agent 与子代理工厂。根会话与子代理共享 job/fs 实例
 // 的边界：子代理拥有独立 JobManager/FsPolicy（其工作区一致）；goal 与
 // ralph 仅根可用。
@@ -13,10 +13,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"grf/config"
-	"grf/llm"
-	"grf/store"
-	"grf/tools"
+	"git.gorun.fun/share/grf-harness/config"
+	"git.gorun.fun/share/grf-harness/llm"
+	"git.gorun.fun/share/grf-harness/store"
+	"git.gorun.fun/share/grf-harness/tools"
 )
 
 // Harness 一次会话的完整组装结果。

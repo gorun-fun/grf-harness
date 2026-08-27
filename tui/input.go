@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"grf/store"
-	"grf/term"
+	"git.gorun.fun/share/grf-harness/store"
+	"git.gorun.fun/share/grf-harness/term"
 )
 
 // handleInput 分发一条终端输入事件；返回 true 表示退出。

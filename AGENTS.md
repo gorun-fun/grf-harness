@@ -1,8 +1,9 @@
 # grf-harness（gh）工作区说明
 
 零依赖终端 agent harness：纯 Go 标准库重构自 `~/AiProjects/gh`（bubbletea/glamour 版）。
-25 个工具的**定义（名称/描述/参数 Schema）严格来自 `docs/tools.json`**，一个不能少；
-系统提示词的指导结构镜像 `docs/prompt.md`。改动工具相关代码前先读这两个文档。
+25 个工具的**定义（名称/描述/参数 Schema）内嵌于 `tools/spec/tools.json`**（唯一来源），
+一个不能少。库接入/嵌入对接见 `docs/integration.md`（对接文档，含 go get 安装、
+事件、多会话）。改动工具相关代码前先读 spec 与对接文档。
 
 ## 构建与测试
 
@@ -19,14 +20,17 @@ ANSI→验证帧），历史会话输出落在 `.grf/sessions/`。
 
 ## 硬性约束
 
-- **零第三方依赖**：`go.mod` 只允许 `module grf` + go 版本行，不新增 require。
+- **零第三方依赖**：`go.mod` 只允许 `module git.gorun.fun/share/grf-harness` + go 版本行，不新增 require（模块路径与公开仓库地址一致，`go get` 安装见 docs/integration.md §1）。
   终端能力用自研 `term` 包，workflow 的 JS 用自研 `js` 包解释器。
-- **无 `internal/` 目录**：所有包必须可被其他 Go 应用导入（模块路径 `grf`）。
-- **工具定义唯一来源**：`tools/spec/tools.json` 是 `docs/tools.json` 的嵌入副本，
-  两份必须保持一致；`tools.Registry.Register` 会拒绝 spec 里不存在的名字。
-  改工具行为不改 spec 文本。嵌入方扩展走 `RegisterCustom`（自带定义、
+- **无 `internal/` 目录**：所有包必须可被其他 Go 应用导入（模块路径 `git.gorun.fun/share/grf-harness`）。
+- **工具定义唯一来源**：`tools/spec/tools.json`（go:embed 内嵌；docs/ 下的
+  开发参考原稿已移除，spec 即唯一事实）。`tools.Registry.Register` 会拒绝
+  spec 里不存在的名字。改工具行为不改 spec 文本。嵌入方扩展走 `RegisterCustom`（自带定义、
   不得与内置 25 个重名），内置工具不借道覆盖。
 - 回复**不做 markdown 渲染**，只显示原始文本（需求如此，勿加渲染）。
+- **Git 远端分工**：origin = 私有主库 `https://git.gorun.fun/ai/grf-harnees.git`
+  （推送一律走这里；"harnees"是仓库实名，勿"纠正"）；`https://git.gorun.fun/share/grf-harness`
+  是对外**公开镜像（模块安装地址），只读——禁止对它直接 push 或任何写操作**。
 
 ## 分层（依赖方向自上而下）
 

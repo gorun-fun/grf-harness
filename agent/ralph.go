@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"grf/tools"
+	"git.gorun.fun/share/grf-harness/tools"
 )
 
 const (

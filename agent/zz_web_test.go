@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"grf/config"
-	"grf/llm"
-	"grf/tools"
+	"git.gorun.fun/share/grf-harness/config"
+	"git.gorun.fun/share/grf-harness/llm"
+	"git.gorun.fun/share/grf-harness/tools"
 )
 
 func TestWebSearchLoop(t *testing.T) {

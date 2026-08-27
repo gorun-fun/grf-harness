@@ -10,11 +10,12 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"grf/llm"
-	"grf/store"
-	"grf/tools"
+	"git.gorun.fun/share/grf-harness/llm"
+	"git.gorun.fun/share/grf-harness/store"
+	"git.gorun.fun/share/grf-harness/tools"
 )
 
 // DefaultMaxSteps 工具调用循环默认轮次上限。
@@ -32,6 +33,36 @@ const DefaultMaxSteps = 100
 //	phase   workflow phase/log
 type OnEvent func(kind, detail string)
 
+// 工具事件状态（ToolEvent.Status）。
+const (
+	ToolStatusRunning = "running" // 开始执行（含审批前；等待用户审批时也处于此状态）
+	ToolStatusDone    = "done"    // 执行成功
+	ToolStatusError   = "error"   // 执行失败（Err 携带错误信息）
+	ToolStatusDenied  = "denied"  // 审批未通过（Output 携带拒绝与反馈文本）
+)
+
+// ToolEvent 结构化工具事件：一次工具调用的完整生命周期，供嵌入方重建
+// 工具时间线（进行中 → 完成/失败卡片、展开看全量输入输出）。同一
+// CallID 依状态推进：running → done | error | denied。Input/Output 均为
+// 全量原文不截断，展示裁剪由宿主自理。子代理的工具事件也会回流到根
+// agent 的回调（用 AgentID/Label 区分来源）。
+type ToolEvent struct {
+	CallID  string // 工具调用 ID（LLM 返回的 tool_call id；正文回退解析生成；均为进程内唯一）
+	Name    string
+	Status  string // ToolStatusRunning / Done / Error / Denied
+	Input   string // 完整参数 JSON
+	Output  string // 完整结果文本（running 时为空）
+	Err     string // Status=error 时的错误信息
+	AgentID string // 发起调用的 agent（根为 agent_root）
+	Label   string // agent 标签（根为 main，子代理为其 description）
+}
+
+// OnToolEvent 结构化工具事件回调。
+type OnToolEvent func(ToolEvent)
+
+// toolEventSeq 兜底 ID 计数：个别服务端不回 tool_call id 时进程内唯一。
+var toolEventSeq atomic.Int64
+
 // Agent 单个 agent 实例（根会话或子代理共用同一结构）。
 type Agent struct {
 	ID    string
@@ -47,6 +78,7 @@ type Agent struct {
 	history []llm.Message
 
 	onEvent     OnEvent
+	onToolEvent OnToolEvent
 	onContent   func(string)
 	onReason    func(string)
 	maxSteps    int
@@ -112,6 +144,10 @@ func (a *Agent) MaxSteps() int { a.mu.Lock(); defer a.mu.Unlock(); return a.maxS
 
 func (a *Agent) SetOnEvent(fn OnEvent) { a.onEvent = fn }
 
+// SetOnToolEvent 注册结构化工具事件回调。根 agent 注册即可覆盖整棵
+// 子代理树（子代理未单独注册时事件回流到根）。
+func (a *Agent) SetOnToolEvent(fn OnToolEvent) { a.onToolEvent = fn }
+
 // Reg 工具注册表访问器（嵌入方替换 Handler / 运行期 Disable 用）。
 func (a *Agent) Reg() *tools.Registry { return a.reg }
 
@@ -128,6 +164,22 @@ func (a *Agent) emit(kind, detail string) {
 	}
 	if a.host != nil {
 		a.host.NotifyEvent(kind, detail)
+	}
+}
+
+// emitToolEvent 结构化工具事件：本 agent 未注册回调时，子代理的事件
+// 回流到根 agent 的回调（时间线需要覆盖整棵 agent 树）。
+func (a *Agent) emitToolEvent(e ToolEvent) {
+	e.AgentID = a.ID
+	e.Label = a.Label
+	fn := a.onToolEvent
+	if fn == nil && a.mgr != nil {
+		if root := a.mgr.Root(); root != nil && root != a {
+			fn = root.onToolEvent
+		}
+	}
+	if fn != nil {
+		fn(e)
 	}
 }
 
@@ -349,11 +401,23 @@ func (a *Agent) runMessage(ctx context.Context, userMsg llm.Message, human bool)
 
 		for _, call := range reply.ToolCalls {
 			a.emit("tool", call.Name()+" "+llm.CompactArgs(call.Arguments(), 100))
-			// 审批模式：执行前征求用户同意；拒绝则作为工具结果回给模型
+			callID := call.ID
+			if callID == "" {
+				callID = fmt.Sprintf("call_gen_%d", toolEventSeq.Add(1))
+			}
+			a.emitToolEvent(ToolEvent{CallID: callID, Name: call.Name(), Status: ToolStatusRunning, Input: call.Arguments()})
+			// 审批模式：执行前征求用户同意（全量参数，不截断）；拒绝连同
+			// 用户反馈作为工具结果回给模型
 			if a.ApproveEach() && a.host != nil {
-				if !a.host.ApproveTool(turnCtx, call.Name(), llm.CompactArgs(call.Arguments(), 200)) {
-					denied := "[denied] 用户在审批模式下拒绝了本次工具调用；请换一种方式继续，或向用户说明并询问"
+				if d := a.host.ApproveTool(turnCtx, call.Name(), call.Arguments()); !d.Approved {
+					denied := "[denied] 用户在审批模式下拒绝了本次工具调用"
+					if d.Feedback != "" {
+						denied += "，反馈: " + d.Feedback
+					}
+					denied += "；请换一种方式继续，或向用户说明并询问"
 					a.emit("result", firstLine(denied))
+					a.emitToolEvent(ToolEvent{CallID: callID, Name: call.Name(), Status: ToolStatusDenied,
+						Input: call.Arguments(), Output: denied})
 					a.appendToolResult(call, tools.Result{Text: denied})
 					continue
 				}
@@ -365,6 +429,12 @@ func (a *Agent) runMessage(ctx context.Context, userMsg llm.Message, human bool)
 			a.toolTime += time.Since(t0)
 			a.mu.Unlock()
 			a.emit("result", firstLine(res.Text))
+			status := ToolStatusDone
+			if res.Err != "" {
+				status = ToolStatusError
+			}
+			a.emitToolEvent(ToolEvent{CallID: callID, Name: call.Name(), Status: status,
+				Input: call.Arguments(), Output: res.Text, Err: res.Err})
 			a.appendToolResult(call, res)
 		}
 	}

@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"grf/config"
-	"grf/llm"
-	"grf/tools"
+	"git.gorun.fun/share/grf-harness/config"
+	"git.gorun.fun/share/grf-harness/llm"
+	"git.gorun.fun/share/grf-harness/tools"
 )
 
 // fakeLLM 模拟 OpenAI 接口：按脚本依次返回 assistant 消息。
@@ -410,5 +410,199 @@ func TestRunLoopOrphanUserRolledBack(t *testing.T) {
 	hist := h.Root.History()
 	if len(hist) != 1 || hist[0].Role != "system" {
 		t.Fatalf("失败轮的孤儿 user 消息应被回滚, history = %+v", hist)
+	}
+}
+
+// ---- 结构化工具事件（ToolEvent）----
+
+// captureHost 记录审批收到的参数、按脚本返回审批结果的宿主。
+type captureHost struct {
+	tools.NoopHost
+	mu          sync.Mutex
+	approveArgs map[string]string // name -> 收到的 args
+	decision    tools.ApproveDecision
+}
+
+func (h *captureHost) ApproveTool(ctx context.Context, name, args string) tools.ApproveDecision {
+	h.mu.Lock()
+	if h.approveArgs == nil {
+		h.approveArgs = map[string]string{}
+	}
+	h.approveArgs[name] = args
+	h.mu.Unlock()
+	return h.decision
+}
+
+func (h *captureHost) argOf(name string) string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.approveArgs[name]
+}
+
+func buildHarnessWithHost(t *testing.T, f *fakeLLM, ws string, host tools.Host) *Harness {
+	t.Helper()
+	h, err := Build(Options{
+		Workspace: ws,
+		Client:    llm.NewClient(llm.Config{BaseURL: f.URL(), APIKey: "t", Model: "test-model"}),
+		Settings:  &config.Settings{Sandbox: "off", FsPolicy: "observe"},
+		Host:      host,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+func TestToolEventLifecycle(t *testing.T) {
+	ws := t.TempDir()
+	long := strings.Repeat("数据行内容-", 40) // 单行 >120 字，验证 Output 为全量而非首行摘要
+	os.WriteFile(filepath.Join(ws, "long.txt"), []byte(long+"\n"), 0o644)
+	f := newFakeLLM([]string{
+		`TOOL:{"file_path":"long.txt"}`,
+		"done",
+	})
+	defer f.Close()
+	h := buildTestHarness(t, f, ws)
+	defer h.Close()
+
+	var events []ToolEvent
+	h.Root.SetOnToolEvent(func(e ToolEvent) { events = append(events, e) })
+	if _, err := h.Root.Run(context.Background(), "读 long.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("应有 running+done 两个事件, got %+v", events)
+	}
+	running, done := events[0], events[1]
+	if running.Status != ToolStatusRunning || done.Status != ToolStatusDone {
+		t.Fatalf("状态推进错误: %+v", events)
+	}
+	if running.CallID == "" || running.CallID != done.CallID {
+		t.Fatalf("CallID 应一致且非空: %+v", events)
+	}
+	if running.Name != "read" || done.Name != "read" {
+		t.Fatalf("工具名: %+v", events)
+	}
+	if want := `{"file_path":"long.txt"}`; running.Input != want {
+		t.Fatalf("Input 应为全量参数, got %q want %q", running.Input, want)
+	}
+	if !strings.Contains(done.Output, long) {
+		t.Fatalf("Output 应含全量结果文本（不截断）: %q", done.Output)
+	}
+	if done.Err != "" {
+		t.Fatalf("成功事件不应带 Err: %+v", done)
+	}
+	if running.AgentID != "agent_root" || running.Label != "main" {
+		t.Fatalf("根 agent 身份: %+v", running)
+	}
+}
+
+func TestToolEventErrorStatus(t *testing.T) {
+	f := newFakeLLM([]string{
+		`TOOL:{"file_path":"no_such_file.txt"}`,
+		"ok",
+	})
+	defer f.Close()
+	h := buildTestHarness(t, f, t.TempDir())
+	defer h.Close()
+
+	var events []ToolEvent
+	h.Root.SetOnToolEvent(func(e ToolEvent) { events = append(events, e) })
+	if _, err := h.Root.Run(context.Background(), "读不存在的文件"); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[1].Status != ToolStatusError {
+		t.Fatalf("失败调用应为 error 终态: %+v", events)
+	}
+	if events[1].Err == "" || !strings.Contains(events[1].Output, "error:") {
+		t.Fatalf("error 事件应带 Err 与完整反馈文本: %+v", events[1])
+	}
+}
+
+func TestToolEventDeniedWithFeedback(t *testing.T) {
+	host := &captureHost{decision: tools.ApproveDecision{Feedback: "别删文件，改用归档目录"}}
+	f := newFakeLLM([]string{
+		`TOOL:bash:{"command":"rm -rf tmp"}`,
+		"好的，我改用归档目录",
+	})
+	defer f.Close()
+	h := buildHarnessWithHost(t, f, t.TempDir(), host)
+	defer h.Close()
+	h.Root.SetApproveMode(true)
+
+	var events []ToolEvent
+	h.Root.SetOnToolEvent(func(e ToolEvent) { events = append(events, e) })
+	if _, err := h.Root.Run(context.Background(), "清理 tmp"); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[1].Status != ToolStatusDenied {
+		t.Fatalf("拒绝调用应为 denied 终态: %+v", events)
+	}
+	if !strings.Contains(events[1].Output, "别删文件，改用归档目录") {
+		t.Fatalf("denied 事件应携带用户反馈: %+v", events[1])
+	}
+	// 反馈也作为工具结果回给模型
+	inHistory := false
+	for _, m := range h.Root.History() {
+		if m.Role == "tool" && strings.Contains(m.Content, "别删文件，改用归档目录") {
+			inHistory = true
+		}
+	}
+	if !inHistory {
+		t.Fatal("拒绝反馈应进入历史 tool 消息")
+	}
+}
+
+func TestApproveToolReceivesFullArgs(t *testing.T) {
+	host := &captureHost{decision: tools.ApproveDecision{Approved: true}}
+	f := newFakeLLM([]string{
+		`TOOL:long_input:{"text":"` + strings.Repeat("a", 400) + `"}`,
+		"done",
+	})
+	defer f.Close()
+	h := buildHarnessWithHost(t, f, t.TempDir(), host)
+	defer h.Close()
+	h.Root.Reg().RegisterCustom(llm.Tool{
+		Name:        "long_input",
+		Description: "测试用：透传长参数",
+		Parameters:  map[string]any{"type": "object", "properties": map[string]any{"text": map[string]any{"type": "string"}}},
+	}, func(ctx context.Context, args string) (tools.Result, error) {
+		return tools.TextResult("ok"), nil
+	})
+	h.Root.SetApproveMode(true)
+
+	if _, err := h.Root.Run(context.Background(), "调用长参数工具"); err != nil {
+		t.Fatal(err)
+	}
+	got := host.argOf("long_input")
+	if !strings.Contains(got, strings.Repeat("a", 400)) {
+		t.Fatalf("审批应收到全量参数（不截断到 200 字）, got %d 字: %q…", len(got), got[:min(50, len(got))])
+	}
+}
+
+func TestSubagentToolEventsFlowToRoot(t *testing.T) {
+	ws := t.TempDir()
+	os.WriteFile(filepath.Join(ws, "hello.txt"), []byte("hi"), 0o644)
+	f := newFakeLLM([]string{
+		`TOOL:{"file_path":"hello.txt"}`, // 子代理消费
+		"child done",
+	})
+	defer f.Close()
+	h := buildTestHarness(t, f, ws)
+	defer h.Close()
+
+	var events []ToolEvent
+	h.Root.SetOnToolEvent(func(e ToolEvent) { events = append(events, e) })
+	if _, _, err := h.Manager.Subagent(h.Root, "检查文件", "读 hello.txt", false); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) < 2 {
+		t.Fatalf("子代理的工具事件应回流到根回调: %+v", events)
+	}
+	if events[0].AgentID == "agent_root" || events[0].Label != "检查文件" {
+		t.Fatalf("事件应携带子代理身份: %+v", events[0])
+	}
+	if events[0].Status != ToolStatusRunning || events[1].Status != ToolStatusDone {
+		t.Fatalf("状态推进: %+v", events)
 	}
 }

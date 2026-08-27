@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"grf/llm"
+	"git.gorun.fun/share/grf-harness/llm"
 )
 
 // isolateConfig 把 GRF_HOME 指到临时目录，可选写入一份 settings.json。

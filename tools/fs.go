@@ -162,14 +162,16 @@ func registerRead(r *Registry, fs *FsPolicy) {
 		if a.Limit > 5000 {
 			a.Limit = 5000
 		}
-		info, err := os.Stat(a.FilePath)
+		// stat 解析后的路径：相对路径相对工作区（与下方 ReadFile 一致），
+		// 直接 stat 原始路径会相对进程 CWD，工作区文件被误判不存在
+		absPath := fs.resolve(a.FilePath)
+		info, err := os.Stat(absPath)
 		if err != nil {
 			return Result{}, err
 		}
 		if info.IsDir() {
 			return Result{}, fmt.Errorf("%q is a directory; use glob to discover files", a.FilePath)
 		}
-		absPath := fs.resolve(a.FilePath)
 		data, err := os.ReadFile(absPath)
 		if err != nil {
 			return Result{}, err

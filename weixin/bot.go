@@ -12,10 +12,10 @@ import (
 	"sync"
 	"time"
 
-	"grf/agent"
-	"grf/config"
-	"grf/llm"
-	"grf/tools"
+	"git.gorun.fun/share/grf-harness/agent"
+	"git.gorun.fun/share/grf-harness/config"
+	"git.gorun.fun/share/grf-harness/llm"
+	"git.gorun.fun/share/grf-harness/tools"
 )
 
 // DefaultSystemPrompt 微信侧默认系统提示词。

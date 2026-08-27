@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"grf/config"
+	"git.gorun.fun/share/grf-harness/config"
 )
 
 // State iLink 连接状态,落盘保存(含 token 与长轮询游标,勿泄露)。

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync/atomic"
 )
 
 var (
@@ -28,6 +29,10 @@ var (
 	reAttrName    = regexp.MustCompile(`name\s*[:=]\s*["']?([A-Za-z0-9_.-]+)`)
 	reAttrArgs    = regexp.MustCompile(`arguments\s*[:=]\s*`)
 )
+
+// fallbackSeq 回退调用的 ID 计数：进程级唯一。按消息内编号（call_fallback_0…）
+// 会在跨消息时重号，下游按 ID 关联事件的场景会把两次调用混为一次。
+var fallbackSeq atomic.Int64
 
 // fallbackContentToolCalls 从正文提取 XML 风格工具调用并从正文中移除
 // 相应片段。部分服务端（Qwen 系部署）会把同一条消息里的一部分调用
@@ -89,7 +94,7 @@ func fallbackContentToolCalls(m *Message) bool {
 		}
 	}
 	for i := range calls {
-		calls[i].ID = fmt.Sprintf("call_fallback_%d", i)
+		calls[i].ID = fmt.Sprintf("call_fallback_%d", fallbackSeq.Add(1))
 		calls[i].Type = "function"
 	}
 	m.ToolCalls = append(m.ToolCalls, calls...)

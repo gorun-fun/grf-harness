@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"grf/llm"
+	"git.gorun.fun/share/grf-harness/llm"
 )
 
 type Store struct {

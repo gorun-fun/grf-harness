@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"grf/tools"
+	"git.gorun.fun/share/grf-harness/tools"
 )
 
 // drive 用按键序列驱动 ask 表单（rune 按一次一个字符）。

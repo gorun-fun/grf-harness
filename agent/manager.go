@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"grf/llm"
-	"grf/tools"
+	"git.gorun.fun/share/grf-harness/llm"
+	"git.gorun.fun/share/grf-harness/tools"
 )
 
 // Handle 子代理注册项。

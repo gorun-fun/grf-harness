@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"strings"
 
-	"grf/config"
-	"grf/store"
-	"grf/tools"
+	"git.gorun.fun/share/grf-harness/config"
+	"git.gorun.fun/share/grf-harness/store"
+	"git.gorun.fun/share/grf-harness/tools"
 )
 
 // askRequest / planRequest / escRequest Host 请求（经 events 通道入循环）。
@@ -30,10 +30,10 @@ type escRequest struct {
 	resp                               chan bool
 }
 
-// toolApproveRequest 审批模式下的逐工具确认请求。
+// toolApproveRequest 审批模式下的逐工具确认请求（支持拒绝反馈）。
 type toolApproveRequest struct {
 	name, args string
-	resp       chan bool
+	resp       chan tools.ApproveDecision
 }
 
 // tuiHost tools.Host 实现：请求转发到聊天事件循环。
@@ -84,18 +84,18 @@ func (h *tuiHost) ApprovePlan(ctx context.Context, plan string) (bool, string) {
 	}
 }
 
-func (h *tuiHost) ApproveTool(ctx context.Context, name, args string) bool {
-	req := &toolApproveRequest{name: name, args: args, resp: make(chan bool, 1)}
+func (h *tuiHost) ApproveTool(ctx context.Context, name, args string) tools.ApproveDecision {
+	req := &toolApproveRequest{name: name, args: args, resp: make(chan tools.ApproveDecision, 1)}
 	select {
 	case h.c.events <- req:
 	case <-ctx.Done():
-		return false
+		return tools.ApproveDecision{}
 	}
 	select {
 	case v := <-req.resp:
 		return v
 	case <-ctx.Done():
-		return false
+		return tools.ApproveDecision{}
 	}
 }
 
@@ -130,11 +130,15 @@ func (c *Chat) hostRequest(m any) {
 				req.resp <- ok
 			}}
 	case *toolApproveRequest:
-		c.escv = &escApprove{title: "工具审批（审批模式）", tool: req.name, command: req.args,
-			approve: func(ok bool) {
-				c.escv = nil
-				req.resp <- ok
-			}}
+		pv := &planView{title: "工具审批（审批模式）",
+			plan: "工具: " + req.name + "\n参数: " + clipRunesT(req.args, 2000),
+			hint: "y 批准执行 · f 拒绝并给反馈 · Esc 拒绝",
+			esc:  "（用户关闭了工具审批，未给反馈）"}
+		pv.approve = func(approved bool, feedback string) {
+			c.plan = nil
+			req.resp <- tools.ApproveDecision{Approved: approved, Feedback: feedback}
+		}
+		c.plan = pv
 	}
 	c.paint(true)
 }
@@ -206,7 +210,11 @@ func (c *Chat) planKey(k termKey) bool {
 	case "f", "F":
 		f.mode = 1
 	case "esc":
-		f.approve(false, "（用户关闭了计划审批，未给反馈；请继续规划或询问）")
+		msg := f.esc
+		if msg == "" {
+			msg = "（用户关闭了计划审批，未给反馈；请继续规划或询问）"
+		}
+		f.approve(false, msg)
 	}
 	return false
 }

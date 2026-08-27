@@ -3,13 +3,14 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 
-	"grf/llm"
+	"git.gorun.fun/share/grf-harness/llm"
 )
 
 func newTestPolicy(t *testing.T, workspace string) *FsPolicy {
@@ -228,5 +229,41 @@ func TestRegisterCustomGuards(t *testing.T) {
 	}
 	if len(r.Defs()) != 1 || r.Defs()[0].Name != "bash" {
 		t.Fatalf("Defs after spec Register: %+v", r.Defs())
+	}
+}
+
+func TestExecuteSetsErr(t *testing.T) {
+	r := NewRegistry()
+	r.RegisterCustom(llm.Tool{Name: "boom", Description: "总是失败",
+		Parameters: map[string]any{"type": "object"}}, func(ctx context.Context, args string) (Result, error) {
+		return Result{}, fmt.Errorf("炸了")
+	})
+	r.RegisterCustom(llm.Tool{Name: "panic_tool", Description: "总是 panic",
+		Parameters: map[string]any{"type": "object"}}, func(ctx context.Context, args string) (Result, error) {
+		panic("bad state")
+	})
+
+	// handler 返回 error
+	res := r.Execute(context.Background(), "boom", "{}")
+	if res.Err == "" || !strings.Contains(res.Text, "error: 炸了") {
+		t.Fatalf("error 路径应同时填 Err 与完整反馈文本: %+v", res)
+	}
+	// handler panic
+	res = r.Execute(context.Background(), "panic_tool", "{}")
+	if res.Err == "" || !strings.Contains(res.Text, "panicked") {
+		t.Fatalf("panic 路径应填 Err: %+v", res)
+	}
+	// 未注册工具
+	res = r.Execute(context.Background(), "not_registered", "{}")
+	if res.Err == "" || !strings.Contains(res.Text, "unknown tool") {
+		t.Fatalf("未注册路径应填 Err: %+v", res)
+	}
+	// 成功路径 Err 为空
+	r.RegisterCustom(llm.Tool{Name: "fine", Description: "总是成功",
+		Parameters: map[string]any{"type": "object"}}, func(ctx context.Context, args string) (Result, error) {
+		return TextResult("ok"), nil
+	})
+	if res = r.Execute(context.Background(), "fine", "{}"); res.Err != "" || res.Text != "ok" {
+		t.Fatalf("成功路径: %+v", res)
 	}
 }

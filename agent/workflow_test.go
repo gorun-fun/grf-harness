@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"grf/config"
-	"grf/llm"
-	"grf/tools"
+	"git.gorun.fun/share/grf-harness/config"
+	"git.gorun.fun/share/grf-harness/llm"
+	"git.gorun.fun/share/grf-harness/tools"
 )
 
 // wfFakeLLM workflow 场景的假服务：直接回文本。

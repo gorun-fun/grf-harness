@@ -26,12 +26,12 @@ import (
 	"syscall"
 	"time"
 
-	"grf/agent"
-	"grf/app"
-	"grf/config"
-	"grf/term"
-	"grf/tui"
-	"grf/weixin"
+	"git.gorun.fun/share/grf-harness/agent"
+	"git.gorun.fun/share/grf-harness/app"
+	"git.gorun.fun/share/grf-harness/config"
+	"git.gorun.fun/share/grf-harness/term"
+	"git.gorun.fun/share/grf-harness/tui"
+	"git.gorun.fun/share/grf-harness/weixin"
 )
 
 func main() {

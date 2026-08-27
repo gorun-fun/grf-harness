@@ -5,7 +5,7 @@ package tui
 import (
 	"strings"
 
-	"grf/term"
+	"git.gorun.fun/share/grf-harness/term"
 )
 
 // Editor 单行输入编辑器（UTF-8 感知，横向滚动窗口）。

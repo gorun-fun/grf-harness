@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"grf/tools"
+	"git.gorun.fun/share/grf-harness/tools"
 )
 
 func opts(n ...string) []tools.Option {

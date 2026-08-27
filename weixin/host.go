@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"grf/tools"
+	"git.gorun.fun/share/grf-harness/tools"
 )
 
 // askTimeout 单个问题等待用户微信回复的上限;超时让 agent 自行假设继续。

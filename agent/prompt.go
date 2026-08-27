@@ -1,13 +1,13 @@
-// prompt.go 系统提示词构建：镜像 docs/prompt.md 的指导（工具使用纪律、
-// 后台作业、goal、workflow/ralph、子代理后台默认等），适配本 harness 的
-// 运行时事实（终端交互、当前工作目录、实际模型、技能目录）。
+// prompt.go 系统提示词构建：工具使用纪律、后台作业、goal、workflow/
+// ralph、子代理后台默认等指导段，适配本 harness 的运行时事实（终端交互、
+// 当前工作目录、实际模型、技能目录）。
 package agent
 
 import (
 	"fmt"
 	"strings"
 
-	"grf/tools"
+	"git.gorun.fun/share/grf-harness/tools"
 )
 
 // PromptOptions 系统提示词的运行时事实。

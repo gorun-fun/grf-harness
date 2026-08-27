@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"grf/tools"
+	"git.gorun.fun/share/grf-harness/tools"
 )
 
 // Goal 目标状态。

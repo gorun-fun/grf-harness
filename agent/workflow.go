@@ -12,8 +12,8 @@ import (
 	"strings"
 	"sync"
 
-	"grf/js"
-	"grf/tools"
+	"git.gorun.fun/share/grf-harness/js"
+	"git.gorun.fun/share/grf-harness/tools"
 )
 
 const (

@@ -13,16 +13,16 @@ import (
 	"strings"
 	"time"
 
-	"grf/agent"
-	"grf/config"
-	"grf/llm"
-	"grf/store"
-	"grf/term"
-	"grf/tools"
+	"git.gorun.fun/share/grf-harness/agent"
+	"git.gorun.fun/share/grf-harness/config"
+	"git.gorun.fun/share/grf-harness/llm"
+	"git.gorun.fun/share/grf-harness/store"
+	"git.gorun.fun/share/grf-harness/term"
+	"git.gorun.fun/share/grf-harness/tools"
 )
 
 // Version 版本号。
-const Version = "0.0.1-alpha.1"
+const Version = "0.0.1-alpha.2"
 
 // Options 应用构建参数（库使用方入口）。
 type Options struct {
@@ -34,6 +34,7 @@ type Options struct {
 	DepthLimit    int                       // 子代理深度上限
 	DisabledTools []string                  // 按场景禁用的工具名
 	VerboseEvents func(kind, detail string) // 全部事件回调（挂到根 agent；RunTask 会覆盖，见其注释）
+	OnToolEvent   func(agent.ToolEvent)     // 结构化工具事件回调（挂到根 agent，子代理事件也回流；见 docs/integration.md §5）
 
 	// 运行策略覆盖：仅本次构建生效、不写回配置文件；空/nil 沿用
 	// ~/.grf/settings.json（嵌入方可用它摆脱对机器全局配置的依赖）。
@@ -81,6 +82,9 @@ func New(opts Options) (*App, error) {
 	}
 	if opts.VerboseEvents != nil {
 		h.Root.SetOnEvent(opts.VerboseEvents)
+	}
+	if opts.OnToolEvent != nil {
+		h.Root.SetOnToolEvent(opts.OnToolEvent)
 	}
 	return &App{Harness: h, opts: opts}, nil
 }
@@ -424,15 +428,22 @@ func (h *TaskHost) ApproveEscalation(ctx context.Context, tool, command, mode, j
 	return line == "y" || line == "yes"
 }
 
-func (h *TaskHost) ApproveTool(ctx context.Context, name, args string) bool {
+func (h *TaskHost) ApproveTool(ctx context.Context, name, args string) tools.ApproveDecision {
 	if h.AutoApprove || !h.ttyOut || !term.IsTTY(int(os.Stdin.Fd())) {
-		return h.AutoApprove
+		return tools.ApproveDecision{Approved: h.AutoApprove}
 	}
-	fmt.Printf("\n⚠ 工具调用审批 [%s]\n参数: %s\n批准? [y/N] ", name, args)
+	fmt.Printf("\n⚠ 工具调用审批 [%s]\n参数: %s\n", name, args)
+	fmt.Print("批准? [y/N]（其他输入作为反馈拒绝并回给模型）> ")
 	rd := bufio.NewReader(os.Stdin)
 	line, _ := rd.ReadString('\n')
-	line = strings.ToLower(strings.TrimSpace(line))
-	return line == "y" || line == "yes"
+	line = strings.TrimSpace(line)
+	if strings.EqualFold(line, "y") || strings.EqualFold(line, "yes") {
+		return tools.ApproveDecision{Approved: true}
+	}
+	if line == "" {
+		return tools.ApproveDecision{}
+	}
+	return tools.ApproveDecision{Feedback: line}
 }
 
 func (h *TaskHost) ApprovePlan(ctx context.Context, plan string) (bool, string) {

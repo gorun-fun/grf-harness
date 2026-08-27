@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"grf/app"
-	"grf/llm"
-	"grf/term"
+	"git.gorun.fun/share/grf-harness/app"
+	"git.gorun.fun/share/grf-harness/llm"
+	"git.gorun.fun/share/grf-harness/term"
 )
 
 // probeLLM 模拟 OpenAI 接口（非流式回包，与 agent 包测试同格式）。

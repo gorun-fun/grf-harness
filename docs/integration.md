@@ -5,15 +5,35 @@
 
 ## 1. 引入方式
 
-grf 尚未发布到模块仓库前，宿主 `go.mod` 用 replace 指向本地路径：
+模块路径与公开仓库地址一致：`git.gorun.fun/share/grf-harness`
+（https://git.gorun.fun/share/grf-harness），版本 tag 形如
+`v0.0.1-alpha.2`（首个携带本模块路径的 tag）。
+
+**方式一：直接 go get**（宿主机器可访问 git.gorun.fun）
+
+```sh
+# 内网 git 服务：让 go 跳过公共模块代理与校验和数据库
+go env -w GOPRIVATE=git.gorun.fun
+
+go get git.gorun.fun/share/grf-harness@v0.0.1-alpha.2
+```
+
+```go
+import "git.gorun.fun/share/grf-harness/app"
+```
+
+git 拉取认证走宿主机器的常规 git 配置（https 凭据 / ~/.netrc / ssh）；
+服务端若是自签证书，把 CA 指给 git：`git config --global http.https://git.gorun.fun.sslCAInfo /path/to/ca.pem`。
+
+**方式二：本地路径 replace**（联调 / 离线；克隆或软链到本地后指向目录）
 
 ```
-require grf v0.0.0
+require git.gorun.fun/share/grf-harness v0.0.0
 
-replace grf => /path/to/grf-harness
+replace git.gorun.fun/share/grf-harness => /path/to/grf-harness
 ```
 
-由于 grf 零依赖，replace 不会向宿主 go.mod 引入任何第三方 require。
+由于 grf 零依赖，两种方式都不会向宿主 `go.mod` 引入任何第三方 require。
 
 ## 2. 库接入：app.New
 
@@ -21,7 +41,7 @@ replace grf => /path/to/grf-harness
 工具、会话存储）：
 
 ```go
-import "grf/app"
+import "git.gorun.fun/share/grf-harness/app"
 
 a, err := app.New(app.Options{
     Workspace:     "/path/to/工作区",       // 默认 cwd
@@ -32,6 +52,7 @@ a, err := app.New(app.Options{
     DepthLimit:    3,                       // 子代理深度上限
     DisabledTools: []string{"bash"},        // 见 §4
     VerboseEvents: func(kind, detail string) { /* 见 §5 */ },
+    OnToolEvent:   func(e agent.ToolEvent) { /* 见 §5，重建工具时间线用 */ },
 
     // 运行策略覆盖：仅本次构建生效、不落盘；不设则沿用配置文件
     Sandbox:     "workspace-write",         // "off" | "workspace-write"
@@ -45,8 +66,9 @@ err = a.Harness.Root().Run(ctx, "帮我把今天的报表导出")
 ```
 
 策略覆盖让嵌入方**不依赖机器全局配置**也能定死沙箱/审批行为；未覆盖的
-项仍读 `~/.grf/settings.json`（可用环境变量 `GRF_HOME` 把整个 `.grf`
-目录重定位到宿主自己的位置，配置、技能、会话都随之迁移）。
+项仍读 `~/.grf/settings.json`。环境变量 `GRF_HOME` 可重定位全局配置与
+用户级技能（`settings.json`、`~/.grf/skills`）；**会话存档不归它管**——
+跟随 `Options.Workspace` 落在 `<workspace>/.grf/sessions/`（见 §9）。
 
 需要更细控制（自定义 `config.Settings`、子代理工厂、goal 状态机）时
 直接用 `agent.Build(agent.Options{...})`，字段与 `app.Options` 对应。
@@ -55,7 +77,7 @@ err = a.Harness.Root().Run(ctx, "帮我把今天的报表导出")
 
 优先级：`Options.SystemPrompt` > 配置文件 `system_prompt`（`gh config
 prompt set` 落盘的那份）> 内置默认。非最高优先级非空者**替换**内置静态
-提示词（结构镜像 `docs/prompt.md`），但工作区路径、模型名、技能清单等
+提示词，但工作区路径、模型名、技能清单等
 动态事实段仍会自动拼接（见 `agent.BuildSystemPrompt`）。
 
 ## 4. 工具：自定义、替换实现与禁用
@@ -96,7 +118,27 @@ prompt set` 落盘的那份）> 内置默认。非最高优先级非空者**替�
 
 ## 5. 事件与流式响应
 
-两条互不冲突的回调链：
+三条互不冲突的回调链：
+
+**结构化工具事件**（推荐嵌入方重建工具时间线用）——`Options.OnToolEvent`
+（`app.New` 时挂到根 agent），或运行期 `Agent.SetOnToolEvent`。每次工具
+调用按 CallID 推进状态机，`Input`/`Output` 均为**全量原文不截断**，展示
+裁剪由宿主自理：
+
+| 字段     | 含义                                                        |
+|----------|-------------------------------------------------------------|
+| `CallID` | 工具调用 ID（LLM 返回的 tool_call id；正文回退解析生成），进程内唯一 |
+| `Name`   | 工具名                                                      |
+| `Status` | `running` → `done` \| `error` \| `denied`（终态）           |
+| `Input`  | 完整参数 JSON                                               |
+| `Output` | 完整结果文本（`running` 时为空）                            |
+| `Err`    | `Status=error` 时的错误信息（来自 `tools.Result.Err`）      |
+| `AgentID`/`Label` | 发起调用的 agent（根为 `agent_root`/`main`）      |
+
+`running` 在审批前发出（等待用户审批的卡片也处于进行中）；`denied` 表示
+审批模式被拒，`Output` 携带拒绝原因与用户反馈。**子代理的工具事件也会
+回流到根 agent 的回调**（用 `AgentID`/`Label` 区分来源），宿主可选择只
+展示根会话。
 
 **过程事件**（工具调用、结果、报错、todo/goal 变化）——`Options.VerboseEvents`
 （`app.New` 时自动挂到根 agent），或运行期 `Agent.SetOnEvent`，`kind` 取值：
@@ -108,6 +150,9 @@ prompt set` 落盘的那份）> 内置默认。非最高优先级非空者**替�
 | `done`   | 一次 Run 结束                       |
 | `notice` | 系统通知（子代理落定等）             |
 | `todos` / `goal` / `plan` / `phase` | 状态变化，detail 为摘要或 JSON |
+
+字符串事件适合行式日志；需要调用级关联与终态判定（进行中→完成/失败
+卡片、展开看输出）请用上面的 `OnToolEvent`。
 
 **流式文本**——`Agent.SetStreamHooks(content, reasoning func(string))`，
 逐 token 回调正文与思考过程。宿主在回调里转发到自己的 UI / 消息总线即可。
@@ -176,7 +221,10 @@ func installSkills(workspace string, skills map[string]string) error {
   goal 状态自动续跑；一轮结束后 `Agent.RunAndWaitBackground(dur)` 等待
   后台子代理落定并取回通知（`app.RunTask` 即此组合）。
 - **逐工具审批**：`Agent.SetApproveMode(true)` 后每次工具调用先经
-  `Host.ApproveTool(ctx, name, args)` 征求同意，拒绝以工具结果回给模型。
+  `Host.ApproveTool(ctx, name, args)` 征求同意——`args` 为**全量参数
+  JSON（不截断）**，宿主自行做展示裁剪。返回 `tools.ApproveDecision{Approved, Feedback}`：
+  拒绝时 `Feedback` 可携带用户反馈（如"别动这个文件，改用 …"），连同
+  拒绝原因作为工具结果回给模型。
 - **用量统计**：`Agent.LLMStats()`（轮次/首 token/生成耗时/tokens/缓存
   命中率）与 `Agent.ToolStats()`（调用数/累计耗时），UI 或计量用。
 - **编程式子代理**：`Harness.Manager` 的 `Subagent/Fork/SendMessage/
@@ -189,7 +237,76 @@ func installSkills(workspace string, skills map[string]string) error {
 探测 TTY）或组合 `tools.NoopHost` 自己实现 `tools.Host` 五方法接口
 （AskUser / ApproveEscalation / ApprovePlan / ApproveTool / NotifyEvent）。
 
-## 9. 非 Go 宿主：CLI 子进程
+## 9. 多会话（多对话并存）
+
+宿主要有多个并行对话（多 tab 聊天、多用户机器人）时：**一个对话 = 一个
+`app.New`（Harness）实例**。全部会话状态都在实例内、实例之间不共享任何
+内存状态，各对话可在各自 goroutine 上并发 `Run`。每实例独占的资源：
+
+| 状态                | 说明                                                          |
+|---------------------|---------------------------------------------------------------|
+| 对话历史/通知/todo  | Agent 内部锁保护，按实例隔离                                  |
+| 后台作业            | JobManager 每 agent 一个，按对话隔离                          |
+| observe 读集        | FsPolicy 每实例记账：对话 A read 过的文件不放行对话 B 的覆写  |
+| 产物目录            | `os.TempDir` 下每 harness 独立（`Close()` 清理）              |
+| 会话存档指针        | `Store` 的当前文件指针每实例独立，AutoSave 各覆写各的文件      |
+
+关闭对话 = `a.Close()` + 从对话表删除。仓库内现成参考：`weixin` 的
+`agentPool`（`map[用户]*Agent`，首次触达建 harness、`/new` 即丢弃）。
+
+### 持久化归属与共享 workspace 的注意点
+
+会话文件为 `<workspace>/.grf/sessions/session-<时间戳>.json`，**跟随
+`Options.Workspace`**（`GRF_HOME` 不搬会话）。`NewSession`/`Restore`
+之后下次保存另起新文件。多个对话共享同一 workspace 时注意：
+
+- 文件名时间戳只精确到**秒**：两个对话的首次落盘落在同一秒会生成同名
+  文件、交错覆写。
+- `ListSessions` / `LatestSessionFull` 枚举目录下**全部**会话——跨对话
+  混排，文件名不含对话 ID，"最近一场"在多对话下无意义。
+- `a.AutoSave()` 不返回路径；要建对话↔文件索引请自己调 `a.SaveSession()`
+  （返回文件路径）。
+- 没有会话删除 API；关闭对话会残留存档文件（无功能影响）。
+
+### 推荐接法
+
+| 接法 | 做法 | 适用 |
+|------|------|------|
+| 每对话独立 workspace（推荐） | `Workspace: <appData>/conversations/<对话ID>` | 会话/技能/读集全隔离；恢复 = 读该对话目录下最新一场 |
+| 共享 workspace + 自建索引 | 每回合调 `a.SaveSession()` 拿路径存进自己的库；恢复用 `store.LoadSessionFull(path)` + `a.Restore(sess)` | 需要对话间共享工作区文件；注意上面的同秒冲突 |
+| 绕开 grf 会话文件 | 快照 `a.Root().History()` 自存，重启后 `RestoreFull` 回放 | 宿主已有对话持久化；缓存命中语义 grf 已保证（system 原文 + CacheKey 随消息回放） |
+
+每对话独立 workspace 的最小骨架：
+
+```go
+convs := map[string]*app.App{} // 对话ID → harness
+
+func openConv(id string) (*app.App, error) {
+    a, err := app.New(app.Options{
+        Workspace: filepath.Join(appData, "conversations", id), // 存档/技能/读集随对话隔离
+        Client:    client, // OnToolEvent 见 §5
+    })
+    if err != nil {
+        return nil, err
+    }
+    // 跨重启恢复：该对话目录下最新一场
+    if infos := a.Harness.Store.ListSessions(1); len(infos) > 0 {
+        if sess, err := store.LoadSessionFull(infos[0].Path); err == nil && len(sess.Messages) > 0 {
+            a.Restore(sess)
+        }
+    }
+    return a, nil
+}
+
+func closeConv(id string) {
+    if a := convs[id]; a != nil {
+        a.Close() // 清产物目录；存档文件保留供下次恢复
+        delete(convs, id)
+    }
+}
+```
+
+## 10. 非 Go 宿主：CLI 子进程
 
 ```sh
 ./gh "任务"   # 单任务直出，跑完退出
@@ -199,7 +316,7 @@ func installSkills(workspace string, skills map[string]string) error {
 即可。会话历史落在 `<workspace>/.grf/sessions/`。目前没有 MCP/JSON-RPC
 等结构化边界，事件与正文混排在 stdout，服务端集成建议走 Go 库方式。
 
-## 10. 注意事项
+## 11. 注意事项
 
 - **并发**：agent 历史一律经内部锁；宿主若自建 UI，事件请从
   `VerboseEvents` 投递到单一 goroutine 消费（参考 tui 的 events 通道模式）。
@@ -210,6 +327,7 @@ func installSkills(workspace string, skills map[string]string) error {
 - **回话文本**：回复不做 markdown 渲染，事件/结果均为原始文本。
 - **会话持久化**：`a.SaveSession()` 手动保存；`a.AutoSave()` 回合结束
   自动落盘；`a.Restore(sess)` 续接历史（含 system 原文与缓存键回放）。
+  多对话并存的隔离与索引见 §9。
 - **参考实现**：`weixin` 包（`weixin.Run(ctx, prompt, workspace)`）是
   一个完整的第三方嵌入样板——自含配置加载、client 构建、每用户独立
   harness 的常驻消息服务。

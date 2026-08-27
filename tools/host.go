@@ -23,6 +23,12 @@ type Option struct {
 	Description string `json:"description,omitempty"`
 }
 
+// ApproveDecision 审批模式下逐工具确认的结果。
+type ApproveDecision struct {
+	Approved bool   // 是否放行
+	Feedback string // 未批准时的用户反馈（可空）；非空时随拒绝原因作为工具结果回给模型
+}
+
 // Host 宿主回调：交互能力（提问/审批）与事件通知。
 type Host interface {
 	// AskUser 展示问题并等待用户作答。返回值须为每个 id 对应的答案
@@ -34,9 +40,10 @@ type Host interface {
 	// ApprovePlan 计划审批：返回 (是否批准, 用户反馈文本)。反馈仅在未
 	// 批准时使用。
 	ApprovePlan(ctx context.Context, plan string) (bool, string)
-	// ApproveTool 审批模式下的逐工具确认：执行前征求用户同意，返回
-	// 是否放行（args 为压缩展示用的参数摘要）。
-	ApproveTool(ctx context.Context, name, args string) bool
+	// ApproveTool 审批模式下的逐工具确认：执行前征求用户同意。args 为
+	// 完整参数 JSON（不截断，展示裁剪由宿主自理）；未批准时 Feedback
+	// 可携带用户反馈（如"别动这个文件，改用 …"），模型可据此调整方案。
+	ApproveTool(ctx context.Context, name, args string) ApproveDecision
 	// NotifyEvent 过程事件通知（UI 展示）：kind 见各工具实现。
 	NotifyEvent(kind, detail string)
 }
@@ -62,9 +69,9 @@ func (h *NoopHost) ApprovePlan(ctx context.Context, plan string) (bool, string) 
 	return false, "plan approval is unavailable without an interactive user; continue planning or finish with a summary"
 }
 
-func (h *NoopHost) ApproveTool(ctx context.Context, name, args string) bool {
+func (h *NoopHost) ApproveTool(ctx context.Context, name, args string) ApproveDecision {
 	// 无交互用户（子代理/嵌入）：审批模式只约束有交互宿主的根会话
-	return true
+	return ApproveDecision{Approved: true}
 }
 
 func (h *NoopHost) NotifyEvent(kind, detail string) {
