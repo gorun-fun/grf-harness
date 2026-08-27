@@ -22,7 +22,7 @@ import (
 )
 
 // Version 版本号。
-const Version = "1.0.0"
+const Version = "0.0.1"
 
 // Options 应用构建参数（库使用方入口）。
 type Options struct {

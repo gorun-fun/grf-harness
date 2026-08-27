@@ -24,7 +24,7 @@ const (
 	channelVersion        = "2.4.6"
 	ilinkAppID            = "bot"
 	ilinkAppClientVersion = "132102"
-	botAgent              = "grf-harness/1.0.0 (go)"
+	botAgent              = "grf-harness/0.0.1 (go)"
 	staleTokenCode  int64 = -14 // ret/errcode=-14 表示 token 失效,需重新扫码
 )
 
