@@ -21,6 +21,17 @@ variables:
   DEPLOY_DIR: /data/download/grf-harness
   # SSH 登录用户
   DEPLOY_USER: root
+  # Go 构建缓存放进工作区,经下方 cache 跨 job 复用。docker 执行器每 job
+  # 全新容器,默认 GOCACHE 随容器丢弃,导致每次冷编译 6 平台标准库(约 5 分半);
+  # 命中缓存后只剩项目包的重编,低性能 runner 上约 1-2 分钟
+  GOCACHE: $CI_PROJECT_DIR/.gocache
+
+cache:
+  # 固定 key:缓存跨版本 tag 累积复用;Go 版本升级后需换 key(如 go-build-1.27)
+  # 迫使重建,防旧标准库缓存与新工具链混用
+  key: go-build-1.26
+  paths:
+    - .gocache/
 
 stages:
   - build
