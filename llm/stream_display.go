@@ -18,7 +18,7 @@ func (f *displayFilter) delta(full string) string {
 	if strings.Contains(cleaned, "DSML") {
 		_, cleaned = extractDSMLCalls(cleaned)
 	}
-	if strings.Contains(cleaned, "<tool_call") {
+	if strings.Contains(cleaned, toolCallTag) {
 		_, cleaned = extractToolCalls(cleaned)
 	}
 	cleaned = holdUnclosedTag(cleaned)
@@ -39,7 +39,7 @@ func (f *displayFilter) delta(full string) string {
 // 标记前缀，如 "<tool_c"），等闭合后由 extract 整体剔除。
 func holdUnclosedTag(s string) string {
 	cut := len(s)
-	for _, m := range []string{dsmlMarker, "<tool_call", "</｜｜DSML｜｜"} {
+	for _, m := range []string{dsmlMarker, toolCallTag, "</｜｜DSML｜｜"} {
 		if i := strings.LastIndex(s, m); i >= 0 && i < cut {
 			cut = i
 		}
@@ -57,7 +57,7 @@ func holdUnclosedTag(s string) string {
 	// 无完整标记：检查尾部是否是某个标记的真前缀（从 "<" 开始）
 	for n := len(s); n > 0; n-- {
 		tail := s[len(s)-n:]
-		for _, m := range []string{"<tool_call", "</tool_call", dsmlMarker, "</｜｜DSML｜｜", "<||", "<｜", "</｜", "</|"} {
+		for _, m := range []string{toolCallTag, "</tool_call", dsmlMarker, "</｜｜DSML｜｜", "<||", "<｜", "</｜", "</|"} {
 			if strings.HasPrefix(m, tail) {
 				return s[:len(s)-n]
 			}

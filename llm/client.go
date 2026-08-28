@@ -37,8 +37,7 @@ func NewClient(cfg Config) *Client {
 	}
 }
 
-func (c *Client) Model() string   { return c.cfg.Model }
-func (c *Client) BaseURL() string { return c.cfg.BaseURL }
+func (c *Client) Model() string { return c.cfg.Model }
 
 // SetCacheKey / CacheKey 会话级提示词缓存路由键：同一会话的多轮请求
 // 携带同一 key，支持该字段的服务端会把请求路由到同一缓存分片，提高

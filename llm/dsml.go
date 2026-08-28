@@ -18,9 +18,6 @@ import (
 	"strings"
 )
 
-// 注意：标签里的竖线是全角字符 ｜（U+FF5C），不是 ASCII |。
-const dsmlMarker = "<｜｜DSML｜｜"
-
 var (
 	// 闭合标签容忍写法：名称可能被截断（tool_c/tool_cal/tool_calls 任意
 	// 程度）、">" 可能因流截断缺失；整体缺失时懒惰体匹配到结尾（$ 兜底）。
@@ -33,17 +30,15 @@ var (
 	reDSMLInvoke  = regexp.MustCompile(`(?s)<｜｜DSML｜｜invoke\s+name\s*=\s*"([^"]+)"[^>]*>(.*?)(?:</｜｜DSML｜｜inv\w*\s*>?|$)`)
 	reDSMLParam   = regexp.MustCompile(`(?s)<｜｜DSML｜｜parameter\b([^>]*)>(.*?)(?:</｜｜DSML｜｜parameter>|$)`)
 	reDSMLAttr    = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*"([^"]*)"`)
-	// 标记分隔符变体：竖线可能是 ASCII | 与全角 ｜ 的任意组合、夹带空格
-	// （如 <||DSML||tool_call>），统一归一为全角标准形式再匹配
-	reDSMLVariant = regexp.MustCompile(`[｜|]\s*[｜|]\s*DSML\s*[｜|]\s*[｜|]`)
 )
 
 // extractDSMLCalls 从一段文本提取全部 DSML 工具调用，并返回剔除标签后
 // 的文本。先剥掉 tool_calls 包装块再扫 invoke，保证包装块里的调用不会
 // 因为外层标签被整体删除而丢失；正文里散落的裸 invoke 块也容忍。
 func extractDSMLCalls(text string) (calls []ToolCall, cleaned string) {
-	// 先把竖线/空格变体标记归一为标准全角形式，后续正则只需处理一种写法
-	text = reDSMLVariant.ReplaceAllString(text, "｜｜DSML｜｜")
+	// 先把竖线/空格变体标记归一为标准全角形式（reMarkerVariant 见
+	// fallback_tags.go），后续正则只需处理一种写法
+	text = reMarkerVariant.ReplaceAllString(text, "｜｜DSML｜｜")
 	// 单数形式 <｜｜DSML｜｜tool_call>{...}</｜｜DSML｜｜tool_call>：体是
 	// JSON 对象，name 平铺在顶层，其余键即参数（兼容嵌套 arguments）。
 	for _, blk := range reDSMLSingle.FindAllStringSubmatchIndex(text, -1) {
