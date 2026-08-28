@@ -13,7 +13,8 @@
 ```sh
 ./build.sh                # vet + build（产物 ./gh，跳过测试；macOS 会重做 adhoc 签名）
 ./build.sh macos|macos-arm64|linux|linux-arm64|windows|windows-arm64|all   # 交叉编译，产物在 dist/
-./build.sh all            # 6 平台全量；CI（.gitlab-ci.yml，tag 触发）用它构建后 scp 到 10.8.0.5:/data/download/grf-harness/
+./build.sh all            # 6 平台全量；CI（.gitlab-ci.yml，tag 触发）用它构建后发布到
+                          # 10.8.0.5:/data/download/grf-harness/{平台}/{tag去v}/gh(.exe)
 go build -o gh .
 go test ./...             # 无需网络与 API key（agent 回环用 httptest 模拟 LLM）
 go test -race ./agent ./tools ./term ./js ./llm ./server
