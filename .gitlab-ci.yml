@@ -1,6 +1,8 @@
 # ============================================================================
 # grf-harness (gh) 持续集成 / 持续交付
 # 触发方式:推送 tag(git tag v0.0.1-alpha.6 && git push origin v0.0.1-alpha.6)
+#          仅 tag 触发;普通分支推送不创建任何 job（runner 为低性能单并发机,
+#          不浪费槽位）
 # 流程:    交叉编译 6 平台产物 -> 按平台/版本目录发布到 10.8.0.5:
 #          /data/download/grf-harness/{目标平台}/{版本号}/gh(.exe)
 #          （版本号与产物内 config.Version 同源,即 tag 去掉 v 前缀）
@@ -21,20 +23,8 @@ variables:
   DEPLOY_USER: root
 
 stages:
-  - test
   - build
   - publish
-
-# 普通分支推送:全量测试,不发布(测试无网络依赖,无需 API key)
-test:
-  stage: test
-  tags:
-    - docker
-  script:
-    - go vet ./...
-    - go test ./...
-  rules:
-    - if: '$CI_COMMIT_BRANCH'
 
 # 打 tag:交叉编译 6 平台产物(build.sh 逐平台带 GOOS/GOARCH vet)
 build:
@@ -46,7 +36,8 @@ build:
   artifacts:
     paths:
       - dist/
-    expire_in: 7 days
+    # 仅够 publish 消费,过期即清,少占 runner/GitLab 存储
+    expire_in: 1 day
   rules:
     - if: '$CI_COMMIT_TAG'
 
