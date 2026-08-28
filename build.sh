@@ -1,12 +1,15 @@
 #!/bin/sh
 # build.sh 一键：vet + 编译（跳过测试）
 # 用法：./build.sh [目标]
-#   （缺省）   当前系统，产物 ./gh
-#   macos     darwin/arm64   → dist/gh-darwin-arm64
-#   linux     linux/amd64    → dist/gh-linux-amd64
-#   linux-arm linux/arm64    → dist/gh-linux-arm64
-#   windows   windows/amd64  → dist/gh-windows-amd64.exe
-#   all       上述四个平台全部
+#   （缺省）       当前系统，产物 ./gh
+#   macos         darwin/amd64   → dist/gh-darwin-amd64
+#   macos-arm64   darwin/arm64   → dist/gh-darwin-arm64
+#   linux         linux/amd64    → dist/gh-linux-amd64
+#   linux-arm64   linux/arm64    → dist/gh-linux-arm64
+#   windows       windows/amd64  → dist/gh-windows-amd64.exe
+#   windows-arm64 windows/arm64  → dist/gh-windows-arm64.exe
+#   all           上述六个平台全部
+# 兼容别名：linux-arm = linux-arm64
 set -e
 cd "$(dirname "$0")"
 GO=${GO:-go}
@@ -46,29 +49,39 @@ case "${1:-}" in
         ;;
     macos)
         mkdir -p dist
-        build_one macos darwin arm64 dist/gh-darwin-arm64
+        build_one macos darwin amd64 dist/gh-darwin-amd64
+        ;;
+    macos-arm64)
+        mkdir -p dist
+        build_one macos-arm64 darwin arm64 dist/gh-darwin-arm64
         ;;
     linux)
         mkdir -p dist
         build_one linux linux amd64 dist/gh-linux-amd64
         ;;
-    linux-arm)
+    linux-arm64|linux-arm)
         mkdir -p dist
-        build_one linux-arm linux arm64 dist/gh-linux-arm64
+        build_one linux-arm64 linux arm64 dist/gh-linux-arm64
         ;;
     windows)
         mkdir -p dist
         build_one windows windows amd64 dist/gh-windows-amd64.exe
         ;;
+    windows-arm64)
+        mkdir -p dist
+        build_one windows-arm64 windows arm64 dist/gh-windows-arm64.exe
+        ;;
     all)
         mkdir -p dist
-        build_one macos darwin arm64 dist/gh-darwin-arm64
+        build_one macos darwin amd64 dist/gh-darwin-amd64
+        build_one macos-arm64 darwin arm64 dist/gh-darwin-arm64
         build_one linux linux amd64 dist/gh-linux-amd64
-        build_one linux-arm linux arm64 dist/gh-linux-arm64
+        build_one linux-arm64 linux arm64 dist/gh-linux-arm64
         build_one windows windows amd64 dist/gh-windows-amd64.exe
+        build_one windows-arm64 windows arm64 dist/gh-windows-arm64.exe
         ;;
     *)
-        echo "用法: $0 [macos|linux|linux-arm|windows|all]（缺省编译当前系统）" >&2
+        echo "用法: $0 [macos|macos-arm64|linux|linux-arm64|windows|windows-arm64|all]（缺省编译当前系统）" >&2
         exit 1
         ;;
 esac

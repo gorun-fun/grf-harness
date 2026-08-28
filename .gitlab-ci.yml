@@ -1,0 +1,71 @@
+# ============================================================================
+# grf-harness (gh) 持续集成 / 持续交付
+# 触发方式:推送 tag(git tag v1.0.0 && git push origin v1.0.0)
+# 流程:    交叉编译 6 平台产物 -> scp 发布到 10.8.0.5:/data/download/grf-harness/
+#
+# 零第三方依赖、纯标准库,直接用 golang 镜像跑 ./build.sh 即可,无需 Docker 打包。
+# 发布侧需在 GitLab CI/CD Variables 配置文件型变量:
+#   DEPLOY_SSH_PRIVATE_KEY (发布机 SSH 私钥,类型选 File)
+# ============================================================================
+
+image: golang:1.26-alpine
+
+variables:
+  # 发布目标主机(内网,通过 SSH 登录)
+  DEPLOY_HOST: 10.8.0.5
+  # 发布机上的产物目录
+  DEPLOY_DIR: /data/download/grf-harness
+  # SSH 登录用户
+  DEPLOY_USER: root
+
+stages:
+  - test
+  - build
+  - publish
+
+# 普通分支推送:全量测试,不发布(测试无网络依赖,无需 API key)
+test:
+  stage: test
+  tags:
+    - docker
+  script:
+    - go vet ./...
+    - go test ./...
+  rules:
+    - if: '$CI_COMMIT_BRANCH'
+
+# 打 tag:交叉编译 6 平台产物(build.sh 逐平台带 GOOS/GOARCH vet)
+build:
+  stage: build
+  tags:
+    - docker
+  script:
+    - ./build.sh all
+  artifacts:
+    paths:
+      - dist/
+    expire_in: 7 days
+  rules:
+    - if: '$CI_COMMIT_TAG'
+
+# 发布:scp 产物到 10.8.0.5(同名覆盖,目录内始终为最新 tag 的产物)
+publish:
+  stage: publish
+  tags:
+    - docker
+  before_script:
+    # 使用国内 Alpine 源加速,并安装 ssh/scp(golang alpine 镜像不自带)
+    - sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
+    - apk add --no-cache openssh-client
+    - mkdir -p ~/.ssh && chmod 700 ~/.ssh
+    # DEPLOY_SSH_PRIVATE_KEY 为文件类型变量,内容已在 $CI_PROJECT_DIR/$DEPLOY_SSH_PRIVATE_KEY
+    # (运行时其值是该文件路径),复制到预期位置并清权限
+    - cp "$DEPLOY_SSH_PRIVATE_KEY" ~/.ssh/id_rsa
+    - chmod 600 ~/.ssh/id_rsa
+    - ssh-keyscan -H ${DEPLOY_HOST} >> ~/.ssh/known_hosts 2>/dev/null
+  script:
+    - ssh ${DEPLOY_USER}@${DEPLOY_HOST} "mkdir -p ${DEPLOY_DIR}"
+    # -p 保留产物 mtime,便于在下载目录确认发布时间
+    - scp -p dist/gh-* ${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_DIR}/
+  rules:
+    - if: '$CI_COMMIT_TAG'
