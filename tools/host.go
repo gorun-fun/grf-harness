@@ -88,3 +88,15 @@ func MarshalAnswers(answers map[string]any) (string, error) {
 	}
 	return string(data), nil
 }
+
+// DeferredHost 可选宿主能力：交互（ask_user 提问与逐工具审批）不在本地
+// 阻塞等待，而是让 agent 暂停回合、把交互请求随 PausedTurn 返回，由接
+// 入方经链式请求应答（gh server 的 Responses 接入用此模式）。实现本接
+// 口且 DeferInteractions 返回 true 时：ask_user_question 调用与审批模式
+// 下的工具调用都转为暂停；沙箱升级与计划审批不参与暂停，按宿主自身语
+// 义（如 autoApprove）处理。
+type DeferredHost interface {
+	Host
+	// DeferInteractions 是否启用链式交互（agent 据此决定暂停而非本地交互）。
+	DeferInteractions() bool
+}

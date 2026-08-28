@@ -3,4 +3,6 @@ grf
 coverage.out
 .grf/
 gh
+dist/
+.zcode/
 .DS_Store

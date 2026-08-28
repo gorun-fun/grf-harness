@@ -38,10 +38,12 @@ type Registry struct {
 	mu       sync.RWMutex
 	handlers map[string]Handler
 	custom   map[string]llm.Tool // spec 之外的自定义工具定义（嵌入方扩展）
+	client   map[string]struct{} // 客户端执行工具（ORS function 工具，本地不执行）
+	disabled map[string]bool     // 禁用标记（可逆：EnableAll 恢复）
 }
 
 func NewRegistry() *Registry {
-	return &Registry{handlers: map[string]Handler{}, custom: map[string]llm.Tool{}}
+	return &Registry{handlers: map[string]Handler{}, custom: map[string]llm.Tool{}, client: map[string]struct{}{}, disabled: map[string]bool{}}
 }
 
 // Register 按工具名注册处理器（定义取自 spec，不存在则 panic——保证
@@ -72,22 +74,71 @@ func (r *Registry) RegisterCustom(def llm.Tool, h Handler) {
 	r.handlers[def.Name] = h
 }
 
-// Disable 按名移除已注册工具（未注册的名静默忽略）。禁用后工具不再随
-// Defs 发给模型、Execute 返回 unknown tool，用于宿主按场景裁剪工具链。
+// RegisterClient 注册"客户端执行"工具（对应 OpenAI Responses 的 function
+// 工具）：定义随请求发给模型，但调用不在本地执行——agent 循环遇到它时
+// 暂停回合（历史尾部保留未闭合 tool_call），由接入方执行后经
+// Agent.Resume 回传结果。名字规则同 RegisterCustom（不得与内置冲突）。
+func (r *Registry) RegisterClient(def llm.Tool) {
+	if def.Name == "" {
+		panic("tools: client tool definition needs a name")
+	}
+	if _, ok := SpecDef(def.Name); ok {
+		panic("tools: client tool name conflicts with spec: " + def.Name)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.handlers[def.Name]; ok {
+		panic("tools: tool already registered: " + def.Name)
+	}
+	r.custom[def.Name] = def
+	r.handlers[def.Name] = clientPendingHandler
+	r.client[def.Name] = struct{}{}
+}
+
+// IsClient 是否客户端执行工具（已注册且未禁用）。agent 循环在 Execute
+// 前据此拦截，转入暂停协议。
+func (r *Registry) IsClient(name string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.off(name) {
+		return false
+	}
+	_, ok := r.client[name]
+	return ok
+}
+
+// clientPendingHandler 兜底：正常路径下 agent 循环在 Execute 前已把
+// client 工具转入暂停；走到这里说明调用方绕过了循环直接 Execute。
+func clientPendingHandler(ctx context.Context, args string) (Result, error) {
+	return Result{Text: "[client tool] not executed locally; the caller must run it and feed the result back via Agent.Resume"}, nil
+}
+
+// Disable 按名禁用已注册工具（未注册的名静默忽略）。禁用后工具不再随
+// Defs 发给模型、Execute 返回 unknown tool，用于宿主按场景裁剪工具链；
+// 标记式禁用，EnableAll 可整体恢复。
 func (r *Registry) Disable(names ...string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, name := range names {
-		delete(r.handlers, name)
+		r.disabled[name] = true
 	}
 }
 
-// Has 是否已注册。
+// EnableAll 清除全部禁用标记（恢复到注册完成时的全量工具集）。
+func (r *Registry) EnableAll() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.disabled = map[string]bool{}
+}
+
+func (r *Registry) off(name string) bool { return r.disabled[name] }
+
+// Has 是否已注册（且未被禁用）。
 func (r *Registry) Has(name string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	_, ok := r.handlers[name]
-	return ok
+	return ok && !r.off(name)
 }
 
 // Registered 已注册的工具名（内置按 spec 顺序在前，自定义按字典序在后）。
@@ -96,13 +147,13 @@ func (r *Registry) Registered() []string {
 	defer r.mu.RUnlock()
 	var names []string
 	for _, n := range SpecNames() {
-		if _, ok := r.handlers[n]; ok {
+		if _, ok := r.handlers[n]; ok && !r.off(n) {
 			names = append(names, n)
 		}
 	}
 	var custom []string
 	for n := range r.custom {
-		if _, ok := r.handlers[n]; ok {
+		if _, ok := r.handlers[n]; ok && !r.off(n) {
 			custom = append(custom, n)
 		}
 	}
@@ -133,8 +184,9 @@ func (r *Registry) Defs() []llm.Tool {
 func (r *Registry) Execute(ctx context.Context, name, args string) (res Result) {
 	r.mu.RLock()
 	h, ok := r.handlers[name]
+	off := r.off(name)
 	r.mu.RUnlock()
-	if !ok {
+	if !ok || off {
 		msg := fmt.Sprintf("error: unknown tool %q, available: %v", name, r.Registered())
 		return Result{Text: msg, Err: msg}
 	}

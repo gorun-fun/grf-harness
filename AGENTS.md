@@ -9,6 +9,7 @@
 
 ```sh
 ./build.sh                # vet + build（产物 ./gh，跳过测试；macOS 会重做 adhoc 签名）
+./build.sh macos|linux|linux-arm|windows|all   # 交叉编译，产物在 dist/
 go build -o gh .
 go test ./...             # 无需网络与 API key（agent 回环用 httptest 模拟 LLM）
 go test -race ./agent ./tools ./term ./js ./llm

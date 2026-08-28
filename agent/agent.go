@@ -6,7 +6,6 @@ package agent
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -91,6 +90,7 @@ type Agent struct {
 	toolCalls   int           // 已执行的工具调用数
 	toolTime    time.Duration // 工具执行累计耗时
 	bgReminded  bool          // 已发过后台作业收割提醒（每会话至多一次）
+	pausedSteps int           // 暂停时已消耗的工具循环步数（Resume 续用，见 pause.go）
 
 	mgr        *Manager
 	goals      *GoalState
@@ -324,121 +324,17 @@ func (a *Agent) RunAs(ctx context.Context, userInput string, human bool) (string
 }
 
 // runMessage 单轮核心循环：并入给定 user 消息后执行工具调用循环直至
-// 产生最终回复。
+// 产生最终回复。遇暂停点（client 工具 / deferred 交互，见 pause.go）返回
+// *PausedError——Run* 系列不处理暂停，接入方应改用 RunTurn/Resume 驱动。
 func (a *Agent) runMessage(ctx context.Context, userMsg llm.Message, human bool) (string, error) {
-	a.mu.Lock()
-	if a.running {
-		a.mu.Unlock()
-		return "", fmt.Errorf("agent is already running")
+	s, paused, err := a.runTurn(ctx, &userMsg, human, nil)
+	if err != nil {
+		return "", err
 	}
-	a.running = true
-	a.humanTurn = human
-	turnCtx, cancel := context.WithCancel(ctx)
-	a.turnCancel = cancel
-	a.history = append(a.history, userMsg)
-	a.mu.Unlock()
-
-	defer func() {
-		cancel()
-		a.mu.Lock()
-		a.running = false
-		a.turnCancel = nil
-		a.mu.Unlock()
-		a.emit("done", "")
-	}()
-
-	hooks := llm.StreamHooks{Content: a.onContent, Reasoning: a.onReason}
-
-	for step := 0; step < a.MaxSteps(); step++ {
-		// 通知并入（在 LLM 请求前，此时 tool 结果均已闭合）
-		for _, n := range a.drainNotices() {
-			a.mu.Lock()
-			a.history = append(a.history, llm.Message{Role: "user", Content: "[system notice] " + n})
-			a.mu.Unlock()
-		}
-
-		a.mu.Lock()
-		snapshot := append([]llm.Message(nil), a.history...)
-		a.mu.Unlock()
-		reply, err := a.client.ChatStream(turnCtx, snapshot, a.reg.Defs(), hooks)
-		if err != nil {
-			if errors.Is(err, context.Canceled) || turnCtx.Err() != nil {
-				a.rollbackOrphanUser(userMsg)
-				return "", context.Canceled
-			}
-			a.rollbackOrphanUser(userMsg)
-			return "", fmt.Errorf("llm: %w", err)
-		}
-		a.mu.Lock()
-		a.history = append(a.history, reply)
-		a.mu.Unlock()
-
-		if len(reply.ToolCalls) == 0 {
-			// 输出被 token 上限截断（常见于推理模型思考烧完预算、
-			// 工具调用还没输出就断了）：不当作最终回复结束回合，提醒
-			// 模型精简思考重发。MaxSteps 兜底防无限循环。
-			if reply.FinishReason == "length" {
-				if reply.Content == "" {
-					a.EnqueueNotice("your previous reply was truncated by the output token limit before any tool call or final answer was produced. Re-issue the intended tool call now, with much shorter reasoning")
-				} else {
-					a.EnqueueNotice("your previous reply was truncated by the output token limit mid-sentence. Produce a concise, complete final answer now")
-				}
-				continue
-			}
-			// 存在已结束但从未读取结果的后台作业：提醒收割。每个会话
-			// 只提醒一次（反复注入会干扰模型处理用户任务）；仍在运行
-			// 的作业（如 dev server）与子代理不打扰——子代理落定有
-			// 自己的完成通知。
-			if !a.bgReminded && a.Jobs != nil && a.Jobs.NeedsAttention() {
-				a.mu.Lock()
-				a.bgReminded = true
-				a.mu.Unlock()
-				a.EnqueueNotice("some background jobs finished but their output was never read; collect any still-relevant results with job_output now, or ignore them if they no longer matter")
-				continue
-			}
-			return reply.Content, nil
-		}
-
-		for _, call := range reply.ToolCalls {
-			a.emit("tool", call.Name()+" "+llm.CompactArgs(call.Arguments(), 100))
-			callID := call.ID
-			if callID == "" {
-				callID = fmt.Sprintf("call_gen_%d", toolEventSeq.Add(1))
-			}
-			a.emitToolEvent(ToolEvent{CallID: callID, Name: call.Name(), Status: ToolStatusRunning, Input: call.Arguments()})
-			// 审批模式：执行前征求用户同意（全量参数，不截断）；拒绝连同
-			// 用户反馈作为工具结果回给模型
-			if a.ApproveEach() && a.host != nil {
-				if d := a.host.ApproveTool(turnCtx, call.Name(), call.Arguments()); !d.Approved {
-					denied := "[denied] 用户在审批模式下拒绝了本次工具调用"
-					if d.Feedback != "" {
-						denied += "，反馈: " + d.Feedback
-					}
-					denied += "；请换一种方式继续，或向用户说明并询问"
-					a.emit("result", firstLine(denied))
-					a.emitToolEvent(ToolEvent{CallID: callID, Name: call.Name(), Status: ToolStatusDenied,
-						Input: call.Arguments(), Output: denied})
-					a.appendToolResult(call, tools.Result{Text: denied})
-					continue
-				}
-			}
-			t0 := time.Now()
-			res := a.reg.Execute(turnCtx, call.Name(), call.Arguments())
-			a.mu.Lock()
-			a.toolCalls++
-			a.toolTime += time.Since(t0)
-			a.mu.Unlock()
-			a.emit("result", firstLine(res.Text))
-			status := ToolStatusDone
-			if res.Err != "" {
-				status = ToolStatusError
-			}
-			a.emitToolEvent(ToolEvent{CallID: callID, Name: call.Name(), Status: status,
-				Input: call.Arguments(), Output: res.Text, Err: res.Err})
-			a.appendToolResult(call, res)
-		}
+	if paused != nil {
+		return "", &PausedError{Turn: paused}
 	}
-	return "", fmt.Errorf("reached max tool steps (%d), aborting", a.MaxSteps())
+	return s, nil
 }
 
 // rollbackOrphanUser 本轮失败（LLM 出错/被取消）时移除尾部未被任何

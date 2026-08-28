@@ -17,6 +17,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -29,6 +30,7 @@ import (
 	"git.gorun.fun/share/grf-harness/agent"
 	"git.gorun.fun/share/grf-harness/app"
 	"git.gorun.fun/share/grf-harness/config"
+	"git.gorun.fun/share/grf-harness/server"
 	"git.gorun.fun/share/grf-harness/term"
 	"git.gorun.fun/share/grf-harness/tui"
 	"git.gorun.fun/share/grf-harness/weixin"
@@ -49,6 +51,9 @@ func main() {
 			return
 		case "disconnect":
 			runDisconnectCmd(args[1:])
+			return
+		case "server":
+			runServerCmd(args[1:])
 			return
 		case "version", "-version", "--version":
 			printVersion()
@@ -93,6 +98,7 @@ const usageText = `grf-harness %s - 零依赖终端 agent harness（gh）
   gh config fspolicy [observe|off]         写前先读策略
   gh connect weixin      连接微信 ClawBot(后台守护进程,消息由本地 agent 回答)
   gh disconnect weixin   断开并停止微信 ClawBot 守护进程
+  gh server              启动 Responses API 接入服务(ORS 兼容,默认 127.0.0.1:7400)
   gh version             版本号与当前生效配置
 
 全屏快捷键: ↑↓ 历史 · PgUp/PgDn/滚轮 翻页 · Ctrl+O 展开思考/工具块 ·
@@ -495,7 +501,7 @@ func runConnectCmd(args []string) {
 	cmd.Stdin = nil // /dev/null;扫码链接写日志,配对码输入在守护模式下不可用
 	cmd.Stdout = logf
 	cmd.Stderr = logf
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} // 脱离会话,Ctrl+C 不影响
+	cmd.SysProcAttr = detachProcAttr() // 脱离会话(unix setsid),Ctrl+C 不影响
 	if err := cmd.Start(); err != nil {
 		fatal(fmt.Errorf("启动守护进程: %w", err))
 	}
@@ -530,6 +536,53 @@ func askWeixinReuse() string {
 	return "reuse"
 }
 
+// runServerCmd server 子命令：启动 Responses API 接入服务（ORS 兼容）。
+// 可选项：
+//
+//	-addr <host:port>   监听地址（默认 127.0.0.1:7400；服务会执行 bash 与
+//	                    文件工具，绑非环回地址等于暴露本机 RCE，谨慎）
+//	-data <dir>         数据目录（默认 ~/.grf/server）
+//	-token <token>      Bearer 令牌（默认读取/自动生成 <data>/token）
+func runServerCmd(args []string) {
+	fs := flag.NewFlagSet("server", flag.ExitOnError)
+	addr := fs.String("addr", "127.0.0.1:7400", "监听地址(默认仅环回)")
+	data := fs.String("data", "", "数据目录(默认 ~/.grf/server)")
+	token := fs.String("token", "", "Bearer 令牌(默认读/生成 <data>/token)")
+	_ = fs.Parse(args)
+	if fs.NArg() > 0 {
+		fmt.Fprintln(os.Stderr, "用法: gh server [-addr 127.0.0.1:7400] [-data 目录] [-token 令牌]")
+		os.Exit(2)
+	}
+	if *data == "" {
+		*data = filepath.Join(config.Home(), "server")
+	}
+	srv, err := server.New(*data, *token)
+	if err != nil {
+		fatal(err)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	httpSrv := &http.Server{
+		Addr:              *addr,
+		Handler:           srv.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = httpSrv.Shutdown(shutdownCtx)
+	}()
+	fmt.Printf("🚀 gh server 已启动: http://%s/v1/responses\n", *addr)
+	fmt.Printf("   令牌: %s\n", srv.Token())
+	fmt.Printf("   数据: %s(会话/存档/快照)\n", srv.DataDir())
+	fmt.Printf("   接入: OpenAI Responses 形状,ORS 2026-04-24 合规;gh 扩展见 docs/server.md\n")
+	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		fatal(err)
+	}
+	fmt.Println("gh server 已停止")
+}
+
 // runDisconnectCmd disconnect 子命令:停止 weixin 守护进程。
 func runDisconnectCmd(args []string) {
 	if len(args) == 0 || args[0] != "weixin" {
@@ -551,7 +604,7 @@ func runDisconnectCmd(args []string) {
 	// 优雅退出窗口:notifystart/stop 等收尾最多等 10 秒
 	for i := 0; i < 100; i++ {
 		time.Sleep(100 * time.Millisecond)
-		if proc.Signal(syscall.Signal(0)) != nil {
+		if !procAlive(pid) {
 			fmt.Printf("🛑 微信 agent(pid %d)已停止\n", pid)
 			removeWeixinFiles()
 			return
@@ -572,7 +625,7 @@ func weixinDaemonPID() int {
 	if err != nil || pid <= 0 {
 		return 0
 	}
-	if syscall.Kill(pid, 0) != nil {
+	if !procAlive(pid) {
 		return 0 // 进程不存在(或被别的进程复用前的窗口期)
 	}
 	return pid

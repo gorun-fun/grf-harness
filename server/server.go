@@ -1,0 +1,118 @@
+// server.go gh server：把 harness 的 agent 能力以 OpenAI Responses API
+// 形状暴露（ORS 2026-04-24 全量合规 + OpenAI 形状超集）。零第三方依赖，
+// 纯 net/http。gh 特有能力走 grf: 冒号前缀扩展（ORS §11）。
+//
+// 安全模型：默认只绑环回地址；全部端点 Bearer 鉴权——这个服务执行 bash
+// 与文件读写（在 <data>/conversations/<sid>/workspace 下），等于受控的
+// 本机 RCE 入口，绑非环回地址前请先读 docs/server.md。
+package server
+
+import (
+	"encoding/json"
+	"net/http"
+	"time"
+)
+
+// ORS 错误类型 → HTTP 状态。
+const (
+	errInvalid  = "invalid_request"
+	errNotFound = "not_found"
+	errServer   = "server_error"
+	errModel    = "model_error"
+	errRate     = "too_many_requests"
+)
+
+func statusOf(errType string) int {
+	switch errType {
+	case errInvalid:
+		return 400
+	case errNotFound:
+		return 404
+	case errRate:
+		return 429
+	default:
+		return 500
+	}
+}
+
+// apiError 带 HTTP 语义的内部错误。
+type apiError struct {
+	Type    string
+	Code    string
+	Message string
+	Param   string
+}
+
+func (e *apiError) Error() string { return e.Type + ": " + e.Message }
+
+func apiErr(typ, msg string) error { return &apiError{Type: typ, Message: msg} }
+
+// writeError ORS 错误响应（{"error":{type,code,message,param}}）。
+func writeError(w http.ResponseWriter, httpStatus int, typ, msg, param string) {
+	if httpStatus == 0 {
+		httpStatus = statusOf(typ)
+	}
+	writeJSON(w, httpStatus, errorBody{Error: ErrorPayload{Type: typ, Code: nil, Message: msg, Param: paramOrNil(param)}})
+}
+
+func paramOrNil(p string) any {
+	if p == "" {
+		return nil
+	}
+	return p
+}
+
+func writeJSONError(w http.ResponseWriter, err error) {
+	ae, ok := err.(*apiError)
+	if !ok {
+		ae = &apiError{Type: errServer, Message: err.Error()}
+	}
+	writeError(w, statusOf(ae.Type), ae.Type, ae.Message, ae.Param)
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+// Handler 路由（net/http 1.22+ 方法与路径参数模式）。
+func (s *Server) Handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/responses", s.guard(s.handleCreate))
+	mux.HandleFunc("POST /v1/responses/compact", s.guard(s.handleCompact))
+	mux.HandleFunc("GET /v1/responses/{id}", s.guard(s.handleRetrieve))
+	mux.HandleFunc("POST /v1/responses/{id}/cancel", s.guard(s.handleCancel))
+	mux.HandleFunc("GET /v1/conversations", s.guard(s.handleListConversations))
+	mux.HandleFunc("GET /v1/conversations/{id}", s.guard(s.handleGetConversation))
+	mux.HandleFunc("DELETE /v1/conversations/{id}", s.guard(s.handleArchiveConversation))
+	mux.HandleFunc("GET /v1/conversations/{id}/items", s.guard(s.handleConversationItems))
+	mux.HandleFunc("GET /v1/health", s.guard(s.handleHealth))
+	return mux
+}
+
+// ListenAndServe 阻塞监听（main 的 server 子命令入口）。
+func (s *Server) ListenAndServe(addr string) error {
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           s.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	return srv.ListenAndServe()
+}
+
+// guard 鉴权中间件：校验 Bearer 令牌。
+func (s *Server) guard(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if auth != "Bearer "+s.token {
+			writeError(w, 401, errInvalid, "missing or invalid bearer token", "")
+			return
+		}
+		h(w, r)
+	}
+}
+
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
