@@ -13,7 +13,6 @@ import (
 
 	"git.gorun.fun/share/grf-harness/agent"
 	"git.gorun.fun/share/grf-harness/config"
-	"git.gorun.fun/share/grf-harness/llm"
 	"git.gorun.fun/share/grf-harness/store"
 )
 
@@ -186,22 +185,6 @@ func (a *App) ListModelChoices() (items []string, cur string, err error) {
 		}
 	}
 	return items, cur, nil
-}
-
-// NewClientFor 当前默认配置构建 client（TUI 切模型后重建）。
-func NewClientFor(provider, model string) (*llm.Client, error) {
-	s, err := config.LoadFileForUpdate()
-	if err != nil {
-		return nil, err
-	}
-	p, ok := s.Providers[provider]
-	if !ok {
-		return nil, fmt.Errorf("提供商 %q 不存在", provider)
-	}
-	if model == "" && len(p.Models) > 0 {
-		model = p.Models[0]
-	}
-	return llm.NewClient(llm.Config{BaseURL: p.BaseURL, APIKey: p.APIKey, Model: model}), nil
 }
 
 // Agent 别名导出（嵌入方按 agent.Agent 使用）。

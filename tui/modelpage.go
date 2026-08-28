@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -228,22 +229,13 @@ func (m *ModelPage) applyFetched(server []string) []string {
 	}
 	merged := append([]string(nil), server...)
 	for _, mm := range p.Models {
-		if !containsStr(merged, mm) {
+		if !slices.Contains(merged, mm) {
 			merged = append(merged, mm)
 		}
 	}
 	p.Models = merged
 	_ = s.Save()
 	return merged
-}
-
-func containsStr(list []string, v string) bool {
-	for _, s := range list {
-		if s == v {
-			return true
-		}
-	}
-	return false
 }
 
 func (m *ModelPage) modelsKey(k term.KeyEv) {
