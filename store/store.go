@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"git.gorun.fun/share/grf-harness/llm"
+	"git.gorun.fun/share/grf-harness/term"
 )
 
 type Store struct {
@@ -244,21 +245,9 @@ func sessionTitle(msgs []llm.Message) string {
 		if m.Role != "user" || strings.HasPrefix(m.Content, "[system notice]") {
 			continue
 		}
-		if t := firstNonEmptyLine(m.Content); t != "" {
+		if t := term.FirstLine(m.Content, 0); t != "" {
 			last = t
 		}
 	}
-	if r := []rune(last); len(r) > 60 {
-		return string(r[:60]) + "…"
-	}
-	return last
-}
-
-func firstNonEmptyLine(s string) string {
-	for _, line := range strings.Split(s, "\n") {
-		if t := strings.TrimSpace(line); t != "" {
-			return t
-		}
-	}
-	return ""
+	return term.FirstLine(last, 60)
 }

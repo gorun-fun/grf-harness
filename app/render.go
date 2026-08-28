@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"time"
 
 	"git.gorun.fun/share/grf-harness/agent"
@@ -121,7 +120,7 @@ func (a *App) RunTask(ctx context.Context, task string) error {
 	// 后台子代理收尾：短暂等待并吸收通知
 	if notices := a.Root().RunAndWaitBackground(10 * time.Second); len(notices) > 0 {
 		for _, n := range notices {
-			ui.printEvent("notice", firstLineOf(n))
+			ui.printEvent("notice", term.FirstLine(n, 0))
 		}
 		if !ui.mdOpen {
 			fmt.Fprintln(os.Stdout)
@@ -136,13 +135,4 @@ func (a *App) RunTask(ctx context.Context, task string) error {
 		fmt.Fprintf(os.Stderr, "保存会话失败: %v\n", serr)
 	}
 	return nil
-}
-
-func firstLineOf(s string) string {
-	for _, line := range strings.Split(s, "\n") {
-		if t := strings.TrimSpace(line); t != "" {
-			return t
-		}
-	}
-	return ""
 }

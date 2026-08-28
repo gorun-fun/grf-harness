@@ -11,12 +11,12 @@ package agent
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
 	"git.gorun.fun/share/grf-harness/llm"
 	"git.gorun.fun/share/grf-harness/store"
+	"git.gorun.fun/share/grf-harness/term"
 	"git.gorun.fun/share/grf-harness/tools"
 )
 
@@ -164,16 +164,11 @@ func (a *Agent) IsRunning() bool {
 	return a.running
 }
 
-// firstLine 取首个非空行（trim 后）并截到 120 rune，用于事件摘要。
+// firstLine 取首个非空行（trim 后、120 rune 截断），用于事件摘要；空文本
+// 返回占位符（截断与选取逻辑复用 term.FirstLine）。
 func firstLine(s string) string {
-	for _, line := range strings.Split(s, "\n") {
-		if t := strings.TrimSpace(line); t != "" {
-			if len([]rune(t)) > 120 {
-				r := []rune(t)
-				t = string(r[:120]) + "…"
-			}
-			return t
-		}
+	if t := term.FirstLine(s, 120); t != "" {
+		return t
 	}
 	return "(empty)"
 }

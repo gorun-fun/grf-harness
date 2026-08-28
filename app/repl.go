@@ -14,6 +14,7 @@ import (
 	"git.gorun.fun/share/grf-harness/agent"
 	"git.gorun.fun/share/grf-harness/config"
 	"git.gorun.fun/share/grf-harness/store"
+	"git.gorun.fun/share/grf-harness/term"
 )
 
 // PlainREPL 行模式 REPL（stdin/stdout 非 TTY 时使用）。
@@ -124,7 +125,7 @@ func (a *App) runInput(ctx context.Context, input string) error {
 	}
 	if notices := a.Root().RunAndWaitBackground(3 * time.Second); len(notices) > 0 {
 		for _, n := range notices {
-			fmt.Printf("[info] %s\n", firstLineOf(n))
+			fmt.Printf("[info] %s\n", term.FirstLine(n, 0))
 		}
 		_, err = a.Root().RunAutoGoal(ctx, "Collect the settled background results above and give the user your final consolidated answer now.")
 	}
