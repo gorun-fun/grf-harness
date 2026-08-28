@@ -5,7 +5,6 @@ package js
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -450,18 +449,4 @@ func normalizeJSON(v any) Value {
 		return out
 	}
 	return nil
-}
-
-// ObjectKeysValue Object.keys 内建（经 installGlobals 外补挂）。
-func ObjectKeysValue(m map[string]any) []any {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	out := make([]any, 0, len(keys))
-	for _, k := range keys {
-		out = append(out, k)
-	}
-	return out
 }
