@@ -3,7 +3,7 @@
 零依赖的终端 agent harness：**纯 Go 标准库实现**（无任何第三方依赖），
 完整实现 25 个工具（定义内嵌于 `tools/spec/tools.json`，一个不少），OpenAI 兼容接口驱动，
 默认全屏交互（终端宽度变化自动整帧重排重绘），亦可作为 Go 模块被其他应用
-嵌入使用。
+嵌入使用，或经 `gh server` 以 OpenAI Responses API 形状供非 Go 宿主接入。
 
 ## 特性
 
@@ -33,11 +33,15 @@
   工作区；拒绝后按"一次性重试"协议升级（sandbox_permissions +
   justification + 用户审批）
 - **会话持久化**：`.grf/sessions/` 会话记录，`-resume` / `/resume` 恢复
+- **Responses API 服务**：`gh server` 以 ORS 兼容形状暴露 agent 能力
+  （SSE 流式、client function tools、跨重启的暂停/恢复），见 `docs/server.md`
+- **微信渠道**：`gh connect weixin` 拉起守护进程，微信消息由本地 agent
+  回答（每用户独立会话）
 
 ## 用法
 
 ```sh
-go build -o gh .      # 或 ./build.sh
+go build -o gh .      # 或 ./build.sh（vet + build；交叉编译见 build.sh macos|linux|linux-arm|windows|all → dist/）
 
 gh                     # 全屏交互（默认模式）
 gh -resume             # 恢复上一次会话
@@ -51,6 +55,10 @@ gh config prompt [set|reset]
 gh config steps [n|reset]
 gh config sandbox [off|workspace-write]
 gh config fspolicy [observe|off]
+gh connect weixin      # 连接微信 ClawBot（扫码后转后台守护进程；-workspace 指定工作区）
+gh disconnect weixin   # 停止微信守护进程
+gh server              # 启动 Responses API 服务（ORS 兼容，默认 127.0.0.1:7400；
+                       #   -addr 监听地址 / -data 数据目录 / -token 令牌）
 gh version
 ```
 
@@ -103,10 +111,18 @@ gh version
   （文档默认的 fs-observation-policy）
 - `auto_approve` — 非交互（单任务/嵌入）模式下自动批准沙箱升级与计划
 
-## 作为 Go 模块嵌入
+## 接入 grf 的三条路径
 
-完整的接入说明见 **`docs/integration.md`（对接文档）**：go get 安装、
-`app.New` 选项、工具扩展/禁用、事件与流式回调、多会话并存、CLI 子进程。
+| 路径 | 适用 | 文档 |
+|---|---|---|
+| **Go 库嵌入**（`app.New` 门面，25 工具/事件/多会话全可编程） | Go 应用 | `docs/integration.md` |
+| **HTTP Responses API**（`gh server`，ORS 兼容；任意语言经 OpenAI SDK 指向即可） | 非 Go 宿主 / 结构化集成 | `docs/server.md` |
+| **CLI 子进程**（`./gh "任务"` 单任务直出，解析 stdout） | 脚本 / CI / 轻量调用 | integration.md §10 |
+
+架构总览（功能线条分层、暂停/恢复协议、并发规则等）见
+**`docs/architecture.md`**。
+
+### Go 库嵌入速览
 
 模块路径 `git.gorun.fun/share/grf-harness`（与公开仓库地址一致，可直接
 `go get`）；所有包均可公开导入（无 internal/）：
@@ -117,12 +133,13 @@ GOPRIVATE=git.gorun.fun go get git.gorun.fun/share/grf-harness@v0.0.1-alpha.2
 
 ```go
 import (
-    "git.gorun.fun/share/grf-harness/app"    // 应用组装（库入口）
-    "git.gorun.fun/share/grf-harness/agent"  // 核心循环 / goals / 子代理 / ralph / workflow
+    "git.gorun.fun/share/grf-harness/app"    // 应用门面（库入口）
+    "git.gorun.fun/share/grf-harness/agent"  // 回合循环 / 暂停恢复 / goals / 子代理 / workflow
     "git.gorun.fun/share/grf-harness/tools"  // 25 个工具与注册表
     "git.gorun.fun/share/grf-harness/llm"    // OpenAI 兼容客户端（SSE / tool calls / 多模态）
+    "git.gorun.fun/share/grf-harness/store"  // 会话持久化
     "git.gorun.fun/share/grf-harness/config" // ~/.grf/settings.json
-    "git.gorun.fun/share/grf-harness/term"   // 终端底层（raw/尺寸/输入解析/宽度换行/全屏渲染）
+    "git.gorun.fun/share/grf-harness/term"   // 终端底层（raw/输入解析/宽度换行/全屏渲染）
     "git.gorun.fun/share/grf-harness/tui"    // 全屏聊天 / 模型配置页
     "git.gorun.fun/share/grf-harness/js"     // 迷你 JS 解释器
 )
@@ -154,31 +171,45 @@ err = a.RunTask(ctx, "做点什么")          // 单次执行
 ## 结构
 
 ```
-main.go               CLI 入口（全屏/单任务/model/config/version）
+main.go + chat.go + settings_cmd.go + connect.go + server_cmd.go
+                      CLI 分发与子命令（package main；
+                      daemon_unix/daemon_other.go 为守护进程平台文件）
 term/                 终端底层：raw 模式、尺寸/SIGWINCH、输入事件解析、
-                      ANSI 宽度与软换行、备用屏幕整帧渲染
+                      ANSI 宽度与软换行、备用屏幕整帧渲染、行选取助手
 llm/                  OpenAI 兼容客户端（SSE 流式、tool_calls、图像 parts）
+                      + 正文回退工具调用解析（<tool_call> XML / DSML）
 config/               ~/.grf/settings.json
 store/                会话持久化（.grf/sessions）
 tools/                工具注册表 + 25 个工具实现；spec/tools.json 为
                       工具定义唯一来源（go:embed 内嵌）
 js/                   迷你 JavaScript 解释器（workflow 脚本执行）
-agent/                Agent 循环、goal 状态机、子代理管理器、ralph、
-                      workflow 接线、系统提示词构建
-app/                  应用门面（库 API）、单任务直出渲染、非 TTY REPL
-tui/                  全屏聊天（思考/工具折叠、ask 表单、计划审批、
-                      弹窗、鼠标、resize 重绘）、模型配置页
-docs/                 对接文档（integration.md：go get 安装、库接入、
-                      事件、多会话）
+agent/                回合循环（turn.go）与暂停/恢复协议（pause.go）、
+                      Run* 入口族、子代理管理器、goal 状态机、ralph、
+                      workflow 接线、装配（build.go）、系统提示词
+app/                  库门面（app.New）、会话管理、单任务直出渲染、
+                      非 TTY REPL、TaskHost
+tui/                  全屏聊天（事件循环/流式汇聚/组帧渲染分文件：ask
+                      表单、计划审批、弹窗、鼠标、resize 重绘）、模型配置页
+server/               Responses API 接入层（ORS 兼容：会话池、SSE 事件
+                      桥、客户端工具、暂停应答、compact）
+weixin/               微信 ClawBot 渠道（每用户 agent 池、消息分发、
+                      登录与媒体处理）
+docs/                 architecture.md（架构总览）、integration.md（Go 库
+                      对接）、server.md（HTTP 接入）
+dist/                 交叉编译产物（build.sh，gitignore）
 ```
 
 ## 开发
 
 ```sh
-./build.sh            # vet + build + test
+./build.sh            # vet + build（产物 ./gh，跳过测试；macOS 重做 adhoc 签名）
+./build.sh all        # 交叉编译 macos/linux/linux-arm/windows → dist/
 go test ./...         # 全部测试（无需网络与 API key，agent 回环用 httptest）
-go build -o gh .
+go test -race ./agent ./tools ./term ./js ./llm ./server
 ```
+
+工作区约定（分层规则、坑清单）见 `AGENTS.md`；架构说明见
+`docs/architecture.md`。
 
 ## 与原 gh 项目的关系
 

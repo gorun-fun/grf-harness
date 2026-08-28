@@ -7,6 +7,10 @@ HTTP 服务：核心对话/工具路径按 **Open Responses Specification（ORS�
 conversations）。gh 特有能力全部走 `grf:` 冒号前缀扩展（ORS §11 扩展规则）。
 零第三方依赖（纯 `net/http`）。
 
+暂停/恢复协议的底层机制（agent 回合循环）见
+[architecture.md](architecture.md) §3.2；Go 库接入见
+[integration.md](integration.md)。
+
 ```sh
 gh server [-addr 127.0.0.1:7400] [-data ~/.grf/server] [-token <t>]
 ```

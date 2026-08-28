@@ -1,7 +1,10 @@
 # grf-harness 接入文档
 
 面向要把 grf 作为 agent 能力嵌入自家应用的宿主程序。grf 零第三方依赖、
-无 `internal/` 目录，所有包（模块路径 `grf`）均可被外部 Go 项目导入。
+无 `internal/` 目录，所有包（模块路径 `git.gorun.fun/share/grf-harness`）
+均可被外部 Go 项目导入。非 Go 宿主可走 HTTP（`gh server`，见
+[server.md](server.md)）或 CLI 子进程（§10）；架构总览见
+[architecture.md](architecture.md)。
 
 ## 1. 引入方式
 
@@ -306,15 +309,25 @@ func closeConv(id string) {
 }
 ```
 
-## 10. 非 Go 宿主：CLI 子进程
+## 10. 非 Go 宿主：HTTP 服务与 CLI 子进程
+
+两条路径，按结构化程度选择：
+
+**HTTP Responses API（推荐，结构化）**：`gh server` 把完整 agent 能力以
+OpenAI Responses 形状暴露（ORS 2026-04-24 兼容；SSE 流式、client
+function tools、ask_user/审批的暂停应答链式续交、多会话、跨重启恢复）。
+任意语言的 OpenAI SDK 指向 `base_url` 即可驱动，端点/参数/事件语义见
+[server.md](server.md)。
+
+**CLI 子进程（轻量）**：
 
 ```sh
 ./gh "任务"   # 单任务直出，跑完退出
 ```
 
 非 TTY 环境自动回退纯文本行模式，可在脚本/CI/服务端调用，解析 stdout
-即可。会话历史落在 `<workspace>/.grf/sessions/`。目前没有 MCP/JSON-RPC
-等结构化边界，事件与正文混排在 stdout，服务端集成建议走 Go 库方式。
+即可。会话历史落在 `<workspace>/.grf/sessions/`。注意事件与正文混排在
+stdout（无结构化边界）——需要结构化输出请用上面的 HTTP 路径或 Go 库方式。
 
 ## 11. 注意事项
 
@@ -328,6 +341,13 @@ func closeConv(id string) {
 - **会话持久化**：`a.SaveSession()` 手动保存；`a.AutoSave()` 回合结束
   自动落盘；`a.Restore(sess)` 续接历史（含 system 原文与缓存键回放）。
   多对话并存的隔离与索引见 §9。
+- **可暂停回合（跨请求应答）**：`Agent.RunTurn / RunTurnParts` 返回
+  `(reply, *PausedTurn, error)`，暂停点（client 工具 / ask_user / 审批）
+  用 `Agent.Resume(ctx, []ResumeInput)` 续跑；暂停态持久化在历史尾部，
+  进程重启后 `RestoreFull` + `Resume` 照常续接。`gh server` 即此用法
+  （wire 形状见 server.md §6）。
 - **参考实现**：`weixin` 包（`weixin.Run(ctx, prompt, workspace)`）是
   一个完整的第三方嵌入样板——自含配置加载、client 构建、每用户独立
-  harness 的常驻消息服务。
+  harness 的常驻消息服务；`server` 包是第二个（HTTP 形态、磁盘为真的
+  多会话、暂停应答链），二者都是"四表面并列直连 agent.Build"架构的
+  实例（见 architecture.md §3.3）。
