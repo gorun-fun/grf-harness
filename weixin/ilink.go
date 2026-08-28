@@ -15,6 +15,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"git.gorun.fun/share/grf-harness/config"
 )
 
 // 协议参考: https://ilinkai.weixin.qq.com 下的 iLink Bot API(微信 ClawBot 插件)。
@@ -24,9 +26,11 @@ const (
 	channelVersion        = "2.4.6"
 	ilinkAppID            = "bot"
 	ilinkAppClientVersion = "132102"
-	botAgent              = "grf-harness/0.0.1-alpha.1 (go)"
 	staleTokenCode  int64 = -14 // ret/errcode=-14 表示 token 失效,需重新扫码
 )
+
+// botAgent HTTP User-Agent，版本号跟随 config.Version（构建时注入）。
+var botAgent = "grf-harness/" + config.Version + " (go)"
 
 // APIError iLink 业务错误(HTTP 200 也可能携带业务错误码)。
 type APIError struct {

@@ -16,8 +16,8 @@ import (
 	"git.gorun.fun/share/grf-harness/tools"
 )
 
-// Version 版本号。
-const Version = "0.0.1-alpha.2"
+// Version 版本号，事实来源在 config.Version（构建时经 build.sh 注入，见 config/version.go）。
+var Version = config.Version
 
 // Options 应用构建参数（库使用方入口）。
 type Options struct {

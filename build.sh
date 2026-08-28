@@ -17,13 +17,19 @@ if ! command -v "$GO" >/dev/null 2>&1 && [ -x /usr/local/go/bin/go ]; then
     GO=/usr/local/go/bin/go
 fi
 
+# 版本号注入 config.Version：CI tag 构建取 $CI_COMMIT_TAG，本地取 git describe
+# （当前 commit 无 tag 时退到短 hash），非 git 环境兜底 dev；统一去掉 v 前缀
+VERSION=${CI_COMMIT_TAG:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}
+case "$VERSION" in v[0-9]*) VERSION=${VERSION#v};; esac
+LDFLAGS="-s -w -X git.gorun.fun/share/grf-harness/config.Version=$VERSION"
+
 # 交叉编译单个目标：参数为 名称 GOOS GOARCH 产物路径
 # vet 也带 GOOS/GOARCH，可顺带检查平台专属文件（termios/term 回退等）
 build_one() {
     echo "== vet ($1: $2/$3) =="
     GOOS=$2 GOARCH=$3 "$GO" vet ./...
     echo "== build ($1: $2/$3) =="
-    GOOS=$2 GOARCH=$3 "$GO" build -trimpath -ldflags "-s -w" -o "$4" .
+    GOOS=$2 GOARCH=$3 "$GO" build -trimpath -ldflags "$LDFLAGS" -o "$4" .
     # macOS：链接器的 adhoc 签名在文件被复制/Finder 拷贝后可能被系统
     # 直接 SIGKILL（zsh: killed）；重新 adhoc 签名一次即可规避
     # （非 macOS 主机没有 codesign，跳过）
@@ -38,7 +44,7 @@ case "${1:-}" in
         echo "== vet =="
         "$GO" vet ./...
         echo "== build =="
-        "$GO" build -trimpath -ldflags "-s -w" -o gh .
+        "$GO" build -trimpath -ldflags "$LDFLAGS" -o gh .
         # macOS：链接器的 adhoc 签名在文件被复制/Finder 拷贝后可能被系统
         # 直接 SIGKILL（zsh: killed）；重新 adhoc 签名一次即可规避
         if [ "$(uname)" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then
