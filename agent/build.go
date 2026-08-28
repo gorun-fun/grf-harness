@@ -88,19 +88,8 @@ func Build(opts Options) (*Harness, error) {
 		disabled:  opts.DisabledTools,
 	}
 	h.bindClient(opts.Client)
-	observe := st.FsPolicy != "off"
-	h.Fs = tools.NewFsPolicy(opts.Workspace, observe, host)
-
-	skills := h.Skills
-	model := ""
-	if opts.Client != nil {
-		model = opts.Client.Model()
-	}
-	system := BuildSystemPrompt(PromptOptions{
-		Workspace: opts.Workspace,
-		Model:     model,
-		Skills:    skills,
-	}, opts.SystemPrompt)
+	h.Fs = h.newFsPolicy(host)
+	system := h.systemPromptFor(false, "", opts.SystemPrompt)
 
 	root := NewAgent("agent_root", opts.Client, tools.NewRegistry(), h.Store, opts.Workspace, system)
 	root.host = host
@@ -165,6 +154,27 @@ func newCacheKey() string {
 	return "grf-" + hex.EncodeToString(b[:])
 }
 
+// systemPromptFor 构建指定角色（根/子代理）的系统提示词；根可用
+// Options.SystemPrompt 覆盖内置默认段。根与子代理的提示词装配共用此入口。
+func (h *Harness) systemPromptFor(subagent bool, label, override string) string {
+	model := ""
+	if h.client != nil {
+		model = h.client.Model()
+	}
+	return BuildSystemPrompt(PromptOptions{
+		Workspace: h.root,
+		Model:     model,
+		Skills:    h.Skills,
+		Subagent:  subagent,
+		Label:     label,
+	}, override)
+}
+
+// newFsPolicy 按配置构建文件策略（fs_policy=observe 默认开启）。
+func (h *Harness) newFsPolicy(host tools.Host) *tools.FsPolicy {
+	return tools.NewFsPolicy(h.root, h.Settings.FsPolicy != "off", host)
+}
+
 // registerTools 为 agent 注册其可用工具。root=true 注册全部 25 个；
 // 子代理不注册 goal 三件套与 ralph（文档语义：非人类/子代理权限拒绝，
 // 直接不给入口；ask_user 子代理同样不可用）。
@@ -218,21 +228,11 @@ func (h *Harness) managedEnv() []string {
 
 // newChild 构建子代理（独立历史与工具链；goal/ralph/ask_user 不可用）。
 func (h *Harness) newChild(parent *Agent, label string, seed []llm.Message) *Agent {
-	model := ""
-	if h.client != nil {
-		model = h.client.Model()
-	}
-	system := BuildSystemPrompt(PromptOptions{
-		Workspace: h.root,
-		Model:     model,
-		Skills:    h.Skills,
-		Subagent:  true,
-		Label:     label,
-	}, "")
+	system := h.systemPromptFor(true, label, "")
 	child := NewAgent("pending", h.client, tools.NewRegistry(), h.Store, h.root, system)
 	child.host = &tools.NoopHost{AutoApprove: h.Settings.AutoApprove, OnEvent: nil}
 	child.Todos = &tools.TodoState{}
-	child.Fs = tools.NewFsPolicy(h.root, h.Settings.FsPolicy != "off", child.host)
+	child.Fs = h.newFsPolicy(child.host)
 	child.Jobs = tools.NewJobManager()
 	child.SetMaxSteps(parent.MaxSteps())
 	if len(seed) > 0 {

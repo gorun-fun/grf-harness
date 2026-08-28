@@ -420,16 +420,3 @@ func RegisterAgentTools(r *tools.Registry, a *Agent, m *Manager) {
 		return tools.TextResult(m.ListAgents(a, p.Scope)), nil
 	})
 }
-
-// CompletedTurnsCount 供 fork 判定的辅助（导出测试用）。
-func (m *Manager) ChildrenCount(caller *Agent) int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	n := 0
-	for _, h := range m.agents {
-		if h.Parent == caller.ID {
-			n++
-		}
-	}
-	return n
-}
