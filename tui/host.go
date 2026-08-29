@@ -130,15 +130,29 @@ func (c *Chat) hostRequest(m any) {
 				req.resp <- ok
 			}}
 	case *toolApproveRequest:
-		pv := &planView{title: "工具审批（审批模式）",
-			plan: "工具: " + req.name + "\n参数: " + clipRunesT(req.args, 2000),
-			hint: "y 批准执行 · f 拒绝并给反馈 · Esc 拒绝",
-			esc:  "（用户关闭了工具审批，未给反馈）"}
-		pv.approve = func(approved bool, feedback string) {
-			c.plan = nil
-			req.resp <- tools.ApproveDecision{Approved: approved, Feedback: feedback}
-		}
-		c.plan = pv
+		q := tools.Question{ID: "approve",
+			Question: "工具 " + req.name + " · 参数:\n" + clipRunesT(req.args, 2000),
+			Options: []tools.Option{
+				{Label: "批准执行"},
+				{Label: "拒绝"},
+			}}
+		c.ask = newAskForm([]tools.Question{q}, func(answers map[string]any, err error) {
+			c.ask = nil
+			d := tools.ApproveDecision{}
+			switch {
+			case err != nil:
+				d.Feedback = "（用户关闭了工具审批，未给反馈）"
+			default:
+				v, _ := answers["approve"].(string)
+				if v == "批准执行" {
+					d.Approved = true
+				} else if v != "" && v != "拒绝" {
+					d.Feedback = v // ✎ 自定义输入视为拒绝并附反馈
+				}
+			}
+			req.resp <- d
+		})
+		c.ask.head = "工具审批"
 	}
 	c.paint(true)
 }

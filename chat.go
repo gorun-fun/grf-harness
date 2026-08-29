@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"strings"
 
+	"git.gorun.fun/share/grf-harness/app"
 	"git.gorun.fun/share/grf-harness/tui"
 )
 
@@ -57,6 +58,16 @@ func runTaskCmd(args []string) {
 	defer a.Close()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	if strings.HasPrefix(task, "!") {
+		res := a.ExecBang(ctx, strings.TrimSpace(strings.TrimPrefix(task, "!")))
+		if res.Err != "" {
+			fatal(fmt.Errorf("%s", res.Err))
+		}
+		if out := app.BangOutput(res.Text); out != "" {
+			fmt.Println(out)
+		}
+		return
+	}
 	if err := a.RunTask(ctx, task); err != nil {
 		fatal(err)
 	}

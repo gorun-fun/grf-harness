@@ -6,8 +6,11 @@
 package app
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 
 	"git.gorun.fun/share/grf-harness/agent"
 	"git.gorun.fun/share/grf-harness/config"
@@ -119,6 +122,26 @@ func (a *App) AutoSave() {
 		return
 	}
 	_, _ = a.SaveSession()
+}
+
+// ExecBang 直接执行用户键入的 shell 命令（"!cmd" 输入）：走已注册的
+// bash 工具（沿用工作区/沙箱/超时策略），不经模型、不进会话历史。
+func (a *App) ExecBang(ctx context.Context, cmd string) tools.Result {
+	args, _ := json.Marshal(map[string]string{"command": cmd})
+	return a.Root().Reg().Execute(ctx, "bash", string(args))
+}
+
+// BangOutput 清理直执行输出：去掉面向模型的 exit code 标注（"!cmd"
+// 展示给用户看原始输出）。
+func BangOutput(text string) string {
+	out := strings.TrimRight(text, "\n")
+	if i := strings.LastIndex(out, "\n[exit code:"); i >= 0 {
+		out = out[:i]
+	}
+	if strings.HasPrefix(out, "(no output) [exit code:") {
+		out = ""
+	}
+	return strings.TrimRight(out, "\n")
 }
 
 // Restore 切新会话并原样回放历史会话（优先回放文件里存的 system 原文

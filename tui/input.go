@@ -21,6 +21,14 @@ func (c *Chat) handleInput(ev term.Event) bool {
 			c.paint(true)
 			return false
 		}
+		if c.ed.Len() == 0 && strings.HasPrefix(e.Text, "!") {
+			if c.bang {
+				c.exitBang()
+			} else {
+				c.enterBang()
+			}
+			e.Text = strings.TrimPrefix(e.Text, "!")
+		}
 		c.ed.Insert(e.Text)
 	case term.KeyEv:
 		quit := c.handleKey(e)
@@ -82,6 +90,9 @@ func (c *Chat) handleKey(k term.KeyEv) bool {
 		c.statusAt = c.quitAt.Add(3 * time.Second)
 		return false
 	case "ctrl+d":
+		if c.bang {
+			return false
+		}
 		if c.ed.Len() == 0 && !c.running {
 			return true
 		}
@@ -93,6 +104,14 @@ func (c *Chat) handleKey(k term.KeyEv) bool {
 		return false
 	case "enter":
 		if !c.running {
+			if c.bang {
+				// 命令模式：输入整体作为命令直执行；执行后留在模式内
+				// 便于连发命令，仅空输入框再按 ! 退出
+				if c.submit("!" + c.ed.Value()) {
+					return true
+				}
+				return false
+			}
 			// 指令提示可见时：先把选中的完整指令同步到输入框再执行
 			if hints := c.slashHints(); len(hints) > 0 {
 				fields := strings.Fields(hints[c.hintIdx])
@@ -129,7 +148,15 @@ func (c *Chat) handleKey(k term.KeyEv) bool {
 			c.hintIdx = (c.hintIdx - 1 + len(hints)) % len(hints)
 			return false
 		}
-		c.ed.SetValue(c.hist.up(c.ed.Value()))
+		base := c.ed.Value()
+		if c.bang {
+			base = "!" + base
+		}
+		v := c.hist.up(base)
+		if c.bang {
+			v = strings.TrimPrefix(v, "!")
+		}
+		c.ed.SetValue(v)
 		c.ed.CursorEnd()
 		return false
 	case "down":
@@ -137,7 +164,15 @@ func (c *Chat) handleKey(k term.KeyEv) bool {
 			c.hintIdx = (c.hintIdx + 1) % len(hints)
 			return false
 		}
-		c.ed.SetValue(c.hist.down(c.ed.Value()))
+		base := c.ed.Value()
+		if c.bang {
+			base = "!" + base
+		}
+		v := c.hist.down(base)
+		if c.bang {
+			v = strings.TrimPrefix(v, "!")
+		}
+		c.ed.SetValue(v)
 		c.ed.CursorEnd()
 		return false
 	case "pgup":
@@ -180,7 +215,15 @@ func (c *Chat) handleKey(k term.KeyEv) bool {
 		c.ed.WordRight()
 	default:
 		if k.Rune != 0 {
-			c.ed.InsertRune(k.Rune)
+			if k.Rune == '!' && c.ed.Len() == 0 {
+				if c.bang {
+					c.exitBang()
+				} else {
+					c.enterBang()
+				}
+			} else {
+				c.ed.InsertRune(k.Rune)
+			}
 		} else {
 			return false
 		}
@@ -210,6 +253,22 @@ func (c *Chat) cycleMode() {
 	default:
 		root.SetApproveMode(false)
 	}
+}
+
+// enterBang 进入命令模式（输入框换 "!" 提示符，所输内容回车后直接
+// 作为 shell 命令执行，不经模型）。
+func (c *Chat) enterBang() {
+	c.bang = true
+	c.ed.Prompt = "! "
+	c.hintIdx = 0
+	c.status = "命令模式：回车直接执行，再按 ! 退出"
+	c.statusAt = timeNow().Add(3 * time.Second)
+}
+
+// exitBang 退出命令模式。
+func (c *Chat) exitBang() {
+	c.bang = false
+	c.ed.Prompt = "> "
 }
 
 // toggleLastFold 展开最近的思考或工具合并块。
@@ -357,6 +416,11 @@ func (c *Chat) submit(raw string) bool {
 	c.emitBlock(block{kind: blkText, text: "> " + input})
 	c.scrollUp = 0
 
+	if strings.HasPrefix(input, "!") {
+		c.execBang(strings.TrimSpace(strings.TrimPrefix(input, "!")))
+		return false
+	}
+
 	switch input {
 	case "/exit", "/quit":
 		return true
@@ -374,6 +438,7 @@ func (c *Chat) submit(raw string) bool {
 		return false
 	case "/help":
 		c.emitBlock(block{kind: blkText, text: `/help   显示本帮助
+!       空输入框按 ! 进入命令模式：所输命令回车直接执行（再按 ! 退出）
 /init   分析代码库并生成/更新 AGENTS.md
 /model  弹窗选择模型；/model 提供商/模型 直填切换
 /resume 弹窗恢复历史会话；/resume N 按序号恢复

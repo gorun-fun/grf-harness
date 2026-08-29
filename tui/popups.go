@@ -47,6 +47,7 @@ type askForm struct {
 	custom  bool    // 有选项问题切到"✎ 自定义输入"行后的手输模式
 	text    *Editor // 无选项问题与自定义输入的文本输入
 	answers map[string]any
+	head    string // 标题行前缀（空 = ask_user_question）
 	done    func(answers map[string]any, err error)
 }
 
@@ -73,7 +74,11 @@ func (f *askForm) render(w int) []string {
 	if h := f.q().Header; h != "" {
 		header += " · " + h
 	}
-	lines = append(lines, dim("── ask_user_question · "+header+" ──"))
+	head := f.head
+	if head == "" {
+		head = "ask_user_question"
+	}
+	lines = append(lines, dim("── "+head+" · "+header+" ──"))
 	for _, ln := range term.Wrap(f.q().Question, w-2) {
 		lines = append(lines, " "+ln)
 	}

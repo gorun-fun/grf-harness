@@ -26,6 +26,11 @@ type termKey = term.KeyEv
 
 type runDoneMsg struct{ err error }
 
+// bangDoneMsg "!cmd" 直执行落定（后台 goroutine → 事件循环）。
+type bangDoneMsg struct {
+	out, err string
+}
+
 // Chat 全屏聊天状态机。
 type Chat struct {
 	app *app.App
@@ -48,6 +53,8 @@ type Chat struct {
 
 	ed   *Editor
 	hist *lineHistory
+
+	bang bool // 命令模式（按 ! 进入，后续输入作为 shell 命令直接执行）
 
 	scrollUp int // 距底部行数（0=钉底）
 	running  bool
@@ -299,6 +306,8 @@ func (c *Chat) handleMsg(msg any) bool {
 		c.finishStream(m.err)
 		// 回合结束自动保存会话（复用同一会话文件）
 		c.app.AutoSave()
+	case bangDoneMsg:
+		c.finishBang(m)
 	case eventMsg:
 		c.applyEvent(m.kind, m.detail)
 	case noticeMsg:
@@ -307,7 +316,7 @@ func (c *Chat) handleMsg(msg any) bool {
 		if !c.running {
 			c.startRun("(background work settled; the runtime sent you notices — collect results with job_output/list_agents as needed and wrap up your answer)")
 		}
-	case *askRequest, *planRequest, *escRequest:
+	case *askRequest, *planRequest, *escRequest, *toolApproveRequest:
 		c.hostRequest(m)
 	case struct{}:
 		c.paint(false)
@@ -330,6 +339,57 @@ func (c *Chat) startRun(input string) {
 		_, err := root.RunAutoGoal(runCtx, input)
 		c.events <- runDoneMsg{err: err}
 	}()
+	c.paint(true)
+}
+
+// execBang "!cmd" 直执行：走 bash 工具（沿用工作区/沙箱/超时），不经
+// 模型、不进会话历史（也无自动保存）。
+func (c *Chat) execBang(cmd string) {
+	if c.running {
+		c.emitBlock(block{kind: blkErr, text: "当前有任务在执行，等空闲后再执行命令"})
+		return
+	}
+	if cmd == "" {
+		c.emitBlock(block{kind: blkDim, text: "用法: !<命令>"})
+		return
+	}
+	c.running = true
+	c.scrollUp = 0
+	runCtx, cancel := context.WithCancel(c.ctx)
+	c.cancel = cancel
+	go func() {
+		res := c.app.ExecBang(runCtx, cmd)
+		c.events <- bangDoneMsg{out: res.Text, err: res.Err}
+	}()
+	c.paint(true)
+}
+
+// finishBang 直执行落定：呈现原始输出或错误（仅展示，不落历史）。
+func (c *Chat) finishBang(m bangDoneMsg) {
+	if !c.running {
+		return
+	}
+	c.running = false
+	if c.cancel != nil {
+		c.cancel()
+		c.cancel = nil
+	}
+	switch {
+	case m.err != "" && strings.Contains(m.err, "context canceled"):
+		c.emitBlock(block{kind: blkDim, text: "(已中断)"})
+		c.paint(true)
+		return
+	case m.err != "":
+		c.emitBlock(block{kind: blkErr, text: "错误: " + m.err})
+		c.paint(true)
+		return
+	}
+	if out := app.BangOutput(m.out); out != "" {
+		c.emitBlock(block{kind: blkText, text: out})
+	} else {
+		c.emitBlock(block{kind: blkDim, text: "（无输出）"})
+	}
+	c.emitBlock(block{kind: blkDim, text: ""})
 	c.paint(true)
 }
 

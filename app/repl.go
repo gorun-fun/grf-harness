@@ -40,6 +40,7 @@ func (a *App) PlainREPL(ctx context.Context) {
 			return
 		case "/help":
 			fmt.Println(`/help   显示本帮助
+!cmd    行首感叹号直接执行 shell 命令（如 !git status，不经模型）
 /plan   进入计划模式（exit_plan_mode 呈计划）；再输一次退出
 /model  查看已配置模型；/model 提供商/模型 切换
 /resume 列出历史会话；/resume N 恢复第 N 条
@@ -102,6 +103,20 @@ func (a *App) PlainREPL(ctx context.Context) {
 			}
 			a.Restore(sess)
 			fmt.Println("已恢复会话: " + sessions[n-1].Title)
+			continue
+		}
+		if strings.HasPrefix(input, "!") {
+			cmd := strings.TrimSpace(strings.TrimPrefix(input, "!"))
+			if cmd == "" {
+				fmt.Fprintln(os.Stderr, "用法: !<命令>")
+				continue
+			}
+			res := a.ExecBang(ctx, cmd)
+			if res.Err != "" {
+				fmt.Fprintf(os.Stderr, "错误: %s\n", res.Err)
+			} else if out := BangOutput(res.Text); out != "" {
+				fmt.Println(out)
+			}
 			continue
 		}
 		if err := a.runInput(ctx, input); err != nil {

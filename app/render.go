@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"git.gorun.fun/share/grf-harness/agent"
@@ -14,13 +15,24 @@ import (
 )
 
 // stdoutUI 流式直写：思考进度行（\r 覆写）+ 正文原文增量输出 + 事件行。
+// 尾部换行挂账（pending）：模型可能在正文尾部多发换行，延迟到下一段
+// 内容或收尾时才输出，避免与收尾换行叠加出多余空行。
 type stdoutUI struct {
-	tty    bool
-	w      io.Writer
-	start  time.Time
-	chars  int
-	active bool
-	mdOpen bool // 正文已开始输出（事件前需换行）
+	tty     bool
+	w       io.Writer
+	start   time.Time
+	chars   int
+	active  bool
+	mdOpen  bool // 正文已开始输出（事件前需换行）
+	pending int  // 挂账的尾部连续换行数
+}
+
+// flushPending 落盘挂账的尾部换行。
+func (s *stdoutUI) flushPending() {
+	for i := 0; i < s.pending; i++ {
+		fmt.Fprintln(s.w)
+	}
+	s.pending = 0
 }
 
 func (s *stdoutUI) reasoning(delta string) {
@@ -40,7 +52,12 @@ func (s *stdoutUI) content(delta string) {
 	if !s.mdOpen {
 		s.mdOpen = true
 	}
-	fmt.Fprint(s.w, delta)
+	body := strings.TrimRight(delta, "\n")
+	if body != "" {
+		s.flushPending()
+		fmt.Fprint(s.w, body)
+	}
+	s.pending += len(delta) - len(body)
 }
 
 func (s *stdoutUI) fold() {
@@ -58,6 +75,7 @@ func (s *stdoutUI) fold() {
 
 func (s *stdoutUI) printEvent(kind, detail string) {
 	s.fold()
+	s.pending = 0
 	if s.mdOpen {
 		fmt.Fprintln(s.w)
 		s.mdOpen = false
@@ -93,6 +111,7 @@ func (s *stdoutUI) attach(ag *agent.Agent) {
 			s.printEvent(kind, detail)
 		case "done":
 			s.fold()
+			s.pending = 0
 			if s.mdOpen {
 				fmt.Fprintln(s.w)
 				s.mdOpen = false

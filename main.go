@@ -80,6 +80,7 @@ const usageText = `grf-harness %s - 零依赖终端 agent harness（gh）
   gh -resume             恢复上一次会话
   gh -plan               以计划模式启动
   gh <任务描述>           单任务模式：直接流式输出结果后退出
+  gh !<命令>              直接执行 shell 命令（不经模型）
   gh model               模型配置页（多提供商管理）
   gh model set <p/m>     设置默认模型（provider/model）
   gh model list          逐行列出已配置 提供商/模型（* 为默认）
@@ -95,7 +96,8 @@ const usageText = `grf-harness %s - 零依赖终端 agent harness（gh）
 
 全屏快捷键: ↑↓ 历史 · PgUp/PgDn/滚轮 翻页 · Ctrl+O 展开思考/工具块 ·
 F2 计划模式 · Tab 补全指令/切换鼠标 · Ctrl+C 中断执行（空闲退出） ·
-Ctrl+D 退出 · /model /resume /plan /goal 指令 · 鼠标单击展开、拖选复制
+Ctrl+D 退出 · /model /resume /plan /goal 指令 · !cmd 直接执行命令 ·
+鼠标单击展开、拖选复制
 
 配置: ~/.grf/settings.json（GRF_HOME 可重定位）；环境变量
 OPENAI_BASE_URL / OPENAI_API_KEY / GRF_MODEL 临时覆盖。`

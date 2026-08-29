@@ -45,7 +45,7 @@ type block struct {
 func renderBlock(b block) string {
 	switch b.kind {
 	case blkText:
-		return b.text
+		return strings.TrimRight(b.text, "\n")
 	case blkDim:
 		if b.text == "" {
 			return ""
@@ -94,7 +94,7 @@ func (c *Chat) frameLines() (lines []string, curRow, curCol int, lineBlock map[i
 	if c.running {
 		for _, sv := range c.hub.segViews() {
 			if !sv.think {
-				add(sv.text, -1)
+				add(strings.TrimRight(sv.text, "\n"), -1)
 				continue
 			}
 			line := fmt.Sprintf("💭 思考 %ds，%d 字", sv.secs, sv.chars)
@@ -150,6 +150,9 @@ func (c *Chat) frameLines() (lines []string, curRow, curCol int, lineBlock map[i
 	}
 	if c.app.Root().ApproveEach() {
 		statusParts = append(statusParts, bold("审批模式"))
+	}
+	if c.bang {
+		statusParts = append(statusParts, bold("命令模式"))
 	}
 	if c.goalText != "" {
 		statusParts = append(statusParts, "goal: "+clipRunesT(c.goalText, 30))
@@ -360,6 +363,9 @@ var slashCmds = []struct{ name, alias, desc string }{
 }
 
 func (c *Chat) slashHints() []string {
+	if c.bang {
+		return nil
+	}
 	v := c.ed.Value()
 	if !strings.HasPrefix(v, "/") || strings.ContainsAny(v, " \t") {
 		return nil
