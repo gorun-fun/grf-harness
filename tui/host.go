@@ -116,13 +116,36 @@ func (c *Chat) hostRequest(m any) {
 			}
 		})
 	case *planRequest:
-		pv := &planView{plan: req.plan, editor: NewEditor("反馈: ")}
-		pv.approve = func(approved bool, feedback string) {
-			c.plan = nil
-			req.approve <- approved
-			req.feedback <- feedback
-		}
-		c.plan = pv
+		// 计划审批复用 ask 选择框：批准 / 继续计划，✎ 自定义输入作反馈
+		q := tools.Question{ID: "approve_plan",
+			Header:   "计划审批",
+			Question: req.plan,
+			Options: []tools.Option{
+				{Label: "批准，按计划执行", Description: "退出计划模式并开始执行"},
+				{Label: "继续计划", Description: "不批准；用 ✎ 行输入反馈后重新提交"},
+			}}
+		c.ask = newAskForm([]tools.Question{q}, func(answers map[string]any, err error) {
+			c.ask = nil
+			switch {
+			case err != nil:
+				req.approve <- false
+				req.feedback <- "（用户关闭了计划审批，未给反馈；请继续规划或询问）"
+			default:
+				v, _ := answers["approve_plan"].(string)
+				switch {
+				case v == "批准，按计划执行":
+					req.approve <- true
+					req.feedback <- ""
+				case v == "" || v == "继续计划":
+					req.approve <- false
+					req.feedback <- ""
+				default:
+					req.approve <- false
+					req.feedback <- v // ✎ 自定义输入视为拒绝并附反馈
+				}
+			}
+		})
+		c.ask.head = "计划审批"
 	case *escRequest:
 		c.escv = &escApprove{tool: req.tool, command: req.command, mode: req.mode,
 			justification: req.justification, approve: func(ok bool) {
@@ -198,37 +221,6 @@ func (c *Chat) askKey(k termKey) bool {
 		if n == 0 || f.custom {
 			editKey(f.text, k)
 		}
-	}
-	return false
-}
-
-// planKey 计划审批按键。
-func (c *Chat) planKey(k termKey) bool {
-	f := c.plan
-	if f.mode == 1 {
-		switch k.Name {
-		case "enter":
-			feedback := f.editor.Value()
-			f.approve(false, feedback)
-			return false
-		case "esc":
-			f.mode = 0
-			return false
-		}
-		editKey(f.editor, k)
-		return false
-	}
-	switch k.Name {
-	case "y", "Y":
-		f.approve(true, "")
-	case "f", "F":
-		f.mode = 1
-	case "esc":
-		msg := f.esc
-		if msg == "" {
-			msg = "（用户关闭了计划审批，未给反馈；请继续规划或询问）"
-		}
-		f.approve(false, msg)
 	}
 	return false
 }

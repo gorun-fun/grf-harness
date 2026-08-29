@@ -1,4 +1,4 @@
-// build.go 组装完整的 harness：注册全部 25 个工具（与内嵌 spec
+// build.go 组装完整的 harness：注册全部 26 个工具（与内嵌 spec
 // 一一对齐）、构建根 agent 与子代理工厂。根会话与子代理共享 job/fs 实例
 // 的边界：子代理拥有独立 JobManager/FsPolicy（其工作区一致）；goal 与
 // ralph 仅根可用。
@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -49,7 +50,7 @@ type Options struct {
 	DisabledTools []string // 按场景禁用的工具名（根与子代理统一剔除）
 }
 
-// Build 组装根 harness（全部 25 个工具就位）。
+// Build 组装根 harness（全部 26 个工具就位）。
 func Build(opts Options) (*Harness, error) {
 	if opts.Workspace == "" {
 		wd, err := os.Getwd()
@@ -111,7 +112,7 @@ func Build(opts Options) (*Harness, error) {
 	root.goals = h.Goals
 	h.Root = root
 
-	// 根工具链（25 个全部注册）
+	// 根工具链（26 个全部注册）
 	h.registerTools(root, true)
 	// 子代理工厂
 	h.Manager.NewChild = func(parent *Agent, label string, seed []llm.Message) *Agent {
@@ -175,7 +176,7 @@ func (h *Harness) newFsPolicy(host tools.Host) *tools.FsPolicy {
 	return tools.NewFsPolicy(h.root, h.Settings.FsPolicy != "off", host)
 }
 
-// registerTools 为 agent 注册其可用工具。root=true 注册全部 25 个；
+// registerTools 为 agent 注册其可用工具。root=true 注册全部 26 个；
 // 子代理不注册 goal 三件套与 ralph（文档语义：非人类/子代理权限拒绝，
 // 直接不给入口；ask_user 子代理同样不可用）。
 func (h *Harness) registerTools(a *Agent, root bool) {
@@ -202,6 +203,8 @@ func (h *Harness) registerTools(a *Agent, root bool) {
 		tools.RegisterAskUser(r, func() tools.Host { return a.host })
 		RegisterGoalTools(r, a, h.Goals)
 		RegisterRalph(r, a, h.Manager)
+		// enter_plan_mode 仅根：模式切换是根会话状态，子代理不可申请
+		tools.RegisterEnterPlanMode(r, planCtl{a})
 	} else {
 		// 子代理问用户：明确拒绝（不可达最终用户）
 		tools.RegisterAskUserDenied(r)
@@ -246,7 +249,8 @@ func (h *Harness) newChild(parent *Agent, label string, seed []llm.Message) *Age
 	return child
 }
 
-// planCtl exit_plan_mode 的控制器实现。
+// planCtl 计划模式工具的控制器实现（exit_plan_mode 呈交计划、
+// enter_plan_mode 申请进入）。
 type planCtl struct{ a *Agent }
 
 func (p planCtl) InPlanMode() bool { return p.a.InPlanMode() }
@@ -260,6 +264,51 @@ func (p planCtl) SubmitPlan(ctx context.Context, plan string) (bool, string) {
 		p.a.SetPlanMode(false) // 批准即退出计划模式（与工具结果文案一致）
 	}
 	return ok, feedback
+}
+
+// enter 计划模式选项的固定文案（AskUser 答案按 label 精确匹配）。
+const (
+	planEnterOpt   = "进入计划模式"
+	planDeclineOpt = "直接执行"
+)
+
+// RequestEnterPlanMode enter_plan_mode 的控制器实现：经 AskUser 弹选项
+// 表单征求用户同意（TUI/行模式交互；无交互宿主报错按拒绝处理），批准
+// 即切换计划模式。选项外的自定义输入视为拒绝反馈。
+func (p planCtl) RequestEnterPlanMode(ctx context.Context, reason string) (bool, string) {
+	if p.a.host == nil {
+		return false, "no host available for approval"
+	}
+	answers, err := p.a.host.AskUser(ctx, []tools.Question{{
+		ID:       "enter_plan_mode",
+		Header:   "计划模式",
+		Question: "模型请求进入计划模式，先只读调研再呈交实施计划供你审批。理由：\n" + reason,
+		Options: []tools.Option{
+			{Label: planEnterOpt, Description: "切换到计划模式：改动类工具被硬拦截，直到计划批准"},
+			{Label: planDeclineOpt, Description: "不进入计划模式，按当前方式继续执行"},
+		},
+	}})
+	if err != nil {
+		return false, fmt.Sprintf("no interactive user available (%v)", err)
+	}
+	ans := ""
+	switch v := answers["enter_plan_mode"].(type) {
+	case string:
+		ans = v
+	case []string:
+		if len(v) > 0 {
+			ans = v[0]
+		}
+	}
+	switch strings.TrimSpace(ans) {
+	case planEnterOpt:
+		p.a.SetPlanMode(true)
+		return true, ""
+	case planDeclineOpt, "":
+		return false, ""
+	default:
+		return false, ans // 自定义输入即拒绝反馈
+	}
 }
 
 // Close 清理（产物目录等）。

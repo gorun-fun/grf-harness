@@ -98,8 +98,8 @@ func TestAll25ToolsRegistered(t *testing.T) {
 	if err := h.VerifyAllToolsRegistered(); err != nil {
 		t.Fatal(err)
 	}
-	if got := len(h.Root.reg.Defs()); got != 25 {
-		t.Fatalf("root agent should expose 25 tools, got %d", got)
+	if got := len(h.Root.reg.Defs()); got != 26 {
+		t.Fatalf("root agent should expose 26 tools, got %d", got)
 	}
 }
 
@@ -120,8 +120,8 @@ func TestDisabledTools(t *testing.T) {
 	if h.Root.reg.Has("bash") || h.Root.reg.Has("web_search") {
 		t.Fatal("disabled tools should be removed from root registry")
 	}
-	if got := len(h.Root.reg.Defs()); got != 23 {
-		t.Fatalf("root agent should expose 23 tools after disabling 2, got %d", got)
+	if got := len(h.Root.reg.Defs()); got != 24 {
+		t.Fatalf("root agent should expose 24 tools after disabling 2, got %d", got)
 	}
 	if err := h.VerifyAllToolsRegistered(); err != nil {
 		t.Fatalf("verify should skip disabled tools: %v", err)
@@ -164,12 +164,12 @@ func TestRunLoopExecutesTool(t *testing.T) {
 	if !strings.Contains(joined, "tool:read") || !strings.Contains(joined, "result:") {
 		t.Fatalf("events: %v", events)
 	}
-	// 发给 API 的工具定义 = 25 个（多次请求累计去重仍 25）
+	// 发给 API 的工具定义 = 26 个（多次请求累计去重仍 26）
 	seen := map[string]bool{}
 	for _, d := range f.gotDefs {
 		seen[d.Name] = true
 	}
-	if len(seen) != 25 {
+	if len(seen) != 26 {
 		t.Fatalf("API got %d unique tool defs", len(seen))
 	}
 	// 历史含 tool 消息
@@ -261,9 +261,9 @@ func TestSubagentToolRestrictions(t *testing.T) {
 	if !ok {
 		t.Skip("child id unknown")
 	}
-	for _, banned := range []string{"create_goal", "get_goal", "update_goal", "ralph", "ask_user_question"} {
+	for _, banned := range []string{"create_goal", "get_goal", "update_goal", "ralph", "enter_plan_mode", "ask_user_question"} {
 		if h2.Ag.reg.Has(banned) {
-			// ask_user 注册为拒绝版本（有入口但明确拒绝）——create_goal 等不应有入口
+			// ask_user 注册为拒绝版本（有入口但明确拒绝）——create_goal/enter_plan_mode 等不应有入口
 			if banned != "ask_user_question" {
 				t.Fatalf("child should not have %s", banned)
 			}
@@ -699,5 +699,123 @@ func TestChildFollowsRootPlanMode(t *testing.T) {
 	h.Root.SetPlanMode(true)
 	if !child.inPlan() {
 		t.Fatal("子代理应跟随根的计划模式")
+	}
+}
+
+// askApproveHost 测试宿主：AskUser 一律返回每题的第一个选项
+// （enter_plan_mode 场景即"进入计划模式"）。
+type askApproveHost struct{ tools.NoopHost }
+
+func (h askApproveHost) AskUser(ctx context.Context, qs []tools.Question) (map[string]any, error) {
+	m := map[string]any{}
+	for _, q := range qs {
+		if len(q.Options) > 0 {
+			m[q.ID] = q.Options[0].Label
+		}
+	}
+	return m, nil
+}
+
+// askTextHost 测试宿主：AskUser 返回固定自定义文本（视为拒绝反馈）。
+type askTextHost struct {
+	tools.NoopHost
+	text string
+}
+
+func (h askTextHost) AskUser(ctx context.Context, qs []tools.Question) (map[string]any, error) {
+	m := map[string]any{}
+	for _, q := range qs {
+		m[q.ID] = h.text
+	}
+	return m, nil
+}
+
+func TestEnterPlanModeApproved(t *testing.T) {
+	ws := t.TempDir()
+	f := newFakeLLM([]string{
+		`TOOL:enter_plan_mode:{"reason":"改动横跨三个包，方案存在分叉"}`,
+		`TOOL:write:{"file_path":"x.txt","content":"hi"}`,
+		"done",
+	})
+	defer f.Close()
+	h, err := Build(Options{
+		Workspace: ws,
+		Client:    llm.NewClient(llm.Config{BaseURL: f.URL(), APIKey: "t", Model: "test-model"}),
+		Settings:  &config.Settings{Sandbox: "off", FsPolicy: "observe"},
+		Host:      &askApproveHost{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close()
+	if _, err := h.Root.Run(context.Background(), "做个复杂重构"); err != nil {
+		t.Fatal(err)
+	}
+	if !h.Root.InPlanMode() {
+		t.Fatal("用户批准后应进入计划模式")
+	}
+	// 同一回合内随后的改动类工具被硬拦截
+	if _, err := os.Stat(filepath.Join(ws, "x.txt")); !os.IsNotExist(err) {
+		t.Fatal("进入计划模式后 write 不应落盘")
+	}
+	found := false
+	for _, m := range h.Root.History() {
+		if m.Role == "tool" && strings.Contains(m.Content, "plan mode") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("历史缺少计划模式拦截结果")
+	}
+}
+
+func TestEnterPlanModeDeclined(t *testing.T) {
+	f := newFakeLLM([]string{
+		`TOOL:enter_plan_mode:{"reason":"方案未定"}`,
+		"ok direct",
+	})
+	defer f.Close()
+	// NoopHost.AskUser 报错（无交互用户）→ 按拒绝处理
+	h := buildTestHarness(t, f, t.TempDir())
+	defer h.Close()
+	if _, err := h.Root.Run(context.Background(), "直接做"); err != nil {
+		t.Fatal(err)
+	}
+	if h.Root.InPlanMode() {
+		t.Fatal("拒绝后不应进入计划模式")
+	}
+}
+
+func TestEnterPlanModeFeedback(t *testing.T) {
+	f := newFakeLLM([]string{"ok"})
+	defer f.Close()
+	h, err := Build(Options{
+		Workspace: t.TempDir(),
+		Client:    llm.NewClient(llm.Config{BaseURL: f.URL(), APIKey: "t", Model: "test-model"}),
+		Settings:  &config.Settings{Sandbox: "off", FsPolicy: "observe"},
+		Host:      &askTextHost{text: "先按现有架构来，不用计划"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close()
+	res := h.Root.reg.Execute(context.Background(), "enter_plan_mode", `{"reason":"方案未定"}`)
+	if !strings.Contains(res.Text, "先按现有架构来") {
+		t.Fatalf("拒绝反馈应回给模型: %s", res.Text)
+	}
+	if h.Root.InPlanMode() {
+		t.Fatal("拒绝后不应进入计划模式")
+	}
+}
+
+func TestEnterPlanModeAlreadyInPlan(t *testing.T) {
+	f := newFakeLLM([]string{"ok"})
+	defer f.Close()
+	h := buildTestHarness(t, f, t.TempDir())
+	defer h.Close()
+	h.Root.SetPlanMode(true)
+	res := h.Root.reg.Execute(context.Background(), "enter_plan_mode", `{"reason":"x"}`)
+	if !strings.Contains(res.Text, "Already in plan mode") {
+		t.Fatalf("已在计划模式应幂等提示: %s", res.Text)
 	}
 }

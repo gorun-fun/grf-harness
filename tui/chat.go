@@ -64,7 +64,6 @@ type Chat struct {
 	// 弹窗/模态（互斥，非 nil 即捕获按键）
 	pop  *popup      // 模型/会话列表选择
 	ask  *askForm    // ask_user_question 表单
-	plan *planView   // 计划审批
 	escv *escApprove // 沙箱升审批
 
 	hintIdx int // 指令提示选中

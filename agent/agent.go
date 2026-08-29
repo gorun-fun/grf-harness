@@ -1,5 +1,5 @@
 // Package agent 实现 harness 的核心 agent 循环：用户输入 → 模型（含工具
-// 调用）→ 执行工具 → 结果回传 → 循环。支持全部 25 个内置工具（定义
+// 调用）→ 执行工具 → 结果回传 → 循环。支持全部 26 个内置工具（定义
 // 嵌入于 tools 包 spec）、异步通知（后台子代理落定注入）、图像工具结果
 // 的多模态回传、目标（goal）自动续跑与计划模式。
 //
@@ -134,7 +134,7 @@ func (a *Agent) inPlan() bool {
 	return a.InPlanMode()
 }
 
-// SetPlanMode 切换计划模式（用户主动操作）。
+// SetPlanMode 切换计划模式（用户主动操作，或模型经 enter_plan_mode 申请、用户批准）。
 func (a *Agent) SetPlanMode(on bool) {
 	a.mu.Lock()
 	a.planMode = on

@@ -143,19 +143,22 @@ func (h *TaskHost) ApprovePlan(ctx context.Context, plan string) (bool, string) 
 		}
 		return false, ""
 	}
-	fmt.Println("\n=== 计划审批 ===")
+	fmt.Println("\n【计划审批】")
 	fmt.Println(plan)
-	fmt.Print("\n批准? [y/N]（其他输入作为反馈）> ")
+	fmt.Println("  1. 批准，按计划执行 — 退出计划模式并开始执行")
+	fmt.Println("  2. 继续计划 — 不批准，重新提交")
+	fmt.Print("序号，或其他输入作为反馈拒绝 > ")
 	rd := bufio.NewReader(os.Stdin)
 	line, _ := rd.ReadString('\n')
 	line = strings.TrimSpace(line)
-	if strings.EqualFold(line, "y") || strings.EqualFold(line, "yes") {
+	switch {
+	case line == "1" || strings.EqualFold(line, "y") || strings.EqualFold(line, "yes"):
 		return true, ""
-	}
-	if line == "" {
+	case line == "" || line == "2":
 		return false, "（用户未批准且无反馈）"
+	default:
+		return false, line
 	}
-	return false, line
 }
 
 func (h *TaskHost) NotifyEvent(kind, detail string) {}

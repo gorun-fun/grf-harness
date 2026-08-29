@@ -43,14 +43,11 @@ func (c *Chat) handleInput(ev term.Event) bool {
 	return false
 }
 
-// modalInsert 模态打开时插入文本（ask 文本框 / 计划反馈框）。
+// modalInsert 模态打开时插入文本（ask 文本框）。
 func (c *Chat) modalInsert(text string) bool {
 	switch {
 	case c.ask != nil:
 		c.ask.insert(text)
-		return true
-	case c.plan != nil:
-		c.plan.insert(text)
 		return true
 	}
 	return false
@@ -61,9 +58,6 @@ func (c *Chat) handleKey(k term.KeyEv) bool {
 	// 模态优先
 	if c.ask != nil {
 		return c.askKey(k)
-	}
-	if c.plan != nil {
-		return c.planKey(k)
 	}
 	if c.escv != nil {
 		return c.escKey(k)

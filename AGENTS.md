@@ -1,7 +1,7 @@
 # grf-harness（gh）工作区说明
 
 零依赖终端 agent harness：纯 Go 标准库重构自 `~/AiProjects/gh`（bubbletea/glamour 版）。
-25 个工具的**定义（名称/描述/参数 Schema）内嵌于 `tools/spec/tools.json`**（唯一来源），
+26 个工具的**定义（名称/描述/参数 Schema）内嵌于 `tools/spec/tools.json`**（唯一来源），
 一个不能少。改动工具相关代码前先读 spec 与对接文档。
 
 文档分工：`docs/architecture.md`（架构总览：功能线条分层、关键机制、并发
@@ -33,7 +33,7 @@ ANSI→验证帧），历史会话输出落在 `.grf/sessions/`。
 - **工具定义唯一来源**：`tools/spec/tools.json`（go:embed 内嵌；docs/ 下的
   开发参考原稿已移除，spec 即唯一事实）。`tools.Registry.Register` 会拒绝
   spec 里不存在的名字。改工具行为不改 spec 文本。嵌入方扩展走 `RegisterCustom`（自带定义、
-  不得与内置 25 个重名），内置工具不借道覆盖；ORS 客户端执行工具走 `RegisterClient`
+  不得与内置 26 个重名），内置工具不借道覆盖；ORS 客户端执行工具走 `RegisterClient`
   （模型调用时转入暂停协议，见 agent/pause.go）。
 - 回复**不做 markdown 渲染**，只显示原始文本（需求如此，勿加渲染）。
 - **Git 远端分工**：origin = 私有主库 `https://git.gorun.fun/ai/grf-harnees.git`
@@ -57,7 +57,7 @@ ANSI→验证帧），历史会话输出落在 `.grf/sessions/`。
   Run/RunAs/RunWithImages 与 `RunTurn/RunTurnParts/Resume` 都是其薄委托）、
   goal 状态机、Manager（子代理树）、ralph、workflow 接线、系统提示词。
   工具与 harness 在此组装（`agent/build.go`，四表面共用的唯一装配事实）。
-- `tools`：25 个工具的实现与注册表；orchestration 类工具（subagent/goal/
+- `tools`：26 个工具的实现与注册表；orchestration 类工具（subagent/goal/
   workflow/ralph）的处理器注册在 `agent` 包，纯工具（fs/bash/jobs/web/
   image/交互类）在 `tools` 包。
 - `app`：库入口（`app.New(app.Options{...})`）+ 会话门面 + 单任务直出渲染 +
@@ -87,7 +87,11 @@ ANSI→验证帧），历史会话输出落在 `.grf/sessions/`。
 - 计划/审批模式（仅根会话；Tab 循环 auto→计划→审批，或 F2 / `/plan` / `-plan`）：
   计划模式 = 提示词软约束 + `turn.go` 硬拦截（write/edit/bash/ralph/workflow
   直接拒绝，子代理经 `planGuard` 跟随根），`exit_plan_mode` 批准后自动退出、
-  被拒则带反馈留在计划模式；审批模式 = 每个工具执行前经 `Host.ApproveTool`
+  被拒则带反馈留在计划模式（审批是 ask 选择框：TUI 复用 ask 表单"批准/继续
+  计划"+✎ 反馈，TaskHost 行模式为编号选项，空输入一律不批准）；模型也可经
+  `enter_plan_mode`（仅根注册）主动申请进入，经 `Host.AskUser` 征用户批准后
+  切换、拒绝则带反馈直接执行；
+  审批模式 = 每个工具执行前经 `Host.ApproveTool`
   （TUI 复用 ask 选项表单；server 转 `tool_approval` 暂停点）。
 - 路径解析：文件工具的相对路径相对**工作区**（`FsPolicy.resolve`），不是进程
   CWD。macOS 上 t.TempDir() 在 /var（符号链接到 /private/var），边界判断不做

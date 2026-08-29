@@ -97,7 +97,7 @@ gh server [-addr 127.0.0.1:7400] [-data ~/.grf/server] [-token <t>]
 → 终态事件（`response.completed` / `.failed` / `.incomplete`，携带完整
 response 快照）。
 
-内置 25 个工具是 hosted tool（服务端执行），每次调用产出
+内置 26 个工具是 hosted tool（服务端执行），每次调用产出
 `grf:tool_call` item（字段：`name` / `input` / `output_text` / `err` /
 `agent_id` / `label`，全量不截断），事件 `grf:tool_call.in_progress` →
 `.completed` / `.failed` / `.denied`。思考流映射为标准 reasoning summary
@@ -131,10 +131,12 @@ POST /v1/responses
 
 ## 7. 沙箱升级与计划审批
 
-这两类交互发生在工具执行内部（bash 沙箱拒绝后的升级重试、
-exit_plan_mode），不参与暂停协议，按 `grf:session.auto_approve` 处理：
-true 放行 / false 拒绝（fail-closed）。需要人在环的审批请用
-`tool_choice` 控制工具面 + 逐工具审批（`disabled_tools` 外配置
+这几类交互发生在工具执行内部（bash 沙箱拒绝后的升级重试、
+exit_plan_mode 计划审批、enter_plan_mode 进入申请经 `Host.AskUser`
+征求同意），不参与暂停协议：升级与计划审批按 `grf:session.auto_approve`
+处理（true 放行 / false 拒绝，fail-closed）；enter_plan_mode 在无交互
+宿主下 AskUser 报错、一律按拒绝处理并引导模型直接继续执行。需要人在环
+的审批请用 `tool_choice` 控制工具面 + 逐工具审批（`disabled_tools` 外配置
 `grf:session`，且暂停协议覆盖审批模式）。
 
 ## 8. 故障语义

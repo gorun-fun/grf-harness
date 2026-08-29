@@ -154,46 +154,6 @@ func (f *askForm) finishQuestion() {
 	}
 }
 
-// ---- 计划审批 ----
-
-type planView struct {
-	title   string // 空 = 计划审批
-	hint    string // 空 = 计划审批按键提示
-	esc     string // Esc 关闭时回给 approve 的默认反馈文案
-	plan    string
-	mode    int // 0 查看（y/f/Esc） · 1 输入反馈
-	editor  *Editor
-	approve func(approved bool, feedback string)
-}
-
-func (f *planView) insert(s string) {
-	if f.mode == 1 {
-		f.editor.Insert(s)
-	}
-}
-
-func (f *planView) render(w int) []string {
-	title := f.title
-	if title == "" {
-		title = "计划审批"
-	}
-	lines := []string{dim("── " + title + " ──")}
-	for _, ln := range term.Wrap(f.plan, w-2) {
-		lines = append(lines, " "+ln)
-	}
-	if f.mode == 1 {
-		t, _ := f.editor.Render(w - 10)
-		lines = append(lines, dim("  反馈（回车提交，Esc 返回）:"), "  "+t)
-	} else {
-		hint := f.hint
-		if hint == "" {
-			hint = "y 批准并退出计划模式 · f 给反馈继续规划 · Esc 视为未批准"
-		}
-		lines = append(lines, dim("  "+hint))
-	}
-	return lines
-}
-
 // ---- 沙箱升审批 / 工具审批 ----
 
 type escApprove struct {

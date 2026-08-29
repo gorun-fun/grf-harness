@@ -58,7 +58,7 @@ func (r *Registry) Register(name string, h Handler) {
 }
 
 // RegisterCustom 注册 spec 之外的自定义工具（嵌入方扩展入口）：定义由
-// 调用方完整给出（随请求发给模型），名字不得与内置 25 个冲突——内置
+// 调用方完整给出（随请求发给模型），名字不得与内置 26 个冲突——内置
 // 工具定义的唯一来源仍是 spec，不允许借道覆盖。注册后的自定义工具与
 // 内置工具在 Disable/Execute/Defs/Registered 里同等对待。
 func (r *Registry) RegisterCustom(def llm.Tool, h Handler) {

@@ -18,10 +18,10 @@ func newTestPolicy(t *testing.T, workspace string) *FsPolicy {
 	return NewFsPolicy(workspace, true, &NoopHost{})
 }
 
-func TestSpecCovers25Tools(t *testing.T) {
+func TestSpecCovers26Tools(t *testing.T) {
 	names := SpecNames()
-	if len(names) != 25 {
-		t.Fatalf("spec should define 25 tools, got %d: %v", len(names), names)
+	if len(names) != 26 {
+		t.Fatalf("spec should define 26 tools, got %d: %v", len(names), names)
 	}
 	for _, n := range names {
 		if _, ok := SpecDef(n); !ok {

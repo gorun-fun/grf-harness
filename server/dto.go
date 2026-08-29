@@ -72,7 +72,7 @@ type createRequest struct {
 }
 
 // toolParam 请求 tools 数组项（ORS 只保留 function 类型；grf: 前缀 hosted
-// 工具配置是扩展，暂未使用——内置 25 个工具默认全量提供）。
+// 工具配置是扩展，暂未使用——内置 26 个工具默认全量提供）。
 type toolParam struct {
 	Type        string         `json:"type"` // "function"
 	Name        string         `json:"name"`
