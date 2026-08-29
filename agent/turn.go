@@ -143,6 +143,17 @@ func (a *Agent) runTurn(ctx context.Context, userMsg *llm.Message, human bool, r
 					continue
 				}
 			}
+			// 计划模式：改动类工具硬拦截（提示词软约束之外的兜底；子代理
+			// 经 planGuard 跟随根），拒绝结果引导模型走调研→呈交计划路径
+			if a.inPlan() && planBlockTools[call.Name()] {
+				denied := "[plan mode] 计划模式下禁止执行改动类工具（" + call.Name() +
+					"）。请继续用只读工具（read/grep/glob 等）调研，并用 exit_plan_mode 呈交完整计划供用户审批"
+				a.emit("result", firstLine(denied))
+				a.emitToolEvent(ToolEvent{CallID: callID, Name: call.Name(), Status: ToolStatusDenied,
+					Input: call.Arguments(), Output: denied})
+				a.appendToolResult(call, tools.Result{Text: denied})
+				continue
+			}
 			a.execToolCall(turnCtx, call, callID)
 		}
 		if len(pending) > 0 {
@@ -201,4 +212,15 @@ func deniedResultText(feedback string) string {
 		denied += "，反馈: " + feedback
 	}
 	return denied + "；请换一种方式继续，或向用户说明并询问"
+}
+
+// planBlockTools 计划模式下硬拦截的改动/执行类工具。只读工具（read/
+// grep/glob 等）与呈报类（exit_plan_mode/ask_user_question/todo_write）
+// 放行；subagent 系放行（委派调研），其内部调用同样受拦截。
+var planBlockTools = map[string]bool{
+	"write":    true,
+	"edit":     true,
+	"bash":     true,
+	"ralph":    true,
+	"workflow": true,
 }

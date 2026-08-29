@@ -241,7 +241,8 @@ func (h *Harness) newChild(parent *Agent, label string, seed []llm.Message) *Age
 		child.mu.Unlock()
 	}
 	h.registerTools(child, false)
-	// 计划模式仅根
+	// 计划模式开关仅根可切换，但改动拦截对子代理同样生效
+	child.planGuard = h.Root.InPlanMode
 	return child
 }
 
@@ -254,7 +255,11 @@ func (p planCtl) SubmitPlan(ctx context.Context, plan string) (bool, string) {
 	if p.a.host == nil {
 		return false, ""
 	}
-	return p.a.host.ApprovePlan(ctx, plan)
+	ok, feedback := p.a.host.ApprovePlan(ctx, plan)
+	if ok {
+		p.a.SetPlanMode(false) // 批准即退出计划模式（与工具结果文案一致）
+	}
+	return ok, feedback
 }
 
 // Close 清理（产物目录等）。

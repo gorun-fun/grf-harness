@@ -78,7 +78,7 @@ func rootPromptBody(o PromptOptions) string {
 
 	b.WriteString("Use the workflow tool ONLY when the user explicitly asks for a workflow or for large multi-agent orchestration: you write a JavaScript script (the tool description documents the exact format) that fans work out across many subagents with phases and structured results. For one or two delegations, prefer plain subagent calls.\n\n")
 
-	b.WriteString("Plan mode (when the user enables it): investigate freely but change nothing; present your implementation plan with exit_plan_mode and wait for the user's approval before executing it.\n\n")
+	b.WriteString("Plan mode (when the user enables it): investigate freely but change nothing — mutating tools (write/edit/bash/ralph/workflow) are rejected outright; present your implementation plan with exit_plan_mode and wait for the user's approval before executing it.\n\n")
 
 	b.WriteString("When you successfully create or modify files, mention the primary outputs in your final response, formatted as Markdown inline code using the exact file-tool path.\n")
 	return b.String()

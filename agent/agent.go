@@ -48,6 +48,7 @@ type Agent struct {
 	notices     []string
 	planMode    bool
 	approveEach bool
+	planGuard   func() bool   // 子代理生效计划模式判定（指向根；根为 nil 时用自身）
 	toolCalls   int           // 已执行的工具调用数
 	toolTime    time.Duration // 工具执行累计耗时
 	bgReminded  bool          // 已发过后台作业收割提醒（每会话至多一次）
@@ -124,6 +125,14 @@ func (a *Agent) SystemText() string { return a.system }
 
 // InPlanMode / 计划模式。
 func (a *Agent) InPlanMode() bool { a.mu.Lock(); defer a.mu.Unlock(); return a.planMode }
+
+// inPlan 生效的计划模式：子代理跟随根（写操作拦截用，见 turn.go）。
+func (a *Agent) inPlan() bool {
+	if a.planGuard != nil {
+		return a.planGuard()
+	}
+	return a.InPlanMode()
+}
 
 // SetPlanMode 切换计划模式（用户主动操作）。
 func (a *Agent) SetPlanMode(on bool) {

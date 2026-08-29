@@ -606,3 +606,98 @@ func TestSubagentToolEventsFlowToRoot(t *testing.T) {
 		t.Fatalf("状态推进: %+v", events)
 	}
 }
+
+// planHost 测试宿主：按计划批准/拒绝呈交的计划。
+type planHost struct {
+	tools.NoopHost
+	ok bool
+}
+
+func (h planHost) ApprovePlan(ctx context.Context, plan string) (bool, string) {
+	if h.ok {
+		return true, ""
+	}
+	return false, "再改改"
+}
+
+func TestPlanModeBlocksMutatingTools(t *testing.T) {
+	ws := t.TempDir()
+	f := newFakeLLM([]string{
+		`TOOL:write:{"file_path":"x.txt","content":"hi"}`,
+		"done",
+	})
+	defer f.Close()
+	h := buildTestHarness(t, f, ws)
+	defer h.Close()
+	h.Root.SetPlanMode(true)
+	if _, err := h.Root.Run(context.Background(), "写个文件"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(ws, "x.txt")); !os.IsNotExist(err) {
+		t.Fatal("计划模式下 write 不应落盘")
+	}
+	// 拒绝结果进入历史（模型可见原因）
+	found := false
+	for _, m := range h.Root.History() {
+		if m.Role == "tool" && strings.Contains(m.Content, "plan mode") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("历史缺少计划模式拦截结果")
+	}
+}
+
+func TestPlanApprovalSwitchesMode(t *testing.T) {
+	newH := func(ok bool) *Harness {
+		f := newFakeLLM([]string{
+			`TOOL:exit_plan_mode:{"plan":"# 计划\n- 步骤一"}`,
+			"done",
+		})
+		t.Cleanup(f.Close)
+		h, err := Build(Options{
+			Workspace: t.TempDir(),
+			Client:    llm.NewClient(llm.Config{BaseURL: f.URL(), APIKey: "t", Model: "test-model"}),
+			Settings:  &config.Settings{Sandbox: "off", FsPolicy: "observe"},
+			Host:      &planHost{ok: ok},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(h.Close)
+		return h
+	}
+
+	h := newH(true)
+	h.Root.SetPlanMode(true)
+	if _, err := h.Root.Run(context.Background(), "给个计划"); err != nil {
+		t.Fatal(err)
+	}
+	if h.Root.InPlanMode() {
+		t.Fatal("批准计划后应自动退出计划模式")
+	}
+
+	h = newH(false)
+	h.Root.SetPlanMode(true)
+	if _, err := h.Root.Run(context.Background(), "给个计划"); err != nil {
+		t.Fatal(err)
+	}
+	if !h.Root.InPlanMode() {
+		t.Fatal("计划被拒绝后应保持计划模式")
+	}
+}
+
+func TestChildFollowsRootPlanMode(t *testing.T) {
+	f := newFakeLLM([]string{"ok"})
+	defer f.Close()
+	h := buildTestHarness(t, f, t.TempDir())
+	defer h.Close()
+	child := h.Manager.NewChild(h.Root, "probe", nil)
+	if child.inPlan() {
+		t.Fatal("根未开计划模式时子代理不应受拦截")
+	}
+	h.Root.SetPlanMode(true)
+	if !child.inPlan() {
+		t.Fatal("子代理应跟随根的计划模式")
+	}
+}
