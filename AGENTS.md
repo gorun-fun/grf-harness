@@ -13,8 +13,9 @@
 ```sh
 ./build.sh                # vet + build（产物 ./gh，跳过测试；macOS 会重做 adhoc 签名）
 ./build.sh macos|macos-arm64|linux|linux-arm64|windows|windows-arm64|all   # 交叉编译，产物在 dist/
-./build.sh all            # 6 平台全量；CI（.gitlab-ci.yml，tag 触发）用它构建后发布到
-                          # 10.8.0.5:/data/download/grf-harness/{平台}/{tag去v}/gh(.exe)
+./build.sh all            # 6 平台全量；CI（.gitlab-ci.yml，仅 tag 触发、无 test job）用它构建后发布到
+                          # 10.8.0.5:/data/download/grf-harness/{平台}/{tag去v}/gh(.exe)；
+                          # 版本号经 ldflags 注入 config.Version（CI 取 tag、本地取 git describe，去 v 前缀）
 go build -o gh .
 go test ./...             # 无需网络与 API key（agent 回环用 httptest 模拟 LLM）
 go test -race ./agent ./tools ./term ./js ./llm ./server
@@ -49,6 +50,9 @@ ANSI→验证帧），历史会话输出落在 `.grf/sessions/`。
 基础层    term / config / store
 ```
 
+- 根目录 `main`（package main）子命令按功能线条分文件：`chat.go`（默认三形态：
+  全屏 TTY / 非 TTY 行模式 REPL / 单任务直出）、`settings_cmd.go`（model/config/
+  version 脚本化读写）、`server_cmd.go`（gh server）；connect/daemon 见 weixin 条目。
 - `agent`：核心回合循环（`turn.go` 的 `runTurn` 是唯一循环实现，`run.go` 的
   Run/RunAs/RunWithImages 与 `RunTurn/RunTurnParts/Resume` 都是其薄委托）、
   goal 状态机、Manager（子代理树）、ralph、workflow 接线、系统提示词。
@@ -80,6 +84,11 @@ ANSI→验证帧），历史会话输出落在 `.grf/sessions/`。
   （OpenAI 线格式合法中间态），状态完全在持久化历史里、跨重启可恢复；`Run*`
   遇暂停点返回 `*PausedError`，跨请求应答必须走 `RunTurn/Resume`（gh server
   即此用法）。server 每会话单 turn，并发请求 409 不排队。
+- 计划/审批模式（仅根会话；Tab 循环 auto→计划→审批，或 F2 / `/plan` / `-plan`）：
+  计划模式 = 提示词软约束 + `turn.go` 硬拦截（write/edit/bash/ralph/workflow
+  直接拒绝，子代理经 `planGuard` 跟随根），`exit_plan_mode` 批准后自动退出、
+  被拒则带反馈留在计划模式；审批模式 = 每个工具执行前经 `Host.ApproveTool`
+  （TUI 复用 ask 选项表单；server 转 `tool_approval` 暂停点）。
 - 路径解析：文件工具的相对路径相对**工作区**（`FsPolicy.resolve`），不是进程
   CWD。macOS 上 t.TempDir() 在 /var（符号链接到 /private/var），边界判断不做
   symlink 展开，测试时两边要用同一路径构造。
