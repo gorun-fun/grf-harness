@@ -54,6 +54,7 @@ a, err := app.New(app.Options{
     SystemPrompt:  "你是 XX 场景的助手……",  // 见 §3
     DepthLimit:    3,                       // 子代理深度上限
     DisabledTools: []string{"bash"},        // 见 §4
+    Skills:        tools.NewSkillCatalog(), // 接管/关闭技能加载；见 §6
     VerboseEvents: func(kind, detail string) { /* 见 §5 */ },
     OnToolEvent:   func(e agent.ToolEvent) { /* 见 §5，重建工具时间线用 */ },
 
@@ -185,6 +186,21 @@ Skill 就是 `<name>/SKILL.md` 目录，无其他格式要求。在 `app.New` **
 SKILL.md 首行写 `# 标题 + 一句话用途`（system prompt 清单摘要取首行），
 正文写触发条件与操作步骤。技能加载后自动出现在 system prompt 清单中，
 模型按需调用 `skill({"name": "报表导出"})` 取全文执行，宿主无需接线。
+
+**接管技能目录**（`Options.Skills`）：不设时按上述两级目录自动加载；
+传入 `*tools.SkillCatalog` 则**完全替换**默认加载——传空目录即关闭技能
+（提示词不注入清单），或用 `NewSkillCatalog().Add` 从宿主自带来源编程式
+装配：
+
+```go
+// 关闭默认技能加载（不读工作区与 ~/.grf/skills）
+a, _ := app.New(app.Options{ Skills: tools.NewSkillCatalog() })
+
+// 或自带技能：不依赖任何目录约定
+cat := tools.NewSkillCatalog()
+cat.Add("报表导出", reportSkillMD)
+a, _ := app.New(app.Options{ Skills: cat })
+```
 
 宿主安装自带技能示例：
 

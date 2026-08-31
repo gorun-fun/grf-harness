@@ -48,6 +48,7 @@ type Options struct {
 	SystemPrompt  string   // 用户自定义静态提示词；空用内置
 	DepthLimit    int      // 子代理深度上限；0 用默认
 	DisabledTools []string // 按场景禁用的工具名（根与子代理统一剔除）
+	Skills        *tools.SkillCatalog // 技能目录；nil 自动加载两级默认目录，非 nil 完全替换（空目录即关闭技能）
 }
 
 // Build 组装根 harness（全部 26 个工具就位）。
@@ -76,11 +77,15 @@ func Build(opts Options) (*Harness, error) {
 		return nil, err
 	}
 
+	skills := opts.Skills
+	if skills == nil {
+		skills = tools.LoadSkills(opts.Workspace)
+	}
 	h := &Harness{
 		Goals:     &GoalState{},
 		Todos:     &tools.TodoState{},
 		Artifacts: artifacts,
-		Skills:    tools.LoadSkills(opts.Workspace),
+		Skills:    skills,
 		Store:     store.New(opts.Workspace),
 		client:    opts.Client,
 		Settings:  st,

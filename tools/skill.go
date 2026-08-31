@@ -18,9 +18,27 @@ type SkillCatalog struct {
 	order   []string
 }
 
+// NewSkillCatalog 构建空技能目录（嵌入方编程式装配用：Add 逐个加入，
+// 或保持空目录以关闭默认技能加载）。
+func NewSkillCatalog() *SkillCatalog {
+	return &SkillCatalog{entries: map[string]string{}}
+}
+
+// Add 以编程方式加入一个技能（name 对应 SKILL.md 目录名，content 为全文）。
+// 同名后加者覆盖前者内容，不改变排序。
+func (c *SkillCatalog) Add(name, content string) {
+	if c.entries == nil {
+		c.entries = map[string]string{}
+	}
+	if _, ok := c.entries[name]; !ok {
+		c.order = append(c.order, name)
+	}
+	c.entries[name] = content
+}
+
 // LoadSkills 加载两级技能目录（工作区优先）。
 func LoadSkills(workspace string) *SkillCatalog {
-	c := &SkillCatalog{entries: map[string]string{}}
+	c := NewSkillCatalog()
 	home := userGrfHome()
 	dirs := []string{filepath.Join(home, "skills"), filepath.Join(workspace, ".grf", "skills")}
 	for _, dir := range dirs {

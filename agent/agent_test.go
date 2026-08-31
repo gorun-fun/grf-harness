@@ -137,6 +137,64 @@ func TestDisabledTools(t *testing.T) {
 	}
 }
 
+func TestSkillsOverride(t *testing.T) {
+	t.Setenv("GRF_HOME", t.TempDir()) // 屏蔽机器全局技能
+	ws := t.TempDir()
+	// 工作区存在技能目录：默认加载会收录，传空目录应屏蔽
+	skillDir := filepath.Join(ws, ".grf", "skills", "demo")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("# Demo skill\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	build := func(cat *tools.SkillCatalog) *Harness {
+		t.Helper()
+		h, err := Build(Options{
+			Workspace: ws,
+			Settings:  &config.Settings{Sandbox: "off", FsPolicy: "observe"},
+			Host:      &tools.NoopHost{},
+			Skills:    cat,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+	system := func(h *Harness) string { return h.Root.History()[0].Content }
+
+	// 空目录：关闭默认加载，提示词无技能清单，工具仍齐备
+	h := build(tools.NewSkillCatalog())
+	if sys := system(h); strings.Contains(sys, "可用技能") {
+		t.Fatalf("empty skill catalog should not inject skill list, got %q", sys)
+	}
+	if err := h.VerifyAllToolsRegistered(); err != nil {
+		t.Fatalf("skill tool must stay registered with empty catalog: %v", err)
+	}
+	h.Close()
+
+	// 自定义目录：只列自带技能，不收工作区目录
+	cat := tools.NewSkillCatalog()
+	cat.Add("自带技能", "# Custom\n自定义技能正文")
+	h2 := build(cat)
+	defer h2.Close()
+	sys := system(h2)
+	if !strings.Contains(sys, "自带技能") {
+		t.Fatalf("custom catalog should be listed, got %q", sys)
+	}
+	if strings.Contains(sys, "demo") {
+		t.Fatalf("workspace skills must not load when catalog overridden, got %q", sys)
+	}
+
+	// nil 保持默认：收录工作区技能
+	h3 := build(nil)
+	defer h3.Close()
+	if sys := system(h3); !strings.Contains(sys, "demo") {
+		t.Fatalf("default loading should pick up workspace skills, got %q", sys)
+	}
+}
+
 func TestRunLoopExecutesTool(t *testing.T) {
 	ws := t.TempDir()
 	os.WriteFile(filepath.Join(ws, "hello.txt"), []byte("你好 world\n"), 0o644)

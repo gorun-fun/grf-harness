@@ -31,6 +31,7 @@ type Options struct {
 	SystemPrompt  string                    // 自定义静态提示词；空用配置文件/内置
 	DepthLimit    int                       // 子代理深度上限
 	DisabledTools []string                  // 按场景禁用的工具名
+	Skills        *tools.SkillCatalog       // 技能目录；nil 自动加载默认目录，非 nil 完全替换（空目录即关闭技能）
 	VerboseEvents func(kind, detail string) // 全部事件回调（挂到根 agent；RunTask 会覆盖，见其注释）
 	OnToolEvent   func(agent.ToolEvent)     // 结构化工具事件回调（挂到根 agent，子代理事件也回流；见 docs/integration.md §5）
 
@@ -74,6 +75,7 @@ func New(opts Options) (*App, error) {
 		SystemPrompt:  sysPrompt,
 		DepthLimit:    opts.DepthLimit,
 		DisabledTools: opts.DisabledTools,
+		Skills:        opts.Skills,
 	})
 	if err != nil {
 		return nil, err
