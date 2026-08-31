@@ -14,8 +14,8 @@
 //	gh version             版本与当前生效配置
 //
 // 子命令实现按功能线条分文件：chat.go（三种默认形态）、settings_cmd.go
-// （model/config/version）、connect.go（weixin 守护进程）、server_cmd.go
-// （Responses API 服务）。
+// （model/config/version）、server_cmd.go（Responses API 服务）；
+// connect/disconnect weixin 在 weixin 包（weixin/connect.go）。
 package main
 
 import (
@@ -26,6 +26,7 @@ import (
 
 	"git.gorun.fun/share/grf-harness/app"
 	"git.gorun.fun/share/grf-harness/term"
+	"git.gorun.fun/share/grf-harness/weixin"
 )
 
 func main() {
@@ -39,10 +40,10 @@ func main() {
 			runConfigCmd(args[1:])
 			return
 		case "connect":
-			runConnectCmd(args[1:])
+			weixin.Connect(args[1:])
 			return
 		case "disconnect":
-			runDisconnectCmd(args[1:])
+			weixin.Disconnect(args[1:])
 			return
 		case "server":
 			runServerCmd(args[1:])

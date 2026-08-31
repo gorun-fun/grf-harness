@@ -67,8 +67,9 @@ ANSI→验证帧），历史会话输出落在 `.grf/sessions/`。
 - `server`：Responses API 接入层（ORS 兼容；会话盘上为真、SSE 事件桥、
   client function tools、暂停应答链式续交、compact），`gh server` 子命令。
 - `weixin`：微信 ClawBot 消息渠道（`gh connect weixin` 拉起守护进程，日志在
-  `~/.grf/weixin.log`；消息由本地 agent 回答）。守护进程生命周期管理在根目录
-  `connect.go` + 平台文件 `daemon_unix.go`/`daemon_other.go`（package main）。
+  `~/.grf/weixin.log`；消息由本地 agent 回答）。守护进程生命周期管理也在本包：
+  `connect.go` 的 `Connect`/`Disconnect` + 平台文件 `daemon_unix.go`/`daemon_other.go`
+  （根目录 main.go 只做子命令分发）。
 
 ## 关键约定与坑
 
