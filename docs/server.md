@@ -79,8 +79,7 @@ gh server [-addr 127.0.0.1:7400] [-data ~/.grf/server] [-token <t>]
 
 ```json
 {"grf:session": {
-  "sandbox": "off",            // off | workspace-write
-  "fs_policy": "observe",      // observe | off
+  "policy": "write-workspace|read-workspace",  // 统一规则串，默认全开 | off
   "auto_approve": true,        // 沙箱升级/计划审批的默认值（见 §7）
   "system_prompt": "…",        // 等同 instructions 的会话级版本
   "max_steps": 100,

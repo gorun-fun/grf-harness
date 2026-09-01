@@ -61,10 +61,9 @@ type Chat struct {
 	cancel   context.CancelFunc
 	quitAt   time.Time // 空闲时首次 Ctrl+C 的时间（时限内再按才退出）
 
-	// 弹窗/模态（互斥，非 nil 即捕获按键）
-	pop  *popup      // 模型/会话列表选择
-	ask  *askForm    // ask_user_question 表单
-	escv *escApprove // 沙箱升审批
+	// 弹窗/模态（互斥，非 nil 即捕获按键；沙箱升级/工具/计划审批均复用 ask）
+	pop *popup   // 模型/会话列表选择
+	ask *askForm // ask_user_question 表单
 
 	hintIdx int // 指令提示选中
 

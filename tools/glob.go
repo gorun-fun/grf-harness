@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-func registerGlob(r *Registry, workspace string, artifacts *Artifacts) {
+func registerGlob(r *Registry, workspace string, fs *FsPolicy, artifacts *Artifacts) {
 	r.Register("glob", func(ctx context.Context, args string) (Result, error) {
 		var a struct {
 			Pattern string `json:"pattern"`
@@ -27,6 +27,10 @@ func registerGlob(r *Registry, workspace string, artifacts *Artifacts) {
 		}
 		base := workspace
 		if a.Path != "" {
+			// 显式指定搜索根时做读边界校验（默认根就是工作区，无须校验）
+			if _, err := fs.CheckRead(a.Path); err != nil {
+				return Result{}, err
+			}
 			base = a.Path
 		}
 		matches, err := GlobFiles(a.Pattern, base)

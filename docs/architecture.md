@@ -83,9 +83,9 @@ weixin 的 agentPool）。
 
 ### 3.4 观察策略与沙箱升级（tools/fspolicy.go、bash.go）
 
-- `fs_policy=observe`（默认）：write/edit 覆写**已存在**文件前需本会话
+- `write-workspace`（统一规则串 policy 默认之一）：write/edit 覆写**已存在**文件前需本会话
   read 过（os.Stat 区分新建）。
-- `sandbox=workspace-write`（macOS sandbox-exec）：越界写返回
+- `sandbox=write-workspace`（macOS sandbox-exec）：越界写返回
   `[sandbox: file access denied]` 标记，一次性升级重试协议
   （`sandbox_permissions` + `justification` → `Host.ApproveEscalation`）。
 - 路径解析：文件工具的相对路径相对**工作区**，不是进程 CWD。

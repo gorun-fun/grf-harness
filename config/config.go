@@ -22,17 +22,66 @@ type Provider struct {
 }
 
 // Settings 配置文件结构。Default 形如 "provider/model"（按第一个 / 拆分）。
-// Sandbox: "off"（默认，不做文件沙箱）| "workspace-write"（限制写工作区）。
-// FsPolicy: "observe"（默认，写/改前需先 read）| "off"。
+// Policy: 统一规则串（竖线组合，sandbox 与文件策略共用一套 token）；
+// 解析出错回退 write-workspace——
+//   write-workspace  仅写工作区：bash OS 级沙箱（macOS）+ 写前先读
+//                    （文件工具的写边界本就无条件生效，不受此控制）
+//   read-workspace   仅读工作区：read/glob/grep/read_image 的读边界
+//   off              不禁止（写边界除外，架构性保留）
+// 空或解析不正确 = 安全默认 "write-workspace|read-workspace"（全开）。
+// 解析见 ParsePolicy / NormalizePolicy。
 type Settings struct {
 	Providers    map[string]*Provider `json:"providers"`
 	Default      string               `json:"default,omitempty"`
 	Mouse        *bool                `json:"mouse,omitempty"`
 	SystemPrompt string               `json:"system_prompt,omitempty"`
 	MaxSteps     int                  `json:"max_steps,omitempty"`
-	Sandbox      string               `json:"sandbox,omitempty"`
-	FsPolicy     string               `json:"fs_policy,omitempty"`
+	Policy       string               `json:"policy,omitempty"`
 	AutoApprove  bool                 `json:"auto_approve,omitempty"` // 非交互时自动批准沙箱升级/计划
+}
+
+// ParsePolicy 解析统一规则串（竖线组合）：write-workspace（写侧保护）、
+// read-workspace（读边界）。空值 = 安全默认全开；"off" = 全关；含至少一个
+// 合法 token 时按 token 显式生效；一个都不认识视为解析出错，回退
+// write-workspace（保写侧，读侧放开）。
+func ParsePolicy(v string) (writeLimit, readLimit bool) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return true, true
+	}
+	if v == "off" {
+		return false, false
+	}
+	seen := false
+	for _, t := range strings.Split(v, "|") {
+		switch strings.TrimSpace(t) {
+		case "write-workspace":
+			writeLimit = true
+			seen = true
+		case "read-workspace":
+			readLimit = true
+			seen = true
+		}
+	}
+	if !seen {
+		return true, false // 解析出错回退 write-workspace
+	}
+	return
+}
+
+// NormalizePolicy 归一规则串（非法回退默认），用于展示与落盘。
+func NormalizePolicy(v string) string {
+	w, r := ParsePolicy(v)
+	switch {
+	case w && r:
+		return "write-workspace|read-workspace"
+	case w:
+		return "write-workspace"
+	case r:
+		return "read-workspace"
+	default:
+		return "off"
+	}
 }
 
 // Effective 运行时生效的配置。
@@ -82,11 +131,13 @@ func LoadFileForUpdate() (*Settings, error) {
 	if s.Providers == nil {
 		s.Providers = map[string]*Provider{}
 	}
-	if s.Sandbox == "" {
-		s.Sandbox = "off"
-	}
-	if s.FsPolicy == "" {
-		s.FsPolicy = "observe"
+	if s.Policy == "" {
+		s.Policy = "write-workspace|read-workspace"
+	} else if n := NormalizePolicy(s.Policy); n != strings.TrimSpace(s.Policy) {
+		// 解析出错（回退 write-workspace）或含多余空白：修正后回写文件，
+		// 避免每次加载都重新走回退
+		s.Policy = n
+		_ = s.Save()
 	}
 	return s, nil
 }

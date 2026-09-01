@@ -19,8 +19,8 @@ func RegisterFs(r *Registry, workspace string, fs *FsPolicy, artifacts *Artifact
 	registerRead(r, fs)
 	registerWrite(r, fs)
 	registerEdit(r, fs)
-	registerGlob(r, workspace, artifacts)
-	registerGrep(r, workspace, artifacts)
+	registerGlob(r, workspace, fs, artifacts)
+	registerGrep(r, workspace, fs, artifacts)
 }
 
 // ---- read ----
@@ -47,9 +47,12 @@ func registerRead(r *Registry, fs *FsPolicy) {
 		if a.Limit > 5000 {
 			a.Limit = 5000
 		}
-		// stat 解析后的路径：相对路径相对工作区（与下方 ReadFile 一致），
-		// 直接 stat 原始路径会相对进程 CWD，工作区文件被误判不存在
-		absPath := fs.resolve(a.FilePath)
+		// 读边界校验（policy 的 read-workspace 拒绝工作区外路径），在
+		// stat 之前——避免对越界路径泄漏"存在与否"
+		absPath, err := fs.CheckRead(a.FilePath)
+		if err != nil {
+			return Result{}, err
+		}
 		info, err := os.Stat(absPath)
 		if err != nil {
 			return Result{}, err
@@ -121,10 +124,11 @@ func registerWrite(r *Registry, fs *FsPolicy) {
 				return Result{}, fmt.Errorf("escalation did not grant access")
 			}
 			// 升级通过：跳过边界与观察策略
-		} else {
-			_, err := fs.CheckWrite(a.FilePath, true)
-			if err != nil {
-				return Result{}, err
+		} else if _, werr := fs.CheckWrite(a.FilePath, true); werr != nil {
+			// 越权即问：写边界拒绝时挂起征求宿主批准（仅边界拒绝，
+			// 观察策略的"先读后写"不问），批准则当次放行
+			if !fs.AskAndEscalate("write", abs, "danger-full-access", "写入工作区外: "+a.FilePath) {
+				return Result{}, werr
 			}
 		}
 		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
@@ -169,8 +173,10 @@ func registerEdit(r *Registry, fs *FsPolicy) {
 				return Result{}, fmt.Errorf("escalation did not grant access")
 			}
 		} else {
-			if _, err := fs.CheckWrite(a.FilePath, true); err != nil {
-				return Result{}, err
+			if _, werr := fs.CheckWrite(a.FilePath, true); werr != nil {
+				if !fs.AskAndEscalate("edit", abs, "danger-full-access", "修改工作区外: "+a.FilePath) {
+					return Result{}, werr
+				}
 			}
 		}
 		data, err := os.ReadFile(abs)

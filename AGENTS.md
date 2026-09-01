@@ -21,7 +21,7 @@ go test ./...             # 无需网络与 API key（agent 回环用 httptest �
 go test -race ./agent ./tools ./term ./js ./llm ./server
 ```
 
-注意：本机 `~/.grf/settings.json` 已有可用的真实模型端点，直接 `./gh "任务"`
+注意：本机 `~/.grf/grants.json` 已有可用的真实模型端点，直接 `./gh "任务"`
 即可做端到端冒烟；全屏 UI 冒烟可用 python3 pty.fork 驱动（打字→截图式解析
 ANSI→验证帧），历史会话输出落在 `.grf/sessions/`。
 
@@ -95,13 +95,23 @@ ANSI→验证帧），历史会话输出落在 `.grf/sessions/`。
   审批模式 = 每个工具执行前经 `Host.ApproveTool`
   （TUI 复用 ask 选项表单；server 转 `tool_approval` 暂停点）。
 - 路径解析：文件工具的相对路径相对**工作区**（`FsPolicy.resolve`），不是进程
-  CWD。macOS 上 t.TempDir() 在 /var（符号链接到 /private/var），边界判断不做
-  symlink 展开，测试时两边要用同一路径构造。
-- 观察策略（fs_policy=observe，默认）：write/edit 覆写**已存在**文件前需本会话
-  read 过；新建文件不受限（`CheckWrite` 里用 os.Stat 区分）。
-- 沙箱：`sandbox=off` 为默认；`workspace-write` 仅在 macOS 用 sandbox-exec，
-  拒绝标记 `[sandbox: file access denied ...]` + 一次性升级重试协议
-  （sandbox_permissions+justification → Host.ApproveEscalation）。
+  CWD。边界判断按 `EvalSymlinks` 展开后的真实路径进行（工作区本身也归一，
+  `FsPolicy.wsReal`，防区内链接指向外部的穿越），macOS 的 /var →
+  /private/var 两侧都会被接受。
+- 统一规则串 `policy`（竖线组合，原 sandbox+fs_policy 已合并）：
+  `write-workspace`（写侧：bash 仅 macOS 用 sandbox-exec 限写工作区 +
+  write/edit 覆写前须先 read，新建文件不受限）| `read-workspace`（读边界：文件工具 `FsPolicy.CheckRead` 硬拒绝、
+  不接升级协议；bash 沙箱叠加读黑名单——deny `/Users` `/root` `/home`
+  后 allow 工作区，因 macOS 默认拒绝读会 SIGABRT 只能黑名单）。空值=安全默认全开；解析出错回退 `write-workspace`（保写侧）；
+  `off` 全关。解析在
+  `config.ParsePolicy/NormalizePolicy`。写边界（文件工具只写工作区）
+  无条件生效不受 policy 控制；bash 越界拒绝标记 `[sandbox: file access
+  denied ...]`；越权即问——写边界/bash 沙箱拒绝时 harness 直接挂起问
+  `Host.ApproveEscalation` 返回 `EscalationDecision`（批准=当次放行，bash
+  脱沙箱重跑同一命令；拒绝=终局，记录消费掉，模型带 sandbox_permissions
+  重试也不会二次询问；write/edit 可选 GrantDir=授权目录，持久化到工作区
+  `.grf/grants.json` 仅本工作区生效，该目录下后续写越过写边界不再询问）。多租户用户隔离：Workspace=用户文件夹 +
+  默认 policy + 禁 bash + Host.ApproveEscalation 恒 false。
 - llm 有两条正文回退工具调用解析（`<tool_call>` XML 与 DeepSeek DSML），
   标记常量与变体归一正则统一在 `llm/fallback_tags.go`——三处（两个解析器 +
   stream_display 过滤）必须共用，勿再各写一套。

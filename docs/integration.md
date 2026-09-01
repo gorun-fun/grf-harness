@@ -59,8 +59,8 @@ a, err := app.New(app.Options{
     OnToolEvent:   func(e agent.ToolEvent) { /* 见 §5，重建工具时间线用 */ },
 
     // 运行策略覆盖：仅本次构建生效、不落盘；不设则沿用配置文件
-    Sandbox:     "workspace-write",         // "off" | "workspace-write"
-    FsPolicy:    "observe",                 // "observe" | "off"
+    Sandbox:     "write-workspace",         // "off" | "write-workspace"
+    Policy:      "write-workspace|read-workspace", // 统一规则串，默认全开
     AutoApprove: &autoYes,                  // *bool；非交互自动批准
 })
 if err != nil { ... }
@@ -351,7 +351,7 @@ stdout（无结构化边界）——需要结构化输出请用上面的 HTTP �
   `VerboseEvents` 投递到单一 goroutine 消费（参考 tui 的 events 通道模式）。
 - **路径**：文件工具的相对路径相对**工作区**（`Options.Workspace`），
   不是进程 CWD。
-- **观察策略**：默认 `fs_policy=observe` 下，write/edit 覆写已存在文件
+- **观察策略**：默认 `write-observe` 开启下，write/edit 覆写已存在文件
   前要求本会话 read 过；新建文件不受限。
 - **回话文本**：回复不做 markdown 渲染，事件/结果均为原始文本。
 - **会话持久化**：`a.SaveSession()` 手动保存；`a.AutoSave()` 回合结束

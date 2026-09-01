@@ -120,8 +120,9 @@ func downscale(img image.Image, maxDim int) image.Image {
 	return dst
 }
 
-// RegisterReadImage 注册 read_image 工具。
-func RegisterReadImage(r *Registry) {
+// RegisterReadImage 注册 read_image 工具。fs 用于读边界校验
+// （policy 的 read-workspace 拒绝工作区外路径；可为 nil，跳过校验）。
+func RegisterReadImage(r *Registry, fs *FsPolicy) {
 	r.Register("read_image", func(ctx context.Context, args string) (Result, error) {
 		var a struct {
 			FilePath string `json:"file_path"`
@@ -131,6 +132,11 @@ func RegisterReadImage(r *Registry) {
 		}
 		if a.FilePath == "" {
 			return Result{}, fmt.Errorf("file_path is required")
+		}
+		if fs != nil {
+			if _, err := fs.CheckRead(a.FilePath); err != nil {
+				return Result{}, err
+			}
 		}
 		mime, b64, err := ReadImageFile(a.FilePath)
 		if err != nil {

@@ -8,7 +8,7 @@
 //	gh                     全屏交互（-resume 恢复上次会话，-plan 计划模式）
 //	gh <任务描述>          单任务模式：流式直出，完成后退出
 //	gh model               模型配置页（TTY 全屏；model set/list 脚本化）
-//	gh config [...]        配置摘要 / prompt / steps / sandbox / fspolicy
+//	gh config [...]        配置摘要 / prompt / steps / policy
 //	gh connect weixin      连接微信 ClawBot(后台守护进程);disconnect 停止
 //	gh server              启动 Responses API 接入服务(ORS 兼容)
 //	gh version             版本与当前生效配置
@@ -88,8 +88,7 @@ const usageText = `grf-harness %s - 零依赖终端 agent harness（gh）
   gh config              配置摘要
   gh config prompt [set|reset]      自定义系统提示词
   gh config steps [n|reset]         工具循环轮次上限
-  gh config sandbox [off|workspace-write]  bash 文件沙箱
-  gh config fspolicy [observe|off]         写前先读策略
+  gh config policy [write-workspace|read-workspace|off]  统一规则串（默认全开）
   gh connect weixin      连接微信 ClawBot(后台守护进程,消息由本地 agent 回答)
   gh disconnect weixin   断开并停止微信 ClawBot 守护进程
   gh server              启动 Responses API 接入服务(ORS 兼容,默认 127.0.0.1:7400)

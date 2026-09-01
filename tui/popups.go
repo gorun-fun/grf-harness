@@ -154,40 +154,8 @@ func (f *askForm) finishQuestion() {
 	}
 }
 
-// ---- 沙箱升审批 / 工具审批 ----
-
-type escApprove struct {
-	title                              string // 空 = 沙箱升级审批
-	tool, command, mode, justification string
-	approve                            func(bool)
-}
-
-func (f *escApprove) render(w int) []string {
-	if f.title == "" {
-		f.title = "沙箱升级审批"
-	}
-	lines := []string{dim("── " + f.title + " ──")}
-	rows := [][2]string{
-		{"工具", f.tool},
-		{"模式", f.mode},
-		{"参数", f.command},
-		{"理由", f.justification},
-	}
-	for _, r := range rows {
-		if r[1] == "" {
-			continue
-		}
-		for i, ln := range term.Wrap(r[1], w-12) {
-			prefix := "  " + r[0] + ": "
-			if i > 0 {
-				prefix = "      "
-			}
-			lines = append(lines, clipRunesT(prefix+ln, w))
-		}
-	}
-	lines = append(lines, dim("  y 批准（仅此一次）· n / Esc 拒绝"))
-	return lines
-}
+// ---- 工具审批 ----
+// （沙箱升级审批已复用 ask 表单，见 host.go 的 escRequest 分支）
 
 // fmt 引用（render 中使用）
 var _ = strings.TrimSpace

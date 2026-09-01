@@ -93,8 +93,7 @@ func runConfigCmd(args []string) {
 		} else {
 			fmt.Printf("循环轮次上限: %d（默认）\n", agent.DefaultMaxSteps)
 		}
-		fmt.Printf("bash 沙箱: %s\n", s.Sandbox)
-		fmt.Printf("写前先读策略: %s\n", s.FsPolicy)
+		fmt.Printf("策略: %s\n", s.Policy)
 		fmt.Printf("非交互自动批准: %v\n", s.AutoApprove)
 		if s.SystemPrompt != "" {
 			fmt.Println("提示词: 自定义（gh config prompt 预览）")
@@ -108,10 +107,8 @@ func runConfigCmd(args []string) {
 		runPromptCmd(args[1:], s)
 	case "steps":
 		runStepsCmd(args[1:], s)
-	case "sandbox":
-		runChoiceCmd(args[1:], s, "sandbox", "bash 文件沙箱", []string{"off", "workspace-write"})
-	case "fspolicy":
-		runChoiceCmd(args[1:], s, "fs_policy", "写前先读策略", []string{"observe", "off"})
+	case "policy":
+		runPolicyCmd(args[1:], s)
 	case "autoapprove":
 		s.AutoApprove = len(args) < 2 || args[1] != "0" && args[1] != "false"
 		if err := s.Save(); err != nil {
@@ -152,45 +149,26 @@ func runStepsCmd(args []string, s *config.Settings) {
 	fmt.Printf("循环轮次上限已设为 %d\n", n)
 }
 
-func runChoiceCmd(args []string, s *config.Settings, field, name string, allowed []string) {
-	get := func() string {
-		if field == "sandbox" {
-			if s.Sandbox == "" {
-				return allowed[0]
-			}
-			return s.Sandbox
-		}
-		if s.FsPolicy == "" {
-			return allowed[0]
-		}
-		return s.FsPolicy
-	}
-	set := func(v string) {
-		if field == "sandbox" {
-			s.Sandbox = v
-		} else {
-			s.FsPolicy = v
-		}
+// runPolicyCmd 统一规则串设置：write-workspace | read-workspace 竖线组合，
+// "off" 全关；非法值归一为默认全开；不带参数显示当前值。
+func runPolicyCmd(args []string, s *config.Settings) {
+	cur := s.Policy
+	if cur == "" {
+		cur = config.NormalizePolicy("")
 	}
 	if len(args) == 0 {
-		fmt.Printf("%s: %s（可选: %s）\n", name, get(), strings.Join(allowed, " | "))
+		fmt.Printf("策略: %s（可选: write-workspace | read-workspace 组合，off 全关；非法值回退默认）\n", cur)
 		return
 	}
-	v := args[0]
-	ok := false
-	for _, a := range allowed {
-		if a == v {
-			ok = true
-		}
+	v := config.NormalizePolicy(args[0])
+	if args[0] != v && args[0] != "" {
+		fmt.Printf("（%q 解析出错，已回退 write-workspace）\n", args[0])
 	}
-	if !ok {
-		fatal(fmt.Errorf("%s 可选值: %s", name, strings.Join(allowed, " | ")))
-	}
-	set(v)
+	s.Policy = v
 	if err := s.Save(); err != nil {
 		fatal(err)
 	}
-	fmt.Printf("%s已设为 %s\n", name, v)
+	fmt.Printf("策略已设为 %s\n", v)
 }
 
 func runPromptCmd(args []string, s *config.Settings) {

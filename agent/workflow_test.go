@@ -14,7 +14,7 @@ import (
 func wfHarness(t *testing.T, responses []string) (*Harness, *fakeLLM) {
 	t.Helper()
 	f := newFakeLLM(responses)
-	st := &config.Settings{Sandbox: "off", FsPolicy: "observe"}
+	st := &config.Settings{Policy: "write-workspace"}
 	h, err := Build(Options{
 		Workspace: t.TempDir(),
 		Client:    llm.NewClient(llm.Config{BaseURL: f.URL(), APIKey: "t", Model: "m"}),

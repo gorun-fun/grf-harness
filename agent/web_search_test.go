@@ -42,7 +42,7 @@ func TestWebSearchLoop(t *testing.T) {
 	h, err := Build(Options{
 		Workspace: t.TempDir(),
 		Client:    llm.NewClient(llm.Config{BaseURL: srv.URL, APIKey: "t", Model: "m"}),
-		Settings:  &config.Settings{Sandbox: "off", FsPolicy: "observe"},
+		Settings:  &config.Settings{Policy: "write-workspace"},
 		Host:      &tools.NoopHost{},
 	})
 	if err != nil {

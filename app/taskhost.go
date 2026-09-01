@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -107,15 +108,26 @@ func optionAnswer(q tools.Question, line string) any {
 	return labels
 }
 
-func (h *TaskHost) ApproveEscalation(ctx context.Context, tool, command, mode, justification string) bool {
+func (h *TaskHost) ApproveEscalation(ctx context.Context, tool, key, mode, justification string) tools.EscalationDecision {
 	if h.AutoApprove || !h.ttyOut || !term.IsTTY(int(os.Stdin.Fd())) {
-		return h.AutoApprove
+		return tools.EscalationDecision{Approved: h.AutoApprove}
 	}
-	fmt.Printf("\n⚠ 沙箱升级请求 [%s → %s]\n命令: %s\n理由: %s\n批准? [y/N] ", tool, mode, command, justification)
+	hint := "\n批准? [y]仅此一次  [N]拒绝: "
+	if tool == "write" || tool == "edit" {
+		hint = "\n批准? [y]仅此一次  [d]批准并授权目录 " + filepath.Dir(key) + "  [N]拒绝: "
+	}
+	fmt.Printf("\n⚠ 沙箱升级请求 [%s → %s]\n资源: %s\n理由: %s%s", tool, mode, key, justification, hint)
 	rd := bufio.NewReader(os.Stdin)
 	line, _ := rd.ReadString('\n')
 	line = strings.ToLower(strings.TrimSpace(line))
-	return line == "y" || line == "yes"
+	switch {
+	case line == "y" || line == "yes":
+		return tools.EscalationDecision{Approved: true}
+	case (line == "d" || line == "dir") && (tool == "write" || tool == "edit"):
+		return tools.EscalationDecision{Approved: true, GrantDir: filepath.Dir(key)}
+	default:
+		return tools.EscalationDecision{}
+	}
 }
 
 func (h *TaskHost) ApproveTool(ctx context.Context, name, args string) tools.ApproveDecision {

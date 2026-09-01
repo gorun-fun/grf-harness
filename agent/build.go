@@ -176,9 +176,16 @@ func (h *Harness) systemPromptFor(subagent bool, label, override string) string 
 	}, override)
 }
 
-// newFsPolicy 按配置构建文件策略（fs_policy=observe 默认开启）。
+// policyLimit 解析统一规则串（config.ParsePolicy），一次取回写/读限制开关。
+func (h *Harness) policyLimit() (writeLimit, readLimit bool) {
+	return config.ParsePolicy(h.Settings.Policy)
+}
+
+// newFsPolicy 按统一规则串构建文件策略（见 config.ParsePolicy）：
+// write-workspace → 写前先读；read-workspace → 读边界；空值安全默认全开。
 func (h *Harness) newFsPolicy(host tools.Host) *tools.FsPolicy {
-	return tools.NewFsPolicy(h.root, h.Settings.FsPolicy != "off", host)
+	writeLimit, readLimit := h.policyLimit()
+	return tools.NewFsPolicy(h.root, writeLimit, readLimit, host)
 }
 
 // registerTools 为 agent 注册其可用工具。root=true 注册全部 26 个；
@@ -187,15 +194,17 @@ func (h *Harness) newFsPolicy(host tools.Host) *tools.FsPolicy {
 func (h *Harness) registerTools(a *Agent, root bool) {
 	r := a.reg
 	env := h.managedEnv()
+	writeLimit, readLimit := h.policyLimit()
 
 	tools.RegisterFs(r, h.root, h.Fs, h.Artifacts)
-	tools.RegisterReadImage(r)
+	tools.RegisterReadImage(r, h.Fs)
 	tools.RegisterBash(r, tools.BashDeps{
 		Workspace: h.root,
-		Host:      a.host,
+		Host:      func() tools.Host { return a.host }, // 懒取：SetHost 后生效
 		Jobs:      a.Jobs,
 		Artifacts: h.Artifacts,
-		SandboxOn: h.Settings.Sandbox == "workspace-write",
+		SandboxOn: writeLimit,
+		ReadLimit: readLimit,
 		Env:       env,
 	})
 	tools.RegisterJobTools(r, a.Jobs)

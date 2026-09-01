@@ -15,7 +15,7 @@ import (
 
 func newTestPolicy(t *testing.T, workspace string) *FsPolicy {
 	t.Helper()
-	return NewFsPolicy(workspace, true, &NoopHost{})
+	return NewFsPolicy(workspace, true, false, &NoopHost{})
 }
 
 func TestSpecCovers26Tools(t *testing.T) {
@@ -58,7 +58,7 @@ func TestReadWriteEdit(t *testing.T) {
 	}
 	// 未读过的既有文件不可直接写（观察策略）
 	os.WriteFile(filepath.Join(dir, "b.txt"), []byte("x"), 0o644)
-	fs2 := NewFsPolicy(dir, true, &NoopHost{})
+	fs2 := NewFsPolicy(dir, true, false, &NoopHost{})
 	r2 := NewRegistry()
 	RegisterFs(r2, dir, fs2, art)
 	res = r2.Execute(context.Background(), "write", mustJSON(t, map[string]any{"file_path": "b.txt", "content": "y"}))

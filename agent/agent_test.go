@@ -77,7 +77,7 @@ func (f *fakeLLM) Close() { f.srv.Close() }
 
 func buildTestHarness(t *testing.T, f *fakeLLM, ws string) *Harness {
 	t.Helper()
-	st := &config.Settings{Sandbox: "off", FsPolicy: "observe"}
+	st := &config.Settings{Policy: "write-workspace"}
 	h, err := Build(Options{
 		Workspace: ws,
 		Client:    llm.NewClient(llm.Config{BaseURL: f.URL(), APIKey: "t", Model: "test-model"}),
@@ -109,7 +109,7 @@ func TestDisabledTools(t *testing.T) {
 	h, err := Build(Options{
 		Workspace:     t.TempDir(),
 		Client:        llm.NewClient(llm.Config{BaseURL: f.URL(), APIKey: "t", Model: "test-model"}),
-		Settings:      &config.Settings{Sandbox: "off", FsPolicy: "observe"},
+		Settings:      &config.Settings{Policy: "write-workspace"},
 		Host:          &tools.NoopHost{},
 		DisabledTools: []string{"bash", "web_search", "not_a_tool"},
 	})
@@ -153,7 +153,7 @@ func TestSkillsOverride(t *testing.T) {
 		t.Helper()
 		h, err := Build(Options{
 			Workspace: ws,
-			Settings:  &config.Settings{Sandbox: "off", FsPolicy: "observe"},
+			Settings:  &config.Settings{Policy: "write-workspace"},
 			Host:      &tools.NoopHost{},
 			Skills:    cat,
 		})
@@ -452,7 +452,7 @@ func TestRunLoopOrphanUserRolledBack(t *testing.T) {
 	}))
 	defer srv.Close()
 	ws := t.TempDir()
-	st := &config.Settings{Sandbox: "off", FsPolicy: "observe"}
+	st := &config.Settings{Policy: "write-workspace"}
 	h, err := Build(Options{
 		Workspace: ws,
 		Client:    llm.NewClient(llm.Config{BaseURL: srv.URL, APIKey: "t", Model: "m"}),
@@ -502,7 +502,7 @@ func buildHarnessWithHost(t *testing.T, f *fakeLLM, ws string, host tools.Host) 
 	h, err := Build(Options{
 		Workspace: ws,
 		Client:    llm.NewClient(llm.Config{BaseURL: f.URL(), APIKey: "t", Model: "test-model"}),
-		Settings:  &config.Settings{Sandbox: "off", FsPolicy: "observe"},
+		Settings:  &config.Settings{Policy: "write-workspace"},
 		Host:      host,
 	})
 	if err != nil {
@@ -716,7 +716,7 @@ func TestPlanApprovalSwitchesMode(t *testing.T) {
 		h, err := Build(Options{
 			Workspace: t.TempDir(),
 			Client:    llm.NewClient(llm.Config{BaseURL: f.URL(), APIKey: "t", Model: "test-model"}),
-			Settings:  &config.Settings{Sandbox: "off", FsPolicy: "observe"},
+			Settings:  &config.Settings{Policy: "write-workspace"},
 			Host:      &planHost{ok: ok},
 		})
 		if err != nil {
@@ -799,7 +799,7 @@ func TestEnterPlanModeApproved(t *testing.T) {
 	h, err := Build(Options{
 		Workspace: ws,
 		Client:    llm.NewClient(llm.Config{BaseURL: f.URL(), APIKey: "t", Model: "test-model"}),
-		Settings:  &config.Settings{Sandbox: "off", FsPolicy: "observe"},
+		Settings:  &config.Settings{Policy: "write-workspace"},
 		Host:      &askApproveHost{},
 	})
 	if err != nil {
@@ -850,7 +850,7 @@ func TestEnterPlanModeFeedback(t *testing.T) {
 	h, err := Build(Options{
 		Workspace: t.TempDir(),
 		Client:    llm.NewClient(llm.Config{BaseURL: f.URL(), APIKey: "t", Model: "test-model"}),
-		Settings:  &config.Settings{Sandbox: "off", FsPolicy: "observe"},
+		Settings:  &config.Settings{Policy: "write-workspace"},
 		Host:      &askTextHost{text: "先按现有架构来，不用计划"},
 	})
 	if err != nil {

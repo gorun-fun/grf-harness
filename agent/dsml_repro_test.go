@@ -43,7 +43,7 @@ func TestDSMLGoalContinuationCancelable(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	st := &config.Settings{Sandbox: "off", FsPolicy: "observe"}
+	st := &config.Settings{Policy: "write-workspace"}
 	h, err := Build(Options{
 		Workspace: t.TempDir(),
 		Client:    llm.NewClient(llm.Config{BaseURL: srv.URL, APIKey: "t", Model: "test-model"}),

@@ -29,14 +29,22 @@ type ApproveDecision struct {
 	Feedback string // 未批准时的用户反馈（可空）；非空时随拒绝原因作为工具结果回给模型
 }
 
+// EscalationDecision 升级审批结果。
+type EscalationDecision struct {
+	Approved bool
+	GrantDir string // 非空 = 同时授权该目录（仅本工作区）
+}
+
 // Host 宿主回调：交互能力（提问/审批）与事件通知。
 type Host interface {
 	// AskUser 展示问题并等待用户作答。返回值须为每个 id 对应的答案
 	// （字符串，或多选时的 []string）；用户取消返回 error。
 	AskUser(ctx context.Context, qs []Question) (map[string]any, error)
-	// ApproveEscalation 沙箱升级审批：同一命令被沙箱拒绝后重试时征求
-	// 用户同意。返回是否放行。
-	ApproveEscalation(ctx context.Context, tool, command, mode, justification string) bool
+	// ApproveEscalation 沙箱升级审批：工具被边界拒绝后征求用户同意。
+	// decision.Approved 是否放行；GrantDir 非空表示同时授权该目录
+	// （持久化到工作区 .grf/grants.json，仅本工作区生效，之后该目录下
+	// 的写操作不再询问）。
+	ApproveEscalation(ctx context.Context, tool, key, mode, justification string) EscalationDecision
 	// ApprovePlan 计划审批：返回 (是否批准, 用户反馈文本)。反馈仅在未
 	// 批准时使用。
 	ApprovePlan(ctx context.Context, plan string) (bool, string)
@@ -58,8 +66,8 @@ func (h *NoopHost) AskUser(ctx context.Context, qs []Question) (map[string]any, 
 	return nil, fmt.Errorf("no interactive user is available in this session; proceed without asking, state assumptions in the final answer")
 }
 
-func (h *NoopHost) ApproveEscalation(ctx context.Context, tool, command, mode, justification string) bool {
-	return h.AutoApprove
+func (h *NoopHost) ApproveEscalation(ctx context.Context, tool, key, mode, justification string) EscalationDecision {
+	return EscalationDecision{Approved: h.AutoApprove}
 }
 
 func (h *NoopHost) ApprovePlan(ctx context.Context, plan string) (bool, string) {

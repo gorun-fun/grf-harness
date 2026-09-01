@@ -28,29 +28,78 @@ func testClient() *llm.Client {
 }
 
 func TestPolicyOverrides(t *testing.T) {
-	isolateConfig(t, `{"sandbox":"off","fs_policy":"off","auto_approve":false}`)
+	isolateConfig(t, `{"policy":"off","auto_approve":false}`)
 	yes := true
 	a, err := New(Options{Workspace: t.TempDir(), Client: testClient(),
-		Sandbox: "workspace-write", FsPolicy: "observe", AutoApprove: &yes})
+		Policy: "write-workspace", AutoApprove: &yes})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer a.Close()
 	s := a.Harness.Settings
-	if s.Sandbox != "workspace-write" || s.FsPolicy != "observe" || !s.AutoApprove {
+	if s.Policy != "write-workspace" || !s.AutoApprove {
 		t.Fatalf("overrides not applied: %+v", s)
+	}
+	if a.Harness.Fs.ReadLimit {
+		t.Fatal("explicit write-workspace should turn read boundary off")
+	}
+}
+
+// TestPolicyCombinations 统一规则串的接线（含非法值回退默认）。
+func TestPolicyCombinations(t *testing.T) {
+	isolateConfig(t, "") // 无配置 → 安全默认
+	ws := t.TempDir()
+
+	// 默认：写读限制全开
+	a, err := New(Options{Workspace: ws, Client: testClient()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	if !a.Harness.Fs.Observe || !a.Harness.Fs.ReadLimit {
+		t.Fatalf("default should be write+read-workspace, got %+v", a.Harness.Fs)
+	}
+
+	// 只开读边界
+	a2, err := New(Options{Workspace: ws, Client: testClient(), Policy: "read-workspace"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a2.Close()
+	if a2.Harness.Fs.Observe || !a2.Harness.Fs.ReadLimit {
+		t.Fatalf("read-workspace only: %+v", a2.Harness.Fs)
+	}
+
+	// off 全关（需显式）
+	a3, err := New(Options{Workspace: ws, Client: testClient(), Policy: "off"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a3.Close()
+	if a3.Harness.Fs.Observe || a3.Harness.Fs.ReadLimit {
+		t.Fatalf("off should disable both: %+v", a3.Harness.Fs)
+	}
+
+	// 非法值 → 归一为默认全开
+	a4, err := New(Options{Workspace: ws, Client: testClient(), Policy: "garbage"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a4.Close()
+	if a4.Harness.Settings.Policy != "write-workspace" {
+		t.Fatalf("invalid policy should normalize to write-workspace, got %q", a4.Harness.Settings.Policy)
 	}
 }
 
 func TestPolicyOverridesNilFollowsConfig(t *testing.T) {
-	isolateConfig(t, `{"sandbox":"off","fs_policy":"off"}`)
+	isolateConfig(t, `{"policy":"off"}`)
 	a, err := New(Options{Workspace: t.TempDir(), Client: testClient()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer a.Close()
 	s := a.Harness.Settings
-	if s.Sandbox != "off" || s.FsPolicy != "off" {
+	if s.Policy != "off" {
 		t.Fatalf("nil overrides should follow config file: %+v", s)
 	}
 }

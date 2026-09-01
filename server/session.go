@@ -34,8 +34,7 @@ type sessionMeta struct {
 	Archived      bool      `json:"archived,omitempty"`
 	Workspace     string    `json:"workspace"`
 	SystemPrompt  string    `json:"system_prompt,omitempty"`
-	Sandbox       string    `json:"sandbox,omitempty"`
-	FsPolicy      string    `json:"fs_policy,omitempty"`
+	Policy        string    `json:"policy,omitempty"`
 	AutoApprove   bool      `json:"auto_approve,omitempty"`
 	MaxSteps      int       `json:"max_steps,omitempty"`
 	DisabledTools []string  `json:"disabled_tools,omitempty"`
@@ -166,8 +165,7 @@ func (s *Server) newSession(cfg *grfSessionConfig) (*session, error) {
 	}
 	if cfg != nil {
 		meta.SystemPrompt = cfg.SystemPrompt
-		meta.Sandbox = cfg.Sandbox
-		meta.FsPolicy = cfg.FsPolicy
+		meta.Policy = cfg.Policy
 		meta.MaxSteps = cfg.MaxSteps
 		meta.DisabledTools = cfg.DisabledTools
 		if cfg.AutoApprove != nil {
@@ -193,12 +191,10 @@ func (s *Server) buildSession(meta *sessionMeta) (*session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("构建模型客户端: %w", err)
 	}
-	settings := &config.Settings{Sandbox: "off", FsPolicy: "observe"}
-	if meta.Sandbox != "" {
-		settings.Sandbox = meta.Sandbox
-	}
-	if meta.FsPolicy != "" {
-		settings.FsPolicy = meta.FsPolicy
+	// Policy 空值走 ParsePolicy 的安全默认（写读限制全开）
+	settings := &config.Settings{}
+	if meta.Policy != "" {
+		settings.Policy = config.NormalizePolicy(meta.Policy)
 	}
 	settings.AutoApprove = meta.AutoApprove
 	host := &deferredHost{NoopHost: tools.NoopHost{AutoApprove: meta.AutoApprove}}

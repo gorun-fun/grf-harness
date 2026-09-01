@@ -59,9 +59,6 @@ func (c *Chat) handleKey(k term.KeyEv) bool {
 	if c.ask != nil {
 		return c.askKey(k)
 	}
-	if c.escv != nil {
-		return c.escKey(k)
-	}
 	if c.pop != nil {
 		return c.popKey(k)
 	}

@@ -29,7 +29,7 @@
 - **workflow**：文档规定的 JS 脚本编排（agent/pipeline/parallel/phase/
   log + args + 顶层 await + schema 校验），脚本由内置迷你 JS 解释器执行
 - **ralph**：新鲜代理迭代循环（COMPLETE/BLOCKER 结构化报告）
-- **bash 沙箱**：`workspace-write` 模式下用 macOS sandbox-exec 限制写入
+- **bash 沙箱**：`write-workspace` 模式下用 macOS sandbox-exec 限制写入
   工作区；拒绝后按"一次性重试"协议升级（sandbox_permissions +
   justification + 用户审批）
 - **会话持久化**：`.grf/sessions/` 会话记录，`-resume` / `/resume` 恢复
@@ -53,8 +53,8 @@ gh model list          # 列出已配置 提供商/模型
 gh config              # 配置摘要
 gh config prompt [set|reset]
 gh config steps [n|reset]
-gh config sandbox [off|workspace-write]
-gh config fspolicy [observe|off]
+gh config policy [write-workspace|read-workspace|off]
+
 gh connect weixin      # 连接微信 ClawBot（扫码后转后台守护进程；-workspace 指定工作区）
 gh disconnect weixin   # 停止微信守护进程
 gh server              # 启动 Responses API 服务（ORS 兼容，默认 127.0.0.1:7400；
@@ -96,8 +96,7 @@ gh version
   },
   "default": "deepseek/deepseek-chat",
   "max_steps": 0,
-  "sandbox": "off",
-  "fs_policy": "observe",
+  "policy": "write-workspace|read-workspace",
   "auto_approve": false
 }
 ```
@@ -105,10 +104,9 @@ gh version
 环境变量：`OPENAI_BASE_URL` / `OPENAI_API_KEY` / `GRF_MODEL` 临时覆盖；
 `GRF_MOUSE=0/1` 鼠标开关。
 
-- `sandbox: off | workspace-write` — 后者用 sandbox-exec 限制 bash 写入
-  越界（macOS；无 sandbox-exec 时仅保留升级审批协议）
-- `fs_policy: observe` — write/edit 覆写已存在文件前需本会话 read 过
-  （文档默认的 fs-observation-policy）
+- `policy` — 统一规则串，竖线组合：`write-workspace`（bash 用 sandbox-exec 限写
+  工作区（macOS）+ write/edit 覆写前须先 read）、`read-workspace`（read/glob/
+  grep/read_image 仅可读工作区）；空或非法值回退默认全开；`off` 全关
 - `auto_approve` — 非交互（单任务/嵌入）模式下自动批准沙箱升级与计划
 
 ## 接入 grf 的三条路径

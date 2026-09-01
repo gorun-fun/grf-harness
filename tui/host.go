@@ -5,6 +5,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"git.gorun.fun/share/grf-harness/config"
@@ -26,8 +27,8 @@ type planRequest struct {
 }
 
 type escRequest struct {
-	tool, command, mode, justification string
-	resp                               chan bool
+	tool, key, mode, justification string
+	resp                           chan tools.EscalationDecision
 }
 
 // toolApproveRequest 审批模式下的逐工具确认请求（支持拒绝反馈）。
@@ -54,18 +55,19 @@ func (h *tuiHost) AskUser(ctx context.Context, qs []tools.Question) (map[string]
 	}
 }
 
-func (h *tuiHost) ApproveEscalation(ctx context.Context, tool, command, mode, justification string) bool {
-	req := &escRequest{tool: tool, command: command, mode: mode, justification: justification, resp: make(chan bool, 1)}
+func (h *tuiHost) ApproveEscalation(ctx context.Context, tool, key, mode, justification string) tools.EscalationDecision {
+	req := &escRequest{tool: tool, key: key, mode: mode, justification: justification,
+		resp: make(chan tools.EscalationDecision, 1)}
 	select {
 	case h.c.events <- req:
 	case <-ctx.Done():
-		return false
+		return tools.EscalationDecision{}
 	}
 	select {
 	case v := <-req.resp:
 		return v
 	case <-ctx.Done():
-		return false
+		return tools.EscalationDecision{}
 	}
 }
 
@@ -147,11 +149,45 @@ func (c *Chat) hostRequest(m any) {
 		})
 		c.ask.head = "计划审批"
 	case *escRequest:
-		c.escv = &escApprove{tool: req.tool, command: req.command, mode: req.mode,
-			justification: req.justification, approve: func(ok bool) {
-				c.escv = nil
-				req.resp <- ok
-			}}
+		// 沙箱升级审批复用 ask 选择框：批准（仅此一次）/ 拒绝；
+		// write/edit 额外提供"批准并授权所在目录"（持久化到工作区
+		// .grf/grants.json，仅本工作区生效，之后该目录下写操作不再询问）
+		var b strings.Builder
+		b.WriteString("工具 " + req.tool + " 申请越权（模式 " + req.mode + "）")
+		if req.key != "" {
+			b.WriteString("\n参数:\n" + clipRunesT(req.key, 2000))
+		}
+		if req.justification != "" {
+			b.WriteString("\n理由: " + req.justification)
+		}
+		opts := []tools.Option{
+			{Label: "批准，仅此一次", Description: "放行这一次越权操作"},
+		}
+		dir := ""
+		if req.tool == "write" || req.tool == "edit" {
+			dir = filepath.Dir(req.key)
+			opts = append(opts, tools.Option{
+				Label:       "批准，并授权目录 " + dir,
+				Description: "保存到工作区 .grf，仅本工作区生效，之后该目录下写操作不再询问"})
+		}
+		opts = append(opts, tools.Option{Label: "拒绝", Description: "本次操作不放行（其他操作不受影响）"})
+		q := tools.Question{ID: "approve_escalation", Question: b.String(), Options: opts}
+		c.ask = newAskForm([]tools.Question{q}, func(answers map[string]any, err error) {
+			c.ask = nil
+			d := tools.EscalationDecision{}
+			if err == nil {
+				v, _ := answers["approve_escalation"].(string)
+				switch {
+				case v == "批准，仅此一次":
+					d.Approved = true
+				case strings.HasPrefix(v, "批准，并授权目录 ") && dir != "":
+					d.Approved = true
+					d.GrantDir = dir
+				}
+			}
+			req.resp <- d
+		})
+		c.ask.head = "沙箱升级审批"
 	case *toolApproveRequest:
 		q := tools.Question{ID: "approve",
 			Question: "工具 " + req.name + " · 参数:\n" + clipRunesT(req.args, 2000),
@@ -221,18 +257,6 @@ func (c *Chat) askKey(k termKey) bool {
 		if n == 0 || f.custom {
 			editKey(f.text, k)
 		}
-	}
-	return false
-}
-
-// escKey 升审批按键。
-func (c *Chat) escKey(k termKey) bool {
-	f := c.escv
-	switch k.Name {
-	case "y", "Y":
-		f.approve(true)
-	case "n", "N", "esc":
-		f.approve(false)
 	}
 	return false
 }

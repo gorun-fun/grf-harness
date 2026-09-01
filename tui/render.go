@@ -114,8 +114,6 @@ func (c *Chat) frameLines() (lines []string, curRow, curCol int, lineBlock map[i
 	bottom := []string{}
 	if c.ask != nil {
 		bottom = append(bottom, c.ask.render(w)...)
-	} else if c.escv != nil {
-		bottom = append(bottom, c.escv.render(w)...)
 	} else if c.pop != nil {
 		bottom = append(bottom, c.pop.render(w)...)
 	} else if hints := c.slashHints(); len(hints) > 0 {
