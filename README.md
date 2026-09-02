@@ -59,8 +59,13 @@ gh connect weixin      # 连接微信 ClawBot（扫码后转后台守护进程�
 gh disconnect weixin   # 停止微信守护进程
 gh server              # 启动 Responses API 服务（ORS 兼容，默认 127.0.0.1:7400；
                        #   -addr 监听地址 / -data 数据目录 / -token 令牌）
+gh update              # 检查并更新自身（下载服务器最新版；-y 跳过确认）
 gh version
 ```
+
+全屏交互启动时会后台探测新版本（dev 构建跳过，网络故障静默），有更新则在
+欢迎行下方提示；`GRF_DOWNLOAD_BASE` 可覆盖下载服务器地址（默认
+`https://download.gorun.fun/grf-harness`）。
 
 非 TTY（管道/重定向）自动回退纯文本行模式 REPL。
 

@@ -15,6 +15,7 @@ import (
 
 	"git.gorun.fun/share/grf-harness/app"
 	"git.gorun.fun/share/grf-harness/llm"
+	"git.gorun.fun/share/grf-harness/selfupdate"
 	"git.gorun.fun/share/grf-harness/term"
 	"git.gorun.fun/share/grf-harness/tools"
 )
@@ -135,6 +136,11 @@ func (c *Chat) Run(ctx context.Context) error {
 	}
 	c.paint(true)
 
+	// 后台探测新版本（dev 构建跳过；网络失败静默，不打扰交互）
+	if app.Version != "dev" {
+		go c.probeUpdate()
+	}
+
 	// 事件循环
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
@@ -170,6 +176,24 @@ func (c *Chat) Run(ctx context.Context) error {
 }
 
 type noticeMsg struct{ text string }
+
+// updateMsg 自更新探测落定（后台 goroutine → 事件循环）。
+type updateMsg struct{ version string }
+
+// probeUpdate 后台探测下载服务器上的最新版本，有更新时经事件循环提示；
+// 网络/服务器故障一律静默（提示是增益，不能阻塞或打扰交互）。
+func (c *Chat) probeUpdate() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	rel, err := selfupdate.Check(ctx, "")
+	if err != nil || rel == nil || selfupdate.CompareVersions(rel.Version, app.Version) <= 0 {
+		return
+	}
+	select {
+	case c.events <- updateMsg{version: rel.Version}:
+	case <-c.ctx.Done():
+	}
+}
 
 // eventMsg agent 过程事件（后台 goroutine → 事件循环）。
 type eventMsg struct {
@@ -314,6 +338,11 @@ func (c *Chat) handleMsg(msg any) bool {
 		if !c.running {
 			c.startRun("(background work settled; the runtime sent you notices — collect results with job_output/list_agents as needed and wrap up your answer)")
 		}
+	case updateMsg:
+		c.emitBlock(block{kind: blkDim, text: fmt.Sprintf("✨ 有新版本 %s：退出后运行 gh update 更新", m.version)})
+		// 空闲时一次性到达的消息：绕过 60ms 节流强制重绘，否则启动后
+		// 无任何按键/流式活动时提示块永远不上屏
+		c.paint(true)
 	case *askRequest, *planRequest, *escRequest, *toolApproveRequest:
 		c.hostRequest(m)
 	case struct{}:

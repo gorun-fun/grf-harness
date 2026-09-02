@@ -11,10 +11,12 @@
 //	gh config [...]        配置摘要 / prompt / steps / policy
 //	gh connect weixin      连接微信 ClawBot(后台守护进程);disconnect 停止
 //	gh server              启动 Responses API 接入服务(ORS 兼容)
+//	gh update              检查并更新自身（全屏交互启动时也会提示新版本）
 //	gh version             版本与当前生效配置
 //
 // 子命令实现按功能线条分文件：chat.go（三种默认形态）、settings_cmd.go
-// （model/config/version）、server_cmd.go（Responses API 服务）；
+// （model/config/version）、server_cmd.go（Responses API 服务）、
+// update_cmd.go（自更新，探测逻辑在 selfupdate 包）；
 // connect/disconnect weixin 在 weixin 包（weixin/connect.go）。
 package main
 
@@ -47,6 +49,9 @@ func main() {
 			return
 		case "server":
 			runServerCmd(args[1:])
+			return
+		case "update":
+			runUpdateCmd(args[1:])
 			return
 		case "version", "-version", "--version":
 			printVersion()
@@ -92,6 +97,7 @@ const usageText = `grf-harness %s - 零依赖终端 agent harness（gh）
   gh connect weixin      连接微信 ClawBot(后台守护进程,消息由本地 agent 回答)
   gh disconnect weixin   断开并停止微信 ClawBot 守护进程
   gh server              启动 Responses API 接入服务(ORS 兼容,默认 127.0.0.1:7400)
+  gh update              检查并更新自身到下载服务器最新版(-y 跳过确认)
   gh version             版本号与当前生效配置
 
 全屏快捷键: ↑↓ 历史 · PgUp/PgDn/滚轮 翻页 · Ctrl+O 展开思考/工具块 ·

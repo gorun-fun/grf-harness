@@ -47,12 +47,14 @@ ANSI→验证帧），历史会话输出落在 `.grf/sessions/`。
   main(package main) ── tui（全屏）/ app（库门面）/ server（HTTP ORS）/ weixin（微信渠道）
 核心层    agent（回合循环 turn.go + 暂停/恢复 pause.go + 子代理/goal/workflow/ralph）
 能力层    tools（26 工具+注册表）/ js（workflow 解释器）/ llm（传输+回退解析）
-基础层    term / config / store
+基础层    term / config / store / selfupdate（自更新：目录探测 + semver 比较 + 替换自身）
 ```
 
 - 根目录 `main`（package main）子命令按功能线条分文件：`chat.go`（默认三形态：
   全屏 TTY / 非 TTY 行模式 REPL / 单任务直出）、`settings_cmd.go`（model/config/
-  version 脚本化读写）、`server_cmd.go`（gh server）；connect/daemon 见 weixin 条目。
+  version 脚本化读写）、`server_cmd.go`（gh server）、`update_cmd.go`（gh update
+自更新，探测逻辑在 `selfupdate` 包；全屏交互启动时后台探测、有更新经事件循环
+提示）；connect/daemon 见 weixin 条目。
 - `agent`：核心回合循环（`turn.go` 的 `runTurn` 是唯一循环实现，`run.go` 的
   Run/RunAs/RunWithImages 与 `RunTurn/RunTurnParts/Resume` 都是其薄委托）、
   goal 状态机、Manager（子代理树）、ralph、workflow 接线、系统提示词。
