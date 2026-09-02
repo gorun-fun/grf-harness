@@ -188,23 +188,31 @@ func (h *Harness) newFsPolicy(host tools.Host) *tools.FsPolicy {
 	return tools.NewFsPolicy(h.root, writeLimit, readLimit, host)
 }
 
+// applyPolicy 应用新 policy（set_policy 经用户批准后调用）：更新根 FsPolicy
+// 与内存 Settings——不落盘，仅本会话生效；后续生成的子代理按更新后的
+// Settings 构建，已存在的子代理策略不变。
+func (h *Harness) applyPolicy(normalized string) {
+	h.Settings.Policy = normalized
+	writeLimit, readLimit := config.ParsePolicy(normalized)
+	h.Fs.SetPolicy(writeLimit, readLimit)
+}
+
 // registerTools 为 agent 注册其可用工具。root=true 注册全部 26 个；
 // 子代理不注册 goal 三件套与 ralph（文档语义：非人类/子代理权限拒绝，
 // 直接不给入口；ask_user 子代理同样不可用）。
 func (h *Harness) registerTools(a *Agent, root bool) {
 	r := a.reg
 	env := h.managedEnv()
-	writeLimit, readLimit := h.policyLimit()
 
 	tools.RegisterFs(r, h.root, h.Fs, h.Artifacts)
 	tools.RegisterReadImage(r, h.Fs)
+	// 沙箱开关经 FsPolicy 实时读取（set_policy 批准后立即生效）
 	tools.RegisterBash(r, tools.BashDeps{
 		Workspace: h.root,
 		Host:      func() tools.Host { return a.host }, // 懒取：SetHost 后生效
+		Fs:        h.Fs,
 		Jobs:      a.Jobs,
 		Artifacts: h.Artifacts,
-		SandboxOn: writeLimit,
-		ReadLimit: readLimit,
 		Env:       env,
 	})
 	tools.RegisterJobTools(r, a.Jobs)
@@ -215,6 +223,8 @@ func (h *Harness) registerTools(a *Agent, root bool) {
 	RegisterWorkflow(r, a, h.Manager)
 	if root {
 		tools.RegisterAskUser(r, func() tools.Host { return a.host })
+		// set_policy 仅根：策略是会话级安全边界，子代理不可申请变更
+		tools.RegisterSetPolicy(r, func() tools.Host { return a.host }, h.applyPolicy)
 		RegisterGoalTools(r, a, h.Goals)
 		RegisterRalph(r, a, h.Manager)
 		// enter_plan_mode 仅根：模式切换是根会话状态，子代理不可申请

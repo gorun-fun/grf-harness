@@ -24,10 +24,10 @@ func TestSandboxBlocksOutsideWriteAndDelete(t *testing.T) {
 	outside := filepath.Join(outsideDir, "out.txt")
 	os.WriteFile(outside, []byte("x"), 0o644)
 
-	fs := NewFsPolicy(ws, false, false, &NoopHost{})
+	fs := NewFsPolicy(ws, true, false, &NoopHost{})
 	r := NewRegistry()
 	RegisterBash(r, BashDeps{Workspace: ws, Host: func() Host { return &NoopHost{} }, Fs: fs,
-		SandboxOn: true, Jobs: NewJobManager()})
+		Jobs: NewJobManager()})
 
 	run := func(cmd string) string {
 		res := r.Execute(context.Background(), "bash", mustJSON(t, map[string]any{"command": cmd, "description": "t"}))
@@ -75,7 +75,7 @@ func TestSandboxReadLimitBlocksOutsideRead(t *testing.T) {
 
 	r := NewRegistry()
 	RegisterBash(r, BashDeps{Workspace: ws, Host: func() Host { return &NoopHost{} },
-		SandboxOn: true, ReadLimit: true, Jobs: NewJobManager()})
+		Fs: NewFsPolicy(ws, true, true, &NoopHost{}), Jobs: NewJobManager()})
 	run := func(cmd string) string {
 		res := r.Execute(context.Background(), "bash", mustJSON(t, map[string]any{"command": cmd, "description": "t"}))
 		return res.Text

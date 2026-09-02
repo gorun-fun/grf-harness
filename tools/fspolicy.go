@@ -52,6 +52,22 @@ func NewFsPolicy(workspace string, observe, readLimit bool, host Host) *FsPolicy
 	return f
 }
 
+// SetPolicy 运行时更新策略开关（set_policy 工具经用户批准后调用；
+// bash 沙箱经 Limits 实时读取，同次改动立即生效）。
+func (f *FsPolicy) SetPolicy(observe, readLimit bool) {
+	f.mu.Lock()
+	f.Observe = observe
+	f.ReadLimit = readLimit
+	f.mu.Unlock()
+}
+
+// Limits 读出当前策略开关（写侧 observe 与读边界 readLimit）。
+func (f *FsPolicy) Limits() (observe, readLimit bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.Observe, f.ReadLimit
+}
+
 // grantsPath 授权目录持久化文件：<工作区>/.grf/grants.json。
 func (f *FsPolicy) grantsPath() string {
 	return filepath.Join(f.wsReal, ".grf", "grants.json")

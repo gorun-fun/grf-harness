@@ -72,7 +72,7 @@ func (a *Agent) runTurn(ctx context.Context, userMsg *llm.Message, human bool, r
 		}
 
 		a.mu.Lock()
-		snapshot := append([]llm.Message(nil), a.history...)
+		snapshot := sanitizeSnapshot(a.history)
 		a.mu.Unlock()
 		reply, err := a.client.ChatStream(turnCtx, snapshot, a.reg.Defs(), hooks)
 		if err != nil {

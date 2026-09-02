@@ -69,6 +69,22 @@ func (a *Agent) SetSystemText(text string) {
 	}
 }
 
+// sanitizeSnapshot 请求前清洗历史：剔除任何没有正文、没有多模态 parts
+// 也没有工具调用的 assistant/user 消息（中断残留的半截消息序列化后
+// content 整个省略，会被服务端以缺 messages.content 拒绝）。tool 消息
+// 不在此列（协议要求保留，正文空由注册表兜底为 "(no output)"）。
+func sanitizeSnapshot(h []llm.Message) []llm.Message {
+	out := h[:0:0]
+	for _, m := range h {
+		if (m.Role == "assistant" || m.Role == "user") &&
+			m.Content == "" && len(m.ContentParts) == 0 && len(m.ToolCalls) == 0 {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
 // rollbackOrphanUser 本轮失败（LLM 出错/被取消）时移除尾部未被任何
 // assistant 回复闭合的 user 输入，避免用户重发后出现连续两条重复 user
 // 消息。只在本轮输入仍是最后一条消息时回滚（工具循环已推进则不动）。

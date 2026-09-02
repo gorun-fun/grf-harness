@@ -332,7 +332,10 @@ func (c *Client) ChatStream(ctx context.Context, messages []Message, tools []Too
 			cur.Function.Arguments += tc.Function.Arguments
 		}
 	}
-	if err := scanner.Err(); err != nil && ctx.Err() == nil {
+	if err := scanner.Err(); err != nil {
+		if ctx.Err() != nil {
+			return Message{}, ctx.Err() // 取消/超时：不得把半截消息当成功返回
+		}
 		return Message{}, fmt.Errorf("read stream: %w", err)
 	}
 	if len(calls) > 0 {

@@ -42,7 +42,7 @@ func TestBashEscalationCallsHost(t *testing.T) {
 	host := &escHost{allow: true}
 	r := NewRegistry()
 	RegisterBash(r, BashDeps{Workspace: ws, Host: func() Host { return host },
-		SandboxOn: true, ReadLimit: true, Jobs: NewJobManager()})
+		Fs: NewFsPolicy(ws, true, true, host), Jobs: NewJobManager()})
 	cmd := "cat " + shellQ(secret)
 
 	// 越权即问：第一次调用即被拒 → 挂起问宿主 → 批准 → 脱沙箱重跑成功
@@ -58,7 +58,7 @@ func TestBashEscalationCallsHost(t *testing.T) {
 	rhost := &escHost{allow: false}
 	r2 := NewRegistry()
 	RegisterBash(r2, BashDeps{Workspace: ws, Host: func() Host { return rhost },
-		SandboxOn: true, ReadLimit: true, Jobs: NewJobManager()})
+		Fs: NewFsPolicy(ws, true, true, rhost), Jobs: NewJobManager()})
 	res = r2.Execute(context.Background(), "bash", mustJSON(t, map[string]any{"command": cmd, "description": "t"}))
 	if !strings.Contains(res.Text, deniedMarker) || !strings.Contains(res.Text, "final") {
 		t.Fatalf("rejected should be final denial, got: %s", res.Text)

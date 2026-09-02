@@ -1,7 +1,7 @@
 # grf-harness（gh）工作区说明
 
 零依赖终端 agent harness：纯 Go 标准库重构自 `~/AiProjects/gh`（bubbletea/glamour 版）。
-26 个工具的**定义（名称/描述/参数 Schema）内嵌于 `tools/spec/tools.json`**（唯一来源），
+27 个工具的**定义（名称/描述/参数 Schema）内嵌于 `tools/spec/tools.json`**（唯一来源），
 一个不能少。改动工具相关代码前先读 spec 与对接文档。
 
 文档分工：`docs/architecture.md`（架构总览：功能线条分层、关键机制、并发
@@ -33,7 +33,7 @@ ANSI→验证帧），历史会话输出落在 `.grf/sessions/`。
 - **工具定义唯一来源**：`tools/spec/tools.json`（go:embed 内嵌；docs/ 下的
   开发参考原稿已移除，spec 即唯一事实）。`tools.Registry.Register` 会拒绝
   spec 里不存在的名字。改工具行为不改 spec 文本。嵌入方扩展走 `RegisterCustom`（自带定义、
-  不得与内置 26 个重名），内置工具不借道覆盖；ORS 客户端执行工具走 `RegisterClient`
+  不得与内置 27 个重名），内置工具不借道覆盖；ORS 客户端执行工具走 `RegisterClient`
   （模型调用时转入暂停协议，见 agent/pause.go）。
 - 回复**不做 markdown 渲染**，只显示原始文本（需求如此，勿加渲染）。
 - **Git 远端分工**：origin = 私有主库 `https://git.gorun.fun/ai/grf-harnees.git`
@@ -46,7 +46,7 @@ ANSI→验证帧），历史会话输出落在 `.grf/sessions/`。
 接入表面（并列，各自薄装配，全部直接组装 agent.Build）
   main(package main) ── tui（全屏）/ app（库门面）/ server（HTTP ORS）/ weixin（微信渠道）
 核心层    agent（回合循环 turn.go + 暂停/恢复 pause.go + 子代理/goal/workflow/ralph）
-能力层    tools（25 工具+注册表）/ js（workflow 解释器）/ llm（传输+回退解析）
+能力层    tools（26 工具+注册表）/ js（workflow 解释器）/ llm（传输+回退解析）
 基础层    term / config / store
 ```
 
@@ -57,7 +57,7 @@ ANSI→验证帧），历史会话输出落在 `.grf/sessions/`。
   Run/RunAs/RunWithImages 与 `RunTurn/RunTurnParts/Resume` 都是其薄委托）、
   goal 状态机、Manager（子代理树）、ralph、workflow 接线、系统提示词。
   工具与 harness 在此组装（`agent/build.go`，四表面共用的唯一装配事实）。
-- `tools`：26 个工具的实现与注册表；orchestration 类工具（subagent/goal/
+- `tools`：27 个工具的实现与注册表；orchestration 类工具（subagent/goal/
   workflow/ralph）的处理器注册在 `agent` 包，纯工具（fs/bash/jobs/web/
   image/交互类）在 `tools` 包。
 - `app`：库入口（`app.New(app.Options{...})`）+ 会话门面 + 单任务直出渲染 +
@@ -112,6 +112,12 @@ ANSI→验证帧），历史会话输出落在 `.grf/sessions/`。
   重试也不会二次询问；write/edit 可选 GrantDir=授权目录，持久化到工作区
   `.grf/grants.json` 仅本工作区生效，该目录下后续写越过写边界不再询问）。多租户用户隔离：Workspace=用户文件夹 +
   默认 policy + 禁 bash + Host.ApproveEscalation 恒 false。
+  `set_policy` 工具（仅根会话注册，`tools/policy.go`）：模型只能拉起弹窗
+  并附理由，不可传目标 policy——用户从预制选项（`write-workspace` 工作区
+  访问 / `off` 完全访问，见 `tools.SetPolicyOptions`）亲自选择，经
+  `Host.AskUser` 弹窗呈现；选定后仅本会话生效、不落盘（`Harness.applyPolicy`
+  更新内存 Settings + 根 FsPolicy；bash 沙箱开关经 `FsPolicy.Limits` 实时
+  读取，立即生效）；未选或保持现状为拒绝，终局。
 - llm 有两条正文回退工具调用解析（`<tool_call>` XML 与 DeepSeek DSML），
   标记常量与变体归一正则统一在 `llm/fallback_tags.go`——三处（两个解析器 +
   stream_display 过滤）必须共用，勿再各写一套。

@@ -29,10 +29,23 @@ type BashDeps struct {
 	Fs        *FsPolicy // 升级记录复用其 denied 表
 	Jobs      *JobManager
 	Artifacts *Artifacts
-	SandboxOn bool       // 是否启用 write-workspace OS 级沙箱
-	ReadLimit bool       // 是否叠加 read-workspace 读白名单（policy 同名 token）
+	// 沙箱开关实时读 d.Fs.Limits()（set_policy 可运行时调整 policy）
 	Host      func() Host // 懒取宿主：注册后 SetHost 注入的真宿主才能收到审批询问
 	Env       []string   // 附加环境变量（$DSH_*/$GRF_* 事实变量）
+}
+
+// fsLimits 从 FsPolicy 实时读取策略开关；无 FsPolicy 视为不限制（兜底）。
+func (d *BashDeps) fsLimits() (observe, readLimit bool) {
+	if d.Fs == nil {
+		return false, false
+	}
+	return d.Fs.Limits()
+}
+
+// fsLimitsOn 是否启用 write-workspace OS 级沙箱（拒绝检测用）。
+func (d *BashDeps) fsLimitsOn() bool {
+	observe, _ := d.fsLimits()
+	return observe
 }
 
 const (
@@ -142,8 +155,9 @@ func RegisterBash(r *Registry, d BashDeps) {
 
 		build := func(runCtx context.Context, unconfined bool) *exec.Cmd {
 			var cmd *exec.Cmd
-			if !unconfined && d.SandboxOn && sandboxExecPath != "" {
-				cmd = exec.CommandContext(runCtx, sandboxExecPath, "-p", sandboxProfile(d.Workspace, d.ReadLimit), "/bin/bash", "-c", a.Command)
+			observe, readLimit := d.fsLimits()
+			if !unconfined && observe && sandboxExecPath != "" {
+				cmd = exec.CommandContext(runCtx, sandboxExecPath, "-p", sandboxProfile(d.Workspace, readLimit), "/bin/bash", "-c", a.Command)
 			} else {
 				cmd = exec.CommandContext(runCtx, "bash", "-c", a.Command)
 			}
@@ -195,7 +209,7 @@ func RegisterBash(r *Registry, d BashDeps) {
 		// 批准（UI 交互，不随工具调用取消），批准则脱沙箱重跑同一命令，
 		// 拒绝（或无宿主）则终局返回——不依赖模型配合 sandbox_permissions
 		// 重试协议。
-		if err != nil && d.SandboxOn && !unconfined &&
+		if err != nil && d.fsLimitsOn() && !unconfined &&
 			(strings.Contains(out, "Operation not permitted") || isSignalTrapped(err)) {
 			deniedBash.Store(a.Command)
 			approved := false

@@ -90,7 +90,7 @@ func buildTestHarness(t *testing.T, f *fakeLLM, ws string) *Harness {
 	return h
 }
 
-func TestAll25ToolsRegistered(t *testing.T) {
+func TestAllToolsRegistered(t *testing.T) {
 	f := newFakeLLM([]string{"ok"})
 	defer f.Close()
 	h := buildTestHarness(t, f, t.TempDir())
@@ -98,8 +98,8 @@ func TestAll25ToolsRegistered(t *testing.T) {
 	if err := h.VerifyAllToolsRegistered(); err != nil {
 		t.Fatal(err)
 	}
-	if got := len(h.Root.reg.Defs()); got != 26 {
-		t.Fatalf("root agent should expose 26 tools, got %d", got)
+	if got := len(h.Root.reg.Defs()); got != 27 {
+		t.Fatalf("root agent should expose 27 tools, got %d", got)
 	}
 }
 
@@ -120,8 +120,8 @@ func TestDisabledTools(t *testing.T) {
 	if h.Root.reg.Has("bash") || h.Root.reg.Has("web_search") {
 		t.Fatal("disabled tools should be removed from root registry")
 	}
-	if got := len(h.Root.reg.Defs()); got != 24 {
-		t.Fatalf("root agent should expose 24 tools after disabling 2, got %d", got)
+	if got := len(h.Root.reg.Defs()); got != 25 {
+		t.Fatalf("root agent should expose 25 tools after disabling 2, got %d", got)
 	}
 	if err := h.VerifyAllToolsRegistered(); err != nil {
 		t.Fatalf("verify should skip disabled tools: %v", err)
@@ -222,12 +222,12 @@ func TestRunLoopExecutesTool(t *testing.T) {
 	if !strings.Contains(joined, "tool:read") || !strings.Contains(joined, "result:") {
 		t.Fatalf("events: %v", events)
 	}
-	// 发给 API 的工具定义 = 26 个（多次请求累计去重仍 26）
+	// 发给 API 的工具定义 = 27 个（多次请求累计去重仍 27）
 	seen := map[string]bool{}
 	for _, d := range f.gotDefs {
 		seen[d.Name] = true
 	}
-	if len(seen) != 26 {
+	if len(seen) != 27 {
 		t.Fatalf("API got %d unique tool defs", len(seen))
 	}
 	// 历史含 tool 消息
