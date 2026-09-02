@@ -13,17 +13,47 @@ import (
 // ---- 通用列表弹窗 ----
 
 type popup struct {
-	title  string
-	items  []string
-	sel    int
-	mark   string // 打 ✓ 的项
-	kind   string // "model" | "resume"
+	title string
+	items []string
+	sel   int
+	top   int // 可视窗口首项（长列表滚动）
+	mark  string // 打 ✓ 的项
+	kind  string // "model" | "resume"
 	onDone func(idx int)
 }
 
-func (p *popup) render(w int) []string {
+// render 列表超出 maxH 行时只显示可视窗口，选中项始终可见，
+// 上下被截断处以 "↑/↓ 剩余 N 项" 提示。
+func (p *popup) render(w, maxH int) []string {
+	if maxH < 4 {
+		maxH = 4
+	}
 	lines := []string{dim(p.title + "（↑↓ 选择 · 回车确认 · Esc 取消）")}
-	for i, it := range p.items {
+	n := len(p.items)
+	vis := n
+	if n > maxH-1 {
+		vis = maxH - 3 // 标题 + 上下两条截断提示
+		if vis < 1 {
+			vis = 1
+		}
+	}
+	if p.sel < p.top {
+		p.top = p.sel
+	}
+	if p.sel >= p.top+vis {
+		p.top = p.sel - vis + 1
+	}
+	if p.top > n-vis {
+		p.top = n - vis
+	}
+	if p.top < 0 {
+		p.top = 0
+	}
+	if vis < n && p.top > 0 {
+		lines = append(lines, dim(fmt.Sprintf("  ↑ 还有 %d 项", p.top)))
+	}
+	for i := p.top; i < p.top+vis && i < n; i++ {
+		it := p.items[i]
 		name := it
 		if it == p.mark {
 			name += " ✓"
@@ -33,6 +63,9 @@ func (p *popup) render(w int) []string {
 		} else {
 			lines = append(lines, "  "+clipRunesT(name, w-4))
 		}
+	}
+	if vis < n && p.top+vis < n {
+		lines = append(lines, dim(fmt.Sprintf("  ↓ 还有 %d 项", n-p.top-vis)))
 	}
 	return lines
 }

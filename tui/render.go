@@ -115,7 +115,12 @@ func (c *Chat) frameLines() (lines []string, curRow, curCol int, lineBlock map[i
 	if c.ask != nil {
 		bottom = append(bottom, c.ask.render(w)...)
 	} else if c.pop != nil {
-		bottom = append(bottom, c.pop.render(w)...)
+		// 弹窗高度预算：总高 - 输入区(3) - 至少 1 行内容
+		maxH := c.height - 4
+		if maxH < 4 {
+			maxH = 4
+		}
+		bottom = append(bottom, c.pop.render(w, maxH)...)
 	} else if hints := c.slashHints(); len(hints) > 0 {
 		for i, h := range hints {
 			if i == c.hintIdx {
