@@ -14,7 +14,7 @@ func TestParsePolicy(t *testing.T) {
 		writeLimit bool
 		readLimit  bool
 	}{
-		{"", true, true},                                // 空值安全默认全开
+		{"", false, false},                              // 空值默认 off 全关
 		{"off", false, false},                           // 全关
 		{"write-workspace", true, false},                // 只开写侧
 		{"read-workspace", false, true},                 // 只开读侧
@@ -34,7 +34,7 @@ func TestParsePolicy(t *testing.T) {
 
 func TestNormalizePolicy(t *testing.T) {
 	cases := map[string]string{
-		"":                               "write-workspace|read-workspace",
+		"":                               "off",
 		"write-workspace|read-workspace": "write-workspace|read-workspace",
 		"write-workspace":                "write-workspace",
 		"read-workspace":                 "read-workspace",

@@ -1,4 +1,4 @@
-// fspolicy.go 文件策略引擎：写侧保护（统一规则串 policy 的 write-workspace，默认——覆写已
+// fspolicy.go 文件策略引擎：写侧保护（统一规则串 policy 的 write-workspace——覆写已
 // 存在文件前要求本会话 read 过）、工作区写边界、以及"一次性升级重试"
 // 协议（sandbox_permissions + justification → Host.ApproveEscalation）。
 package tools

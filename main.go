@@ -93,7 +93,7 @@ const usageText = `grf-harness %s - 零依赖终端 agent harness（gh）
   gh config              配置摘要
   gh config prompt [set|reset]      自定义系统提示词
   gh config steps [n|reset]         工具循环轮次上限
-  gh config policy [write-workspace|read-workspace|off]  统一规则串（默认全开）
+  gh config policy [write-workspace|read-workspace|off]  统一规则串（默认 off）
   gh connect weixin      连接微信 ClawBot(后台守护进程,消息由本地 agent 回答)
   gh disconnect weixin   断开并停止微信 ClawBot 守护进程
   gh server              启动 Responses API 接入服务(ORS 兼容,默认 127.0.0.1:7400)

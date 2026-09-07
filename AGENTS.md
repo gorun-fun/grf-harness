@@ -104,7 +104,7 @@ ANSI→验证帧），历史会话输出落在 `.grf/sessions/`。
   `write-workspace`（写侧：bash 仅 macOS 用 sandbox-exec 限写工作区 +
   write/edit 覆写前须先 read，新建文件不受限）| `read-workspace`（读边界：文件工具 `FsPolicy.CheckRead` 硬拒绝、
   不接升级协议；bash 沙箱叠加读黑名单——deny `/Users` `/root` `/home`
-  后 allow 工作区，因 macOS 默认拒绝读会 SIGABRT 只能黑名单）。空值=安全默认全开；解析出错回退 `write-workspace`（保写侧）；
+  后 allow 工作区，因 macOS 默认拒绝读会 SIGABRT 只能黑名单）。空值=默认 `off`（全关）；解析出错回退 `write-workspace`（保写侧）；
   `off` 全关。解析在
   `config.ParsePolicy/NormalizePolicy`。写边界（文件工具只写工作区）
   无条件生效不受 policy 控制；bash 越界拒绝标记 `[sandbox: file access

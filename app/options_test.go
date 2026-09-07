@@ -45,19 +45,19 @@ func TestPolicyOverrides(t *testing.T) {
 	}
 }
 
-// TestPolicyCombinations 统一规则串的接线（含非法值回退默认）。
+// TestPolicyCombinations 统一规则串的接线（含非法值回退 write-workspace）。
 func TestPolicyCombinations(t *testing.T) {
-	isolateConfig(t, "") // 无配置 → 安全默认
+	isolateConfig(t, "") // 无配置 → 默认 off
 	ws := t.TempDir()
 
-	// 默认：写读限制全开
+	// 默认 off：全关
 	a, err := New(Options{Workspace: ws, Client: testClient()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer a.Close()
-	if !a.Harness.Fs.Observe || !a.Harness.Fs.ReadLimit {
-		t.Fatalf("default should be write+read-workspace, got %+v", a.Harness.Fs)
+	if a.Harness.Fs.Observe || a.Harness.Fs.ReadLimit {
+		t.Fatalf("default should be off, got %+v", a.Harness.Fs)
 	}
 
 	// 只开读边界
@@ -70,7 +70,7 @@ func TestPolicyCombinations(t *testing.T) {
 		t.Fatalf("read-workspace only: %+v", a2.Harness.Fs)
 	}
 
-	// off 全关（需显式）
+	// off 全关
 	a3, err := New(Options{Workspace: ws, Client: testClient(), Policy: "off"})
 	if err != nil {
 		t.Fatal(err)
@@ -80,7 +80,7 @@ func TestPolicyCombinations(t *testing.T) {
 		t.Fatalf("off should disable both: %+v", a3.Harness.Fs)
 	}
 
-	// 非法值 → 归一为默认全开
+	// 非法值 → 归一为 write-workspace（保写侧回退）
 	a4, err := New(Options{Workspace: ws, Client: testClient(), Policy: "garbage"})
 	if err != nil {
 		t.Fatal(err)

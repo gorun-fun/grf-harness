@@ -182,7 +182,7 @@ func (h *Harness) policyLimit() (writeLimit, readLimit bool) {
 }
 
 // newFsPolicy 按统一规则串构建文件策略（见 config.ParsePolicy）：
-// write-workspace → 写前先读；read-workspace → 读边界；空值安全默认全开。
+// write-workspace → 写前先读；read-workspace → 读边界；空值默认 off 全关。
 func (h *Harness) newFsPolicy(host tools.Host) *tools.FsPolicy {
 	writeLimit, readLimit := h.policyLimit()
 	return tools.NewFsPolicy(h.root, writeLimit, readLimit, host)

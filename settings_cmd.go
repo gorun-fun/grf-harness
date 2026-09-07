@@ -150,14 +150,14 @@ func runStepsCmd(args []string, s *config.Settings) {
 }
 
 // runPolicyCmd 统一规则串设置：write-workspace | read-workspace 竖线组合，
-// "off" 全关；非法值归一为默认全开；不带参数显示当前值。
+// "off" 全关（空值默认）；非法值归一为 write-workspace（保写侧）；不带参数显示当前值。
 func runPolicyCmd(args []string, s *config.Settings) {
 	cur := s.Policy
 	if cur == "" {
 		cur = config.NormalizePolicy("")
 	}
 	if len(args) == 0 {
-		fmt.Printf("策略: %s（可选: write-workspace | read-workspace 组合，off 全关；非法值回退默认）\n", cur)
+		fmt.Printf("策略: %s（可选: write-workspace | read-workspace 组合，off 全关；非法值回退 write-workspace）\n", cur)
 		return
 	}
 	v := config.NormalizePolicy(args[0])

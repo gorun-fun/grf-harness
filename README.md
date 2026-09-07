@@ -111,7 +111,7 @@ gh version
 
 - `policy` — 统一规则串，竖线组合：`write-workspace`（bash 用 sandbox-exec 限写
   工作区（macOS）+ write/edit 覆写前须先 read）、`read-workspace`（read/glob/
-  grep/read_image 仅可读工作区）；空或非法值回退默认全开；`off` 全关
+  grep/read_image 仅可读工作区）；空值默认 `off` 全关；非法值回退 `write-workspace`
 - `auto_approve` — 非交互（单任务/嵌入）模式下自动批准沙箱升级与计划
 
 ## 接入 grf 的三条路径

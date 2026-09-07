@@ -191,7 +191,7 @@ func (s *Server) buildSession(meta *sessionMeta) (*session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("构建模型客户端: %w", err)
 	}
-	// Policy 空值走 ParsePolicy 的安全默认（写读限制全开）
+	// Policy 空值走 ParsePolicy 的默认（off 全关）
 	settings := &config.Settings{}
 	if meta.Policy != "" {
 		settings.Policy = config.NormalizePolicy(meta.Policy)

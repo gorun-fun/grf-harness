@@ -24,8 +24,8 @@ var Version = config.Version
 
 // Options 应用构建参数（库使用方入口）。
 //
-// 多租户用户隔离推荐用法：Workspace 设为该用户的专属文件夹，文件策略用
-// 安全默认（write-observe|read-workspace，写边界本就无条件生效），bash 由
+// 多租户用户隔离推荐用法：Workspace 设为该用户的专属文件夹，Policy 显式
+// 设为 "read-workspace"（默认 off 不设读边界；写边界本就无条件生效），bash 由
 // DisabledTools 剔除，升级通道用自定义 Host 的 ApproveEscalation 返回
 // false 焊死（用户不可信、无审批方）。
 type Options struct {
@@ -42,7 +42,7 @@ type Options struct {
 
 	// 运行策略覆盖：仅本次构建生效、不写回配置文件；空/nil 沿用
 	// ~/.grf/settings.json（嵌入方可用它摆脱对机器全局配置的依赖）。
-	Policy      string // 统一规则串："write-workspace|read-workspace"（默认全开）| "write-workspace" | "read-workspace" | "off"，见 config.ParsePolicy
+	Policy      string // 统一规则串："write-workspace|read-workspace" | "write-workspace" | "read-workspace" | "off"（空值默认 off），见 config.ParsePolicy
 	AutoApprove *bool  // 非交互自动批准沙箱升级/计划
 }
 

@@ -82,7 +82,7 @@ type toolParam struct {
 
 // grfSessionConfig 会话级 gh 配置（首次请求生效，落盘 meta.json）。
 type grfSessionConfig struct {
-	Policy        string   `json:"policy,omitempty"`        // write-workspace|read-workspace 组合（默认全开）| off
+	Policy        string   `json:"policy,omitempty"`        // write-workspace|read-workspace 组合 | off（默认）
 	AutoApprove   *bool    `json:"auto_approve,omitempty"`
 	SystemPrompt  string   `json:"system_prompt,omitempty"`
 	MaxSteps      int      `json:"max_steps,omitempty"`

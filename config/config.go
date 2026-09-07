@@ -23,12 +23,11 @@ type Provider struct {
 
 // Settings 配置文件结构。Default 形如 "provider/model"（按第一个 / 拆分）。
 // Policy: 统一规则串（竖线组合，sandbox 与文件策略共用一套 token）；
-// 解析出错回退 write-workspace——
 //   write-workspace  仅写工作区：bash OS 级沙箱（macOS）+ 写前先读
 //                    （文件工具的写边界本就无条件生效，不受此控制）
 //   read-workspace   仅读工作区：read/glob/grep/read_image 的读边界
 //   off              不禁止（写边界除外，架构性保留）
-// 空或解析不正确 = 安全默认 "write-workspace|read-workspace"（全开）。
+// 空 = 默认 "off"（全关）；解析不正确回退 write-workspace（保写侧）。
 // 解析见 ParsePolicy / NormalizePolicy。
 type Settings struct {
 	Providers    map[string]*Provider `json:"providers"`
@@ -41,15 +40,12 @@ type Settings struct {
 }
 
 // ParsePolicy 解析统一规则串（竖线组合）：write-workspace（写侧保护）、
-// read-workspace（读边界）。空值 = 安全默认全开；"off" = 全关；含至少一个
-// 合法 token 时按 token 显式生效；一个都不认识视为解析出错，回退
+// read-workspace（读边界）。空值 = 默认 off（全关）；"off" 同样全关；含至少
+// 一个合法 token 时按 token 显式生效；一个都不认识视为解析出错，回退
 // write-workspace（保写侧，读侧放开）。
 func ParsePolicy(v string) (writeLimit, readLimit bool) {
 	v = strings.TrimSpace(v)
-	if v == "" {
-		return true, true
-	}
-	if v == "off" {
+	if v == "" || v == "off" {
 		return false, false
 	}
 	seen := false
@@ -132,7 +128,7 @@ func LoadFileForUpdate() (*Settings, error) {
 		s.Providers = map[string]*Provider{}
 	}
 	if s.Policy == "" {
-		s.Policy = "write-workspace|read-workspace"
+		s.Policy = "off"
 	} else if n := NormalizePolicy(s.Policy); n != strings.TrimSpace(s.Policy) {
 		// 解析出错（回退 write-workspace）或含多余空白：修正后回写文件，
 		// 避免每次加载都重新走回退
