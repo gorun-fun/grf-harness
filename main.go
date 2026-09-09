@@ -11,13 +11,15 @@
 //	gh config [...]        配置摘要 / prompt / steps / policy
 //	gh connect weixin      连接微信 ClawBot(后台守护进程);disconnect 停止
 //	gh server              启动 Responses API 接入服务(ORS 兼容)
+//	gh plugins             插件体检（download 子命令从官方服务器安装插件）
 //	gh update              检查并更新自身（全屏交互启动时也会提示新版本）
 //	gh version             版本与当前生效配置
 //
 // 子命令实现按功能线条分文件：chat.go（三种默认形态）、settings_cmd.go
 // （model/config/version）、server_cmd.go（Responses API 服务）、
-// plugins_cmd.go（MCP 插件体检）、update_cmd.go（自更新，探测逻辑在
-// selfupdate 包）；connect/disconnect weixin 在 weixin 包（weixin/connect.go）。
+// plugins_cmd.go（MCP 插件体检 + 官方插件下载）、update_cmd.go（自更新，
+// 探测逻辑在 selfupdate 包）；connect/disconnect weixin 在 weixin 包
+// （weixin/connect.go）。
 package main
 
 import (
@@ -101,6 +103,8 @@ const usageText = `grf-harness %s - 零依赖终端 agent harness（gh）
   gh disconnect weixin   断开并停止微信 ClawBot 守护进程
   gh server              启动 Responses API 接入服务(ORS 兼容,默认 127.0.0.1:7400)
   gh plugins             列出 MCP 插件（本地 stdio / 远程 HTTP）与工具清单
+  gh plugins download    从官方下载服务器安装插件到 ~/.grf/plugins/
+                         (可选名称过滤; -version 指定版本,缺省配套当前主程序)
   gh update              检查并更新自身到下载服务器最新版(-y 跳过确认)
   gh version             版本号与当前生效配置
 

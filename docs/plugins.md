@@ -16,9 +16,21 @@ grf-harness 的增强能力走 **MCP（Model Context Protocol）插件**：插�
 ## 快速开始
 
 ```sh
-./plugins/build.sh install   # 构建并安装到 ~/.grf/plugins/
-gh plugins                   # 体检：列出插件、连接状态、工具清单
+gh plugins download        # 从官方下载服务器安装插件到 ~/.grf/plugins/
+gh plugins                 # 体检：列出插件、连接状态、工具清单
 ./gh "用 browser_navigate 打开 https://example.com 并截图"
+```
+
+主程序分发一般不含插件（保持单二进制零依赖），`gh plugins download`
+按当前平台从下载服务器（`https://download.gorun.fun/grf-harness/`，
+`GRF_DOWNLOAD_BASE` 可覆盖）拉取：缺省取与主程序配套的版本，没有则取
+最新版；可带名称过滤（`gh plugins download browser`，grf- 前缀可省略），
+`-version` 指定版本。名称缺省下载全部，装完重启 gh 生效。
+
+从源码构建则用：
+
+```sh
+./plugins/build.sh install   # 构建并安装到 ~/.grf/plugins/
 ```
 
 `install` 把 `grf-browser`、`grf-computer` 复制到 `~/.grf/plugins/`——
@@ -187,5 +199,20 @@ func main() {
 
 `plugins/` 有自己的 go.mod——这是整个仓库**唯一允许第三方依赖**的地方
 （当前仅 chromedp 及其传递依赖）；主模块保持纯标准库零依赖不变，主程序
-的 `build.sh` / CI 不构建插件。插件版本号经 ldflags 注入（取
-git describe），`gh plugins` 会显示各插件自报的版本。
+本地 `build.sh` 不交叉编译插件（仅缺省路径顺带 `install` 当前系统）。
+插件版本号经 ldflags 注入（取 git describe），`gh plugins` 会显示各插件
+自报的版本。
+
+CI（打 tag 触发）在主程序之外同时构建插件并随版本发布到下载服务器：
+
+```
+{base}/{平台}/{版本}/gh(.exe)                    # 主程序
+{base}/{平台}/{版本}/plugins/grf-browser 等      # 插件（去平台后缀，windows 带 .exe）
+```
+
+`build.sh all` 对 linux/windows 产物做 **upx 压缩**（chromedp 体积大，
+可减 60% 以上；darwin 与 windows/arm64 跳过——upx 会破坏 macOS adhoc
+签名，且尚不支持 win64/arm64 PE，`UPX=0` 可禁用）。`gh plugins
+download` 即按上述布局探测下载（探测逻辑在 `plugin/download.go`，目录
+列表与下载替换复用 selfupdate 的实现，基址同为
+`https://download.gorun.fun/grf-harness/`）。

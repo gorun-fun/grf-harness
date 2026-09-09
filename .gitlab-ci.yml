@@ -3,11 +3,15 @@
 # 触发方式:推送 tag(git tag v0.0.1-alpha.6 && git push origin v0.0.1-alpha.6)
 #          仅 tag 触发;普通分支推送不创建任何 job（runner 为低性能单并发机,
 #          不浪费槽位）
-# 流程:    交叉编译 6 平台产物 -> 按平台/版本目录发布到 10.8.0.5:
+# 流程:    交叉编译 6 平台产物(主程序 + 插件) -> 按平台/版本目录发布到 10.8.0.5:
 #          /data/download/grf-harness/{目标平台}/{版本号}/gh(.exe)
-#          （版本号与产物内 config.Version 同源,即 tag 去掉 v 前缀）
+#          /data/download/grf-harness/{目标平台}/{版本号}/plugins/grf-*
+#          （版本号与产物内 config.Version 同源,即 tag 去掉 v 前缀;插件文件名
+#          去掉平台后缀——目录已标识平台,与 gh plugins download 的约定一致）
 #
 # 零第三方依赖、纯标准库,直接用 golang 镜像跑 ./build.sh 即可,无需 Docker 打包。
+# 插件模块（plugins/,独立 go.mod）拉第三方依赖走 GOPROXY 国内镜像;其
+# linux/windows 产物在 build.sh all 内经 upx 压缩。
 # 发布侧需在 GitLab CI/CD Variables 配置文件型变量:
 #   DEPLOY_SSH_PRIVATE_KEY (发布机 SSH 私钥,类型选 File)
 # ============================================================================
@@ -25,6 +29,9 @@ variables:
   # 全新容器,默认 GOCACHE 随容器丢弃,导致每次冷编译 6 平台标准库(约 5 分半);
   # 命中缓存后只剩项目包的重编,低性能 runner 上约 1-2 分钟
   GOCACHE: $CI_PROJECT_DIR/.gocache
+  # 插件模块依赖(chromedp 等)也入缓存;拉取走国内镜像
+  GOMODCACHE: $CI_PROJECT_DIR/.gomodcache
+  GOPROXY: https://goproxy.cn,direct
 
 cache:
   # 固定 key:缓存跨版本 tag 累积复用;Go 版本升级后需换 key(如 go-build-1.27)
@@ -32,27 +39,39 @@ cache:
   key: go-build-1.26
   paths:
     - .gocache/
+    - .gomodcache/
 
 stages:
   - build
   - publish
 
-# 打 tag:交叉编译 6 平台产物(build.sh 逐平台带 GOOS/GOARCH vet)
+# 打 tag:交叉编译 6 平台产物(主程序 build.sh 逐平台带 GOOS/GOARCH vet;
+# 插件 build.sh all 一次 vet + 12 个产物,linux/windows 经 upx 压缩)
 build:
   stage: build
   tags:
     - docker
+  before_script:
+    # 使用国内 Alpine 源加速;upx 在 community 仓库,统一补一行再安装
+    # (darwin 产物不经 upx——会破坏 adhoc 签名,见 plugins/build.sh)
+    - sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
+    - echo "https://mirrors.aliyun.com/alpine/v$(cut -d. -f1,2 /etc/alpine-release)/community" >> /etc/apk/repositories
+    - apk add --no-cache upx
   script:
     - ./build.sh all
+    - ./plugins/build.sh all
   artifacts:
     paths:
       - dist/
+      - plugins/dist/
     # 仅够 publish 消费,过期即清,少占 runner/GitLab 存储
     expire_in: 1 day
   rules:
     - if: '$CI_COMMIT_TAG'
 
-# 发布:按平台/版本目录 scp 产物到 10.8.0.5（目录随版本累积,历史版本可回溯下载）
+# 发布:主程序与插件按平台/版本目录 scp 到 10.8.0.5（目录随版本累积,
+# 历史版本可回溯下载;插件落在版本目录的 plugins/ 子目录,gh plugins
+# download 即按此布局探测下载）
 publish:
   stage: publish
   tags:
@@ -70,18 +89,29 @@ publish:
   script:
     # 版本号与产物内 config.Version 同源:tag 去 v 前缀(v0.0.1-alpha.6 → 0.0.1-alpha.6)
     - VERSION=${CI_COMMIT_TAG#v}
-    # 三元组:目标平台 产物文件 远端文件名;windows 保留 .exe 后缀
+    # 五元组:发布目录名 GOOS GOARCH 主程序产物 远端主程序文件名;windows 保留 .exe 后缀
     - |
       for spec in \
-        "macos gh-darwin-amd64 gh" \
-        "macos-arm64 gh-darwin-arm64 gh" \
-        "linux gh-linux-amd64 gh" \
-        "linux-arm64 gh-linux-arm64 gh" \
-        "windows gh-windows-amd64.exe gh.exe" \
-        "windows-arm64 gh-windows-arm64.exe gh.exe"; do
+        "macos darwin amd64 gh-darwin-amd64 gh" \
+        "macos-arm64 darwin arm64 gh-darwin-arm64 gh" \
+        "linux linux amd64 gh-linux-amd64 gh" \
+        "linux-arm64 linux arm64 gh-linux-arm64 gh" \
+        "windows windows amd64 gh-windows-amd64.exe gh.exe" \
+        "windows-arm64 windows arm64 gh-windows-arm64.exe gh.exe"; do
         set -- $spec
-        ssh ${DEPLOY_USER}@${DEPLOY_HOST} "mkdir -p ${DEPLOY_DIR}/$1/${VERSION}"
-        scp -p dist/$2 ${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_DIR}/$1/${VERSION}/$3
+        plat=$1; os=$2; arch=$3
+        ext=""
+        if [ "$os" = windows ]; then ext=".exe"; fi
+        ssh ${DEPLOY_USER}@${DEPLOY_HOST} "mkdir -p ${DEPLOY_DIR}/${plat}/${VERSION} ${DEPLOY_DIR}/${plat}/${VERSION}/plugins"
+        scp -p dist/$4 ${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_DIR}/${plat}/${VERSION}/$5
+        # 插件:dist 里按平台后缀命名,上传时剥掉后缀放进 plugins/ 子目录
+        # (windows 保留 .exe 后缀——无后缀既不可执行也不被自动发现)
+        for f in plugins/dist/grf-*-${os}-${arch}${ext}; do
+          if [ -f "$f" ]; then
+            base=$(basename "$f" -${os}-${arch}${ext})
+            scp -p "$f" ${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_DIR}/${plat}/${VERSION}/plugins/${base}${ext}
+          fi
+        done
       done
   rules:
     - if: '$CI_COMMIT_TAG'

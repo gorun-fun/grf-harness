@@ -3,6 +3,9 @@
 // lib/downloads.ts 保持同一套约定：目录布局 {base}/{平台}/{版本}/gh(.exe)，
 // 版本按 semver 风格降序取第一个含产物文件的版本。
 //
+// 目录列表（ListDir/ErrNotFound）与下载替换（Install）是通用件，官方插件
+// 下载（plugin 包的 gh plugins download）复用同一套服务器约定。
+//
 // 下载基址默认 https://download.gorun.fun/grf-harness，可用环境变量
 // GRF_DOWNLOAD_BASE 覆盖（私有部署/调试）。
 package selfupdate
@@ -29,8 +32,9 @@ const DefaultBase = "https://download.gorun.fun/grf-harness"
 // （探测短超时、下载大文件长超时，二者差异大不适合共用 client.Timeout）。
 var httpClient = &http.Client{}
 
-// errNotFound 目录 404 的哨兵：调用方视为"无产物"而非网络故障。
-var errNotFound = errors.New("404 not found")
+// ErrNotFound 目录 404 的哨兵：调用方视为"无产物"而非网络故障
+// （插件下载等复用方据此区分"该版本没有产物"与"服务器不可达"）。
+var ErrNotFound = errors.New("404 not found")
 
 var dirHrefRe = regexp.MustCompile(`<a href="([^"]+)"`)
 
@@ -94,8 +98,8 @@ func Check(ctx context.Context, base string) (*Release, error) {
 	if !ok {
 		return nil, fmt.Errorf("当前平台 %s/%s 没有发布产物", runtime.GOOS, runtime.GOARCH)
 	}
-	root, err := listDir(ctx, base+"/")
-	if errors.Is(err, errNotFound) {
+	root, err := ListDir(ctx, base+"/")
+	if errors.Is(err, ErrNotFound) {
 		return nil, nil
 	}
 	if err != nil {
@@ -104,8 +108,8 @@ func Check(ctx context.Context, base string) (*Release, error) {
 	if !contains(root, dir) {
 		return nil, nil
 	}
-	versions, err := listDir(ctx, base+"/"+dir+"/")
-	if errors.Is(err, errNotFound) {
+	versions, err := ListDir(ctx, base+"/"+dir+"/")
+	if errors.Is(err, ErrNotFound) {
 		return nil, nil
 	}
 	if err != nil {
@@ -116,7 +120,7 @@ func Check(ctx context.Context, base string) (*Release, error) {
 	})
 	binary := BinaryName(runtime.GOOS)
 	for _, v := range versions {
-		files, err := listDir(ctx, base+"/"+dir+"/"+v+"/")
+		files, err := ListDir(ctx, base+"/"+dir+"/"+v+"/")
 		if err != nil {
 			continue // 单个版本目录异常不挡后续版本
 		}
@@ -130,9 +134,9 @@ func Check(ctx context.Context, base string) (*Release, error) {
 	return nil, nil
 }
 
-// listDir 抓取 nginx autoindex 目录页，提取去尾斜杠后的条目名
-// （过滤分页参数、绝对链接与上跳目录）。
-func listDir(ctx context.Context, url string) ([]string, error) {
+// ListDir 抓取 nginx autoindex 目录页，提取去尾斜杠后的条目名
+// （过滤分页参数、绝对链接与上跳目录）。目录缺失返回 ErrNotFound。
+func ListDir(ctx context.Context, url string) ([]string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -143,7 +147,7 @@ func listDir(ctx context.Context, url string) ([]string, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, errNotFound
+		return nil, ErrNotFound
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%s: HTTP %d", url, resp.StatusCode)

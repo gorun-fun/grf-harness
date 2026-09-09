@@ -19,7 +19,10 @@
                           # 10.8.0.5:/data/download/grf-harness/{平台}/{tag去v}/gh(.exe)；
                           # 版本号经 ldflags 注入 config.Version（CI 取 tag、本地取 git describe，去 v 前缀）
 ./plugins/build.sh        # 插件独立构建（独立模块，产物 plugins/bin/；install 安装到
-                          # ~/.grf/plugins/ 自动发现；all 交叉编译 6 平台 → plugins/dist/）
+                          # ~/.grf/plugins/ 自动发现；all 交叉编译 6 平台 → plugins/dist/，
+                          # linux/windows 产物经 upx 压缩——darwin 与 windows/arm64 跳过）
+                          # CI 同 tag 一并发布到 /data/download/grf-harness/{平台}/{版本}/plugins/
+                          # （文件名去平台后缀），gh plugins download 按此布局探测下载
 go build -o gh .
 go test ./...             # 无需网络与 API key（agent 回环用 httptest 模拟 LLM；插件 go test 下自动空转）
 go test -race ./agent ./tools ./term ./js ./llm ./server
@@ -53,8 +56,11 @@ ANSI→验证帧），历史会话输出落在 `.grf/sessions/`。
   main(package main) ── tui（全屏）/ app（库门面）/ server（HTTP ORS）/ weixin（微信渠道）
 核心层    agent（回合循环 turn.go + 暂停/恢复 pause.go + 子代理/goal/workflow/ralph）
 能力层    tools（26 工具+注册表）/ js（workflow 解释器）/ llm（传输+回退解析）
-          mcp（MCP 客户端：stdio + Streamable HTTP）/ plugin（MCP 插件管理器）
-基础层    term / config / store / selfupdate（自更新：目录探测 + semver 比较 + 替换自身）
+          mcp（MCP 客户端：stdio + Streamable HTTP）/ plugin（MCP 插件管理器 +
+          download.go 官方插件下载）
+基础层    term / config / store / selfupdate（自更新：目录探测 + semver 比较 +
+          替换自身；ListDir/Install 通用件供 plugin 下载复用，基址
+          https://download.gorun.fun/grf-harness，GRF_DOWNLOAD_BASE 覆盖）
 插件      plugins/（独立 Go 模块，独立构建：grf-browser + grf-computer，
           内部 internal/mcpserver 是插件侧 MCP 服务端 SDK）
 ```
@@ -62,7 +68,7 @@ ANSI→验证帧），历史会话输出落在 `.grf/sessions/`。
 - 根目录 `main`（package main）子命令按功能线条分文件：`chat.go`（默认三形态：
   全屏 TTY / 非 TTY 行模式 REPL / 单任务直出）、`settings_cmd.go`（model/config/
   version 脚本化读写）、`server_cmd.go`（gh server）、`plugins_cmd.go`（gh plugins
-  插件体检）、`update_cmd.go`（gh update
+  插件体检 + `gh plugins download` 官方插件下载）、`update_cmd.go`（gh update
   自更新，探测逻辑在 `selfupdate` 包；全屏交互启动时后台探测、有更新经事件循环
   提示）；connect/daemon 见 weixin 条目。
 - `agent`：核心回合循环（`turn.go` 的 `runTurn` 是唯一循环实现，`run.go` 的
