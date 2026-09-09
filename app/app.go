@@ -44,6 +44,7 @@ type Options struct {
 	// ~/.grf/settings.json（嵌入方可用它摆脱对机器全局配置的依赖）。
 	Policy      string // 统一规则串："write-workspace|read-workspace" | "write-workspace" | "read-workspace" | "off"（空值默认 off），见 config.ParsePolicy
 	AutoApprove *bool  // 非交互自动批准沙箱升级/计划
+	NoPlugins   bool   // 关闭 MCP 插件接入（不发现/不连接外部插件）
 }
 
 // App 应用门面。
@@ -80,6 +81,7 @@ func New(opts Options) (*App, error) {
 		DepthLimit:    opts.DepthLimit,
 		DisabledTools: opts.DisabledTools,
 		Skills:        opts.Skills,
+		NoPlugins:     opts.NoPlugins,
 	})
 	if err != nil {
 		return nil, err

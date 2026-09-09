@@ -171,6 +171,33 @@ err = a.RunTask(ctx, "做点什么")          // 单次执行
 | 目标 | `create_goal` / `get_goal` / `update_goal`（revision 校验、自动续跑） |
 | 编排 | `subagent` / `subagent_fork`（后台默认+落定通知）、`send_message` / `interrupt_agent` / `list_agents`、`workflow`（JS 脚本 + 并发/总量上限 + schema 校验）、`ralph`（新鲜代理循环） |
 
+## MCP 插件（plugins/）
+
+增强能力经 **MCP 插件**扩展：插件是独立编译的二进制（`plugins/` 独立
+Go 模块，不参与主程序构建，是仓库唯一允许第三方依赖的地方），主程序既
+能以本地 stdio 直接拉起（自动发现 `~/.grf/plugins/`），也能经
+Streamable HTTP 连接远端 `插件 serve` 启动的实例。`gh plugins` 一键体检。
+
+- **grf-browser**（17 工具，chromedp 纯 Go 实现，工具面对齐 playwright-mcp）：
+  `browser_navigate/back/forward/reload`、`browser_snapshot`（可交互元素
+  大纲 + ref 引用）、`browser_click/type/press_key/hover/select_option`、
+  `browser_evaluate`、`browser_take_screenshot`、`browser_get_text`、
+  `browser_console_messages`、`browser_network_requests`、`browser_tabs`、
+  `browser_close`
+- **grf-computer**（10 工具，macOS/Linux/Windows）：`computer_screenshot`
+  （PNG 多模态回传）、`computer_click/move/drag/scroll`、`computer_type`、
+  `computer_key`、`computer_clipboard`、`computer_screen_size`、
+  `computer_wait`
+
+插件工具与内置工具同表调用：审批模式逐工具确认、计划模式拦截未标只读
+的插件工具。写新插件用 `plugins/internal/mcpserver` SDK（工具实现一次
+注册，stdio/HTTP 双模式自动可用），详见 `docs/plugins.md`。
+
+```sh
+./plugins/build.sh install   # 构建并安装到 ~/.grf/plugins/（自动发现接入）
+gh plugins                   # 插件体检：连接状态 + 工具清单
+```
+
 ## 结构
 
 ```
@@ -195,10 +222,14 @@ tui/                  全屏聊天（事件循环/流式汇聚/组帧渲染分�
                       表单、计划审批、弹窗、鼠标、resize 重绘）、模型配置页
 server/               Responses API 接入层（ORS 兼容：会话池、SSE 事件
                       桥、客户端工具、暂停应答、compact）
+mcp/ + plugin/        MCP 插件接入：零依赖客户端（stdio/HTTP）与插件
+                      管理器（配置/自动发现/注册为工具，进程级共享）
+plugins/              插件二进制源码（独立 Go 模块：grf-browser、
+                      grf-computer、internal/mcpserver SDK；独立 build.sh）
 weixin/               微信 ClawBot 渠道（每用户 agent 池、消息分发、
                       登录与媒体处理）
 docs/                 architecture.md（架构总览）、integration.md（Go 库
-                      对接）、server.md（HTTP 接入）
+                      对接）、server.md（HTTP 接入）、plugins.md（MCP 插件）
 dist/                 交叉编译产物（build.sh，gitignore）
 ```
 

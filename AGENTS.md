@@ -6,7 +6,9 @@
 
 文档分工：`docs/architecture.md`（架构总览：功能线条分层、关键机制、并发
 规则）、`docs/integration.md`（Go 库对接：go get 安装、事件、多会话）、
-`docs/server.md`（HTTP Responses API 接入，ORS 兼容）。
+`docs/server.md`（HTTP Responses API 接入，ORS 兼容）、
+`docs/plugins.md`（MCP 插件：grf-browser/grf-computer、写插件指南、
+协议子集与安全模型）。
 
 ## 构建与测试
 
@@ -16,8 +18,10 @@
 ./build.sh all            # 6 平台全量；CI（.gitlab-ci.yml，仅 tag 触发、无 test job）用它构建后发布到
                           # 10.8.0.5:/data/download/grf-harness/{平台}/{tag去v}/gh(.exe)；
                           # 版本号经 ldflags 注入 config.Version（CI 取 tag、本地取 git describe，去 v 前缀）
+./plugins/build.sh        # 插件独立构建（独立模块，产物 plugins/bin/；install 安装到
+                          # ~/.grf/plugins/ 自动发现；all 交叉编译 6 平台 → plugins/dist/）
 go build -o gh .
-go test ./...             # 无需网络与 API key（agent 回环用 httptest 模拟 LLM）
+go test ./...             # 无需网络与 API key（agent 回环用 httptest 模拟 LLM；插件 go test 下自动空转）
 go test -race ./agent ./tools ./term ./js ./llm ./server
 ```
 
@@ -27,8 +31,10 @@ ANSI→验证帧），历史会话输出落在 `.grf/sessions/`。
 
 ## 硬性约束
 
-- **零第三方依赖**：`go.mod` 只允许 `module git.gorun.fun/share/grf-harness` + go 版本行，不新增 require（模块路径与公开仓库地址一致，`go get` 安装见 docs/integration.md §1）。
+- **零第三方依赖**：主模块 `go.mod` 只允许 `module git.gorun.fun/share/grf-harness` + go 版本行，不新增 require（模块路径与公开仓库地址一致，`go get` 安装见 docs/integration.md §1）。
   终端能力用自研 `term` 包，workflow 的 JS 用自研 `js` 包解释器。
+  **唯一例外**：`plugins/` 是独立 Go 模块（独立 go.mod，不参与主构建），
+  允许第三方依赖（当前仅 chromedp 及其传递依赖）。
 - **无 `internal/` 目录**：所有包必须可被其他 Go 应用导入（模块路径 `git.gorun.fun/share/grf-harness`）。
 - **工具定义唯一来源**：`tools/spec/tools.json`（go:embed 内嵌；docs/ 下的
   开发参考原稿已移除，spec 即唯一事实）。`tools.Registry.Register` 会拒绝
@@ -47,14 +53,18 @@ ANSI→验证帧），历史会话输出落在 `.grf/sessions/`。
   main(package main) ── tui（全屏）/ app（库门面）/ server（HTTP ORS）/ weixin（微信渠道）
 核心层    agent（回合循环 turn.go + 暂停/恢复 pause.go + 子代理/goal/workflow/ralph）
 能力层    tools（26 工具+注册表）/ js（workflow 解释器）/ llm（传输+回退解析）
+          mcp（MCP 客户端：stdio + Streamable HTTP）/ plugin（MCP 插件管理器）
 基础层    term / config / store / selfupdate（自更新：目录探测 + semver 比较 + 替换自身）
+插件      plugins/（独立 Go 模块，独立构建：grf-browser + grf-computer，
+          内部 internal/mcpserver 是插件侧 MCP 服务端 SDK）
 ```
 
 - 根目录 `main`（package main）子命令按功能线条分文件：`chat.go`（默认三形态：
   全屏 TTY / 非 TTY 行模式 REPL / 单任务直出）、`settings_cmd.go`（model/config/
-  version 脚本化读写）、`server_cmd.go`（gh server）、`update_cmd.go`（gh update
-自更新，探测逻辑在 `selfupdate` 包；全屏交互启动时后台探测、有更新经事件循环
-提示）；connect/daemon 见 weixin 条目。
+  version 脚本化读写）、`server_cmd.go`（gh server）、`plugins_cmd.go`（gh plugins
+  插件体检）、`update_cmd.go`（gh update
+  自更新，探测逻辑在 `selfupdate` 包；全屏交互启动时后台探测、有更新经事件循环
+  提示）；connect/daemon 见 weixin 条目。
 - `agent`：核心回合循环（`turn.go` 的 `runTurn` 是唯一循环实现，`run.go` 的
   Run/RunAs/RunWithImages 与 `RunTurn/RunTurnParts/Resume` 都是其薄委托）、
   goal 状态机、Manager（子代理树）、ralph、workflow 接线、系统提示词。
@@ -72,6 +82,21 @@ ANSI→验证帧），历史会话输出落在 `.grf/sessions/`。
   `~/.grf/weixin.log`；消息由本地 agent 回答）。守护进程生命周期管理也在本包：
   `connect.go` 的 `Connect`/`Disconnect` + 平台文件 `daemon_unix.go`/`daemon_other.go`
   （根目录 main.go 只做子命令分发）。
+- `mcp` + `plugin`：MCP 插件接入（docs/plugins.md）。`mcp` 是零依赖客户端
+  （`stdio.go` spawn 子进程行分隔 JSON-RPC / `http.go` Streamable HTTP，
+  仅 initialize/tools 子集，通知一律丢弃；stdio stderr 环形截留用于诊断）。
+  `plugin.Manager` 负责配置解析（`settings.json` 的 `plugins`；键缺省时
+  自动发现 `~/.grf/plugins` 下可执行文件）+ 建连枚举 + 经
+  `RegisterInto` 把工具注册进各 agent 注册表（`RegisterCustom`，底层连接
+  **进程级共享**——`plugin.Shared`，gh server 每会话 harness 复用同一批
+  插件连接；`testing.Testing()` 下自动空转保证测试无副作用）。连接失败只
+  降级（警告追加进系统提示词），不致命。
+- `plugins/`：独立 Go 模块的插件二进制（grf-browser=chromedp 浏览器操作、
+  grf-computer=平台命令适配的电脑操作；`plugins/internal/mcpserver` 是插件
+  侧 SDK，一份工具代码同时支持 stdio 与 `serve --addr` HTTP 双模式）。
+  工具名自带前缀命名空间、不得与内置 27 个重名；`readOnlyHint` 决定计划
+  模式是否放行（未标注的插件工具在 `agent/turn.go` 的 `planBlocked` 里按
+  改动类拦截，集合经 `Agent.planExtra` 下发）。
 
 ## 关键约定与坑
 

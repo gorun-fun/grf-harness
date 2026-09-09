@@ -49,6 +49,7 @@ type Agent struct {
 	planMode    bool
 	approveEach bool
 	planGuard   func() bool   // 子代理生效计划模式判定（指向根；根为 nil 时用自身）
+	planExtra   map[string]bool // 计划模式额外拦截的工具名（未标只读的插件工具）
 	toolCalls   int           // 已执行的工具调用数
 	toolTime    time.Duration // 工具执行累计耗时
 	bgReminded  bool          // 已发过后台作业收割提醒（每会话至多一次）

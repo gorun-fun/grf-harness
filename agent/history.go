@@ -122,6 +122,45 @@ func (a *Agent) appendToolResult(call llm.ToolCall, res tools.Result) {
 	a.mu.Unlock()
 }
 
+// degradeImages 把历史中持久化的多模态图片 parts 降级为占位文本。模型
+// 不支持 image_url 时请求会被 400 拒绝，而图片留在历史里会导致本会话
+// 之后每次请求都带同一张图、反复失败——须清洗历史才能自愈。返回是否
+// 发生了改写（调用方据此决定是否重试本轮请求）。
+func (a *Agent) degradeImages() bool {
+	const note = "[image omitted: this model endpoint rejected image input]"
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	changed := false
+	for i, m := range a.history {
+		if len(m.ContentParts) == 0 {
+			continue
+		}
+		hasImg := false
+		parts := make([]llm.Part, 0, len(m.ContentParts))
+		for _, p := range m.ContentParts {
+			if p.Type == "image_url" {
+				hasImg = true
+				continue
+			}
+			parts = append(parts, p)
+		}
+		if !hasImg {
+			continue
+		}
+		parts = append(parts, llm.TextPart(note))
+		if len(parts) == 1 && parts[0].Text == note {
+			// 原消息只有图片没有文字（如 RunWithImages 的纯图输入）：
+			// 收敛为纯文本，避免空 text part
+			a.history[i].ContentParts = nil
+			a.history[i].Content = note
+		} else {
+			a.history[i].ContentParts = parts
+		}
+		changed = true
+	}
+	return changed
+}
+
 // pausedCalls 定位最后一条带工具调用的 assistant 消息，返回其调用中尚未
 // 被后续 tool 消息闭合的部分（即暂停待恢复的调用）。
 func (a *Agent) pausedCalls() (llm.ToolCall, []llm.ToolCall) {

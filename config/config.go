@@ -37,6 +37,20 @@ type Settings struct {
 	MaxSteps     int                  `json:"max_steps,omitempty"`
 	Policy       string               `json:"policy,omitempty"`
 	AutoApprove  bool                 `json:"auto_approve,omitempty"` // 非交互时自动批准沙箱升级/计划
+	// Plugins MCP 插件接入配置。nil（配置文件未写 plugins 键）= 自动发现
+	// ~/.grf/plugins 下的可执行文件；[]（显式空数组）= 关闭自动发现；
+	// 非空 = 仅使用列出的插件（本地 command / 远程 url，见 Plugin）。
+	Plugins []Plugin `json:"plugins,omitempty"`
+}
+
+// Plugin 一个 MCP 插件接入项：本地可执行文件（stdio 模式，harness 直接
+// spawn）与远程端点（Streamable HTTP 模式，远端以 `插件 serve` 启动）二选一。
+type Plugin struct {
+	Name    string   `json:"name,omitempty"`    // 展示名；缺省取可执行文件名 / URL 主机
+	Command []string `json:"command,omitempty"` // 本地模式：可执行文件 + 参数
+	URL     string   `json:"url,omitempty"`     // 远程模式：MCP Streamable HTTP 端点
+	Token   string   `json:"token,omitempty"`   // 远程模式 Bearer token（可选）
+	Timeout int      `json:"timeout,omitempty"` // 单次工具调用超时秒数；0 用默认
 }
 
 // ParsePolicy 解析统一规则串（竖线组合）：write-workspace（写侧保护）、

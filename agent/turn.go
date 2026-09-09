@@ -8,11 +8,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"time"
 
 	"git.gorun.fun/share/grf-harness/llm"
 	"git.gorun.fun/share/grf-harness/tools"
 )
+
+// imageRejectRe 匹配模型端点拒绝图片输入的错误文本（不同服务商措辞
+// 不同，按关键词粗匹配；命中才触发历史图片降级重试）。
+var imageRejectRe = regexp.MustCompile(`(?i)image|multimodal|vision|多模态|图片`)
 
 // RunTurn 发起一个可暂停的回合（文本输入）。中途暂停时返回
 // (nil, *PausedTurn, nil)；正常结束返回最终回复。
@@ -82,6 +87,14 @@ func (a *Agent) runTurn(ctx context.Context, userMsg *llm.Message, human bool, r
 				}
 				return "", nil, context.Canceled
 			}
+			// 请求失败且错误指向图片输入、历史又带图片：模型端点不支持
+			// image_url，且图片持久化在历史里会让本会话每次请求都重复
+			// 同样的 400。降级图片为占位文本后原地重试一次；若仍失败按
+			// 原错误返回（degradeImages 只在有图片可清时返回 true，不会
+			// 无限循环；MaxSteps 兜底）。
+			if imageRejectRe.MatchString(err.Error()) && a.degradeImages() {
+				continue
+			}
 			if userMsg != nil {
 				a.rollbackOrphanUser(*userMsg)
 			}
@@ -145,7 +158,7 @@ func (a *Agent) runTurn(ctx context.Context, userMsg *llm.Message, human bool, r
 			}
 			// 计划模式：改动类工具硬拦截（提示词软约束之外的兜底；子代理
 			// 经 planGuard 跟随根），拒绝结果引导模型走调研→呈交计划路径
-			if a.inPlan() && planBlockTools[call.Name()] {
+			if a.inPlan() && a.planBlocked(call.Name()) {
 				denied := "[plan mode] 计划模式下禁止执行改动类工具（" + call.Name() +
 					"）。请继续用只读工具（read/grep/glob 等）调研，并用 exit_plan_mode 呈交完整计划供用户审批"
 				a.emit("result", firstLine(denied))
@@ -212,6 +225,17 @@ func deniedResultText(feedback string) string {
 		denied += "，反馈: " + feedback
 	}
 	return denied + "；请换一种方式继续，或向用户说明并询问"
+}
+
+// planBlocked 计划模式下是否拦截该工具：内置改动类（planBlockTools）+
+// 未标只读的插件工具（外部副作用无法静态判断，一律按改动类处理）。
+func (a *Agent) planBlocked(name string) bool {
+	if planBlockTools[name] {
+		return true
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.planExtra[name]
 }
 
 // planBlockTools 计划模式下硬拦截的改动/执行类工具。只读工具（read/

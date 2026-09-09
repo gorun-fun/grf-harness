@@ -16,6 +16,7 @@ import (
 
 	"git.gorun.fun/share/grf-harness/config"
 	"git.gorun.fun/share/grf-harness/llm"
+	"git.gorun.fun/share/grf-harness/plugin"
 	"git.gorun.fun/share/grf-harness/store"
 	"git.gorun.fun/share/grf-harness/tools"
 )
@@ -29,6 +30,7 @@ type Harness struct {
 	Fs        *tools.FsPolicy
 	Artifacts *tools.Artifacts
 	Skills    *tools.SkillCatalog
+	Plugins   *plugin.Manager // MCP 插件（进程级共享；NoPlugins 时为 nil）
 	Store     *store.Store
 	client    *llm.Client
 	Settings  *config.Settings
@@ -49,6 +51,7 @@ type Options struct {
 	DepthLimit    int      // 子代理深度上限；0 用默认
 	DisabledTools []string // 按场景禁用的工具名（根与子代理统一剔除）
 	Skills        *tools.SkillCatalog // 技能目录；nil 自动加载两级默认目录，非 nil 完全替换（空目录即关闭技能）
+	NoPlugins     bool                // 关闭 MCP 插件接入（嵌入方裁剪；go test 下插件本就自动空转）
 }
 
 // Build 组装根 harness（全部 26 个工具就位）。
@@ -81,11 +84,17 @@ func Build(opts Options) (*Harness, error) {
 	if skills == nil {
 		skills = tools.LoadSkills(opts.Workspace)
 	}
+	// MCP 插件（进程级共享；go test 下自动空转）。连接失败只降级为警告。
+	var pm *plugin.Manager
+	if !opts.NoPlugins {
+		pm = plugin.Shared(st)
+	}
 	h := &Harness{
 		Goals:     &GoalState{},
 		Todos:     &tools.TodoState{},
 		Artifacts: artifacts,
 		Skills:    skills,
+		Plugins:   pm,
 		Store:     store.New(opts.Workspace),
 		client:    opts.Client,
 		Settings:  st,
@@ -96,6 +105,13 @@ func Build(opts Options) (*Harness, error) {
 	h.bindClient(opts.Client)
 	h.Fs = h.newFsPolicy(host)
 	system := h.systemPromptFor(false, "", opts.SystemPrompt)
+	if pm != nil {
+		// 插件连接失败不致命，但要告知模型：相关工具调用会失败
+		if warns := pm.Warnings(); len(warns) > 0 {
+			system += "\n## 插件状态\n以下插件不可用，调用其工具会失败，请向用户说明并避免依赖：\n- " +
+				strings.Join(warns, "\n- ") + "\n"
+		}
+	}
 
 	root := NewAgent("agent_root", opts.Client, tools.NewRegistry(), h.Store, opts.Workspace, system)
 	root.host = host
@@ -234,6 +250,11 @@ func (h *Harness) registerTools(a *Agent, root bool) {
 		tools.RegisterAskUserDenied(r)
 	}
 	tools.RegisterExitPlanMode(r, planCtl{a}, a.host)
+	// 插件工具（MCP）：根与子代理都注册（底层连接进程级共享）；
+	// 未标只读的插件工具在计划模式下按改动类拦截
+	if h.Plugins != nil {
+		a.planExtra = h.Plugins.RegisterInto(r)
+	}
 	if len(h.disabled) > 0 {
 		r.Disable(h.disabled...)
 	}

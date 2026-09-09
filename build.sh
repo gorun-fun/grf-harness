@@ -52,6 +52,20 @@ case "${1:-}" in
         fi
         echo "OK: ./gh version"
         ./gh version
+        # 产物同步到 ~/bin（创建目录），命令行任意目录可直接用 gh
+        if [ -n "$HOME" ]; then
+            mkdir -p "$HOME/bin"
+            # 原地覆盖已签名旧文件会触发 macOS 签名校验 SIGKILL，先删再拷
+            rm -f "$HOME/bin/gh"
+            cp gh "$HOME/bin/gh"
+            if [ "$(uname)" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then
+                codesign -f -s - "$HOME/bin/gh" >/dev/null 2>&1 || true
+            fi
+            echo "已同步: $HOME/bin/gh"
+        fi
+        # 插件（独立 Go 模块）一并构建并安装到 ~/.grf/plugins/；
+        # 构建失败不吞掉（set -e），CI 交叉编译场景不在此路径
+        ./plugins/build.sh install
         ;;
     macos)
         mkdir -p dist
