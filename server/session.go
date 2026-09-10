@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -151,9 +152,16 @@ func newSID() string {
 func (s *Server) newSession(cfg *grfSessionConfig) (*session, error) {
 	sid := newSID()
 	dir := s.convDir(sid)
-	ws := filepath.Join(dir, "workspace")
 	if err := os.MkdirAll(filepath.Join(dir, "responses"), 0o755); err != nil {
 		return nil, err
+	}
+	ws := filepath.Join(dir, "workspace")
+	if cfg != nil && cfg.Workspace != "" {
+		if abs, err := filepath.Abs(cfg.Workspace); err == nil {
+			if fi, err := os.Stat(abs); err == nil && fi.IsDir() {
+				ws = abs
+			}
+		}
 	}
 	if err := os.MkdirAll(ws, 0o755); err != nil {
 		return nil, err
@@ -391,6 +399,76 @@ func (sess *session) curRespID() string {
 		return ""
 	}
 	return respID(sess.meta.ID, sess.curSeq)
+}
+
+// overrideHistory 用客户端回传的历史前缀替换会话历史（编辑重发的截断）。
+// 逐条校验 raw 与当前历史语义一致（必须是前缀，防止伪造/漂移），替换后
+// 立即落盘。content 兼容纯文本与多模态数组两种线格式。
+func (sess *session) overrideHistory(raw []json.RawMessage) error {
+	hist := sess.root.History()
+	if len(raw) > len(hist) {
+		return fmt.Errorf("长度 %d 超过当前历史 %d 条", len(raw), len(hist))
+	}
+	cut := make([]llm.Message, 0, len(raw))
+	for i, r := range raw {
+		cur, err := json.Marshal(hist[i])
+		if err != nil {
+			return fmt.Errorf("序列化当前历史第 %d 条: %w", i+1, err)
+		}
+		if !jsonSemanticallyEqual(cur, r) {
+			return fmt.Errorf("第 %d 条与当前历史不一致（必须是当前历史的前缀）", i+1)
+		}
+		m, err := wireToMessage(r)
+		if err != nil {
+			return fmt.Errorf("解析第 %d 条: %w", i+1, err)
+		}
+		cut = append(cut, m)
+	}
+	sess.root.RestoreFull(cut, sess.root.SystemText())
+	if _, err := sess.h.Store.SaveSession(cut); err != nil {
+		return fmt.Errorf("落盘截断历史: %w", err)
+	}
+	return nil
+}
+
+// jsonSemanticallyEqual 比较两段 JSON 的语义等价（忽略转义/空白/键序）。
+func jsonSemanticallyEqual(a, b []byte) bool {
+	var va, vb any
+	if err := json.Unmarshal(a, &va); err != nil {
+		return false
+	}
+	if err := json.Unmarshal(b, &vb); err != nil {
+		return false
+	}
+	return reflect.DeepEqual(va, vb)
+}
+
+// wireToMessage 把线格式消息（content 可为字符串或多模态数组）转为
+// llm.Message——标准 Unmarshal 不接受 content 数组，这里手动分流。
+func wireToMessage(raw json.RawMessage) (llm.Message, error) {
+	var w struct {
+		Role       string         `json:"role"`
+		Content    json.RawMessage `json:"content"`
+		ToolCalls  []llm.ToolCall `json:"tool_calls"`
+		ToolCallID string         `json:"tool_call_id"`
+		Name       string         `json:"name"`
+	}
+	if err := json.Unmarshal(raw, &w); err != nil {
+		return llm.Message{}, err
+	}
+	m := llm.Message{Role: w.Role, ToolCalls: w.ToolCalls, ToolCallID: w.ToolCallID, Name: w.Name}
+	if len(w.Content) > 0 && w.Content[0] == '[' {
+		var parts []llm.Part
+		if err := json.Unmarshal(w.Content, &parts); err != nil {
+			return llm.Message{}, fmt.Errorf("content 数组: %w", err)
+		}
+		m.ContentParts = parts
+	} else if len(w.Content) > 0 {
+		if err := json.Unmarshal(w.Content, &m.Content); err != nil {
+			return llm.Message{}, fmt.Errorf("content 字符串: %w", err)
+		}
+	}
+	return m, nil
 }
 
 // listConversations 枚举磁盘会话（分页参数由 handler 处理）。

@@ -69,10 +69,14 @@ type createRequest struct {
 	ServiceTier        string            `json:"service_tier"`
 	// grf:session 首次请求的会话配置（ORS §11：加字段扩展）。
 	GrfSession *grfSessionConfig `json:"grf:session"`
+	// grf:history 编辑重发的截断（ORS §11：加字段扩展）：用"当前历史的
+	// 前缀"替换会话历史后再处理本次 input。服务端逐条校验前缀一致，
+	// 防止伪造或漂移；单项保留原始 JSON 以便与当前历史做语义比较。
+	GrfHistory []json.RawMessage `json:"grf:history"`
 }
 
 // toolParam 请求 tools 数组项（ORS 只保留 function 类型；grf: 前缀 hosted
-// 工具配置是扩展，暂未使用——内置 26 个工具默认全量提供）。
+// 工具配置是扩展，暂未使用——内置 28 个工具默认全量提供）。
 type toolParam struct {
 	Type        string         `json:"type"` // "function"
 	Name        string         `json:"name"`
@@ -87,6 +91,9 @@ type grfSessionConfig struct {
 	SystemPrompt  string   `json:"system_prompt,omitempty"`
 	MaxSteps      int      `json:"max_steps,omitempty"`
 	DisabledTools []string `json:"disabled_tools,omitempty"`
+	// Workspace 指定会话工作区（GUI 等宿主把会话绑到某个项目目录）。
+	// 必须是已存在的目录绝对/相对路径；缺省用 <data>/conversations/<sid>/workspace。
+	Workspace string `json:"workspace,omitempty"`
 }
 
 // inputItem 请求 input 数组的项。
