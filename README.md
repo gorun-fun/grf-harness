@@ -1,7 +1,7 @@
 # grf-harness（gh）
 
 零依赖的终端 agent harness：**纯 Go 标准库实现**（无任何第三方依赖），
-完整实现 27 个工具（定义内嵌于 `tools/spec/tools.json`，一个不少），OpenAI 兼容接口驱动，
+完整实现 28 个工具（定义内嵌于 `tools/spec/tools.json`，一个不少），OpenAI 兼容接口驱动，
 默认全屏交互（终端宽度变化自动整帧重排重绘），亦可作为 Go 模块被其他应用
 嵌入使用，或经 `gh server` 以 OpenAI Responses API 形状供非 Go 宿主接入。
 
@@ -10,12 +10,13 @@
 - **零依赖**：终端 raw 模式、备用屏幕、输入解析（按键/粘贴/SGR 鼠标）、
   CJK 宽度软换行、SSE 流式解析、迷你 JavaScript 解释器（workflow 用）
   全部原生实现
-- **27 个工具**：定义内嵌自 `tools/spec/tools.json`（工具定义唯一来源），
+- **28 个工具**：定义内嵌自 `tools/spec/tools.json`（工具定义唯一来源），
   与 spec 严格一一对齐——ask_user_question / bash / create_goal / edit /
   enter_plan_mode / exit_plan_mode / get_goal / glob / grep / interrupt_agent /
-  job_kill / job_list / job_output / list_agents / ralph / read / read_image /
-  send_message / set_policy / skill / subagent / subagent_fork / todo_write /
-  update_goal / web_search / workflow / write
+  job_kill / job_list / job_output / list_agents / **memory**（跨会话记忆：
+  项目级默认落工作区 `.grf/memory.json`，用户级落 `~/.grf/memory.json`）/ ralph /
+  read / read_image / send_message / set_policy / skill / subagent /
+  subagent_fork / todo_write / update_goal / web_search / workflow / write
 - **全屏交互**（默认）：备用屏幕 + 底部输入框 + 内容滚动区；SIGWINCH /
   尺寸变化时按新宽度重新软换行整帧重绘；思考进度行、正文原文直出
   （不渲染 markdown，只显示原文）、连续工具事件合并折叠（Ctrl+O/单击展开）、
@@ -118,7 +119,7 @@ gh version
 
 | 路径 | 适用 | 文档 |
 |---|---|---|
-| **Go 库嵌入**（`app.New` 门面，27 工具/事件/多会话全可编程） | Go 应用 | `docs/integration.md` |
+| **Go 库嵌入**（`app.New` 门面，28 工具/事件/多会话全可编程） | Go 应用 | `docs/integration.md` |
 | **HTTP Responses API**（`gh server`，ORS 兼容；任意语言经 OpenAI SDK 指向即可） | 非 Go 宿主 / 结构化集成 | `docs/server.md` |
 | **CLI 子进程**（`./gh "任务"` 单任务直出，解析 stdout） | 脚本 / CI / 轻量调用 | integration.md §10 |
 
@@ -138,7 +139,7 @@ GOPRIVATE=git.gorun.fun go get git.gorun.fun/share/grf-harness@v0.0.1-alpha.2
 import (
     "git.gorun.fun/share/grf-harness/app"    // 应用门面（库入口）
     "git.gorun.fun/share/grf-harness/agent"  // 回合循环 / 暂停恢复 / goals / 子代理 / workflow
-    "git.gorun.fun/share/grf-harness/tools"  // 27 个工具与注册表
+    "git.gorun.fun/share/grf-harness/tools"  // 28 个工具与注册表
     "git.gorun.fun/share/grf-harness/llm"    // OpenAI 兼容客户端（SSE / tool calls / 多模态）
     "git.gorun.fun/share/grf-harness/store"  // 会话持久化
     "git.gorun.fun/share/grf-harness/config" // ~/.grf/settings.json
@@ -160,13 +161,14 @@ err = a.RunTask(ctx, "做点什么")          // 单次执行
 `ApproveEscalation`（沙箱升级审批）、`ApprovePlan`（计划审批）、
 `NotifyEvent`（事件流）。
 
-## 工具说明（27 个，定义见 tools/spec/tools.json）
+## 工具说明（28 个，定义见 tools/spec/tools.json）
 
 | 类别 | 工具 |
 |---|---|
 | 文件 | `read`（行号/分页）、`write`、`edit`（唯一匹配/replace_all）、`glob`（mtime 序/100 条内联）、`grep`（250 条内联/include 过滤）、`read_image`（PNG/JPEG/GIF 解码缩放，WebP 透传） |
 | 执行 | `bash`（workdir/timeout/exit code 标记/长输出截尾落盘/沙箱与越权即问）、`job_output` / `job_kill` / `job_list`（后台作业，流式增量读取） |
 | 网络 | `web_search`（1-4 查询合并，DDG 摘要 + 来源列表） |
+| 记忆 | `memory`（跨会话 JSON 条目记忆：项目级默认落工作区 `.grf/memory.json`，用户级落 `~/.grf/memory.json`；list/find/add/update/delete，key 自选唯一，find 按 key 精确/子串、内容子串三级检索，单文件 4KB 上限） |
 | 交互 | `ask_user_question`（表单）、`enter_plan_mode`（模型主动申请进入计划模式，经用户批准）、`exit_plan_mode`（计划审批）、`todo_write`（面板展示）、`skill`（SKILL.md 目录）、`set_policy`（模型拉起弹窗说明理由，用户亲自选择 policy，仅本会话生效） |
 | 目标 | `create_goal` / `get_goal` / `update_goal`（revision 校验、自动续跑） |
 | 编排 | `subagent` / `subagent_fork`（后台默认+落定通知）、`send_message` / `interrupt_agent` / `list_agents`、`workflow`（JS 脚本 + 并发/总量上限 + schema 校验）、`ralph`（新鲜代理循环） |
@@ -210,7 +212,7 @@ llm/                  OpenAI 兼容客户端（SSE 流式、tool_calls、图像 
                       + 正文回退工具调用解析（<tool_call> XML / DSML）
 config/               ~/.grf/settings.json
 store/                会话持久化（.grf/sessions）
-tools/                工具注册表 + 27 个工具实现；spec/tools.json 为
+tools/                工具注册表 + 28 个工具实现；spec/tools.json 为
                       工具定义唯一来源（go:embed 内嵌）
 js/                   迷你 JavaScript 解释器（workflow 脚本执行）
 agent/                回合循环（turn.go）与暂停/恢复协议（pause.go）、
@@ -251,7 +253,8 @@ go test -race ./agent ./tools ./term ./js ./llm ./server
 - 去除全部第三方依赖（bubbletea/glamour/ansi → 自研 term 包）
 - 工具链从 gh 的 7 个（read_file/write_file/edit_file/delete_file/
   list_dir/run_command/http_request + 记忆三件套）替换为新定的 25 个工具规范
-  （现内嵌于 tools/spec/tools.json，后扩至 27 个），agent 核心按其文档语义重写（通知/子代理/goal/
+  （现内嵌于 tools/spec/tools.json，后扩至 28 个，其中 memory 以单工具
+  两级作用域重拾记忆能力），agent 核心按其文档语义重写（通知/子代理/goal/
   workflow/ralph/沙箱等）
 - markdown 不再渲染（原 glamour），按需求显示原始 md 文本
 - 保留：多提供商配置、会话持久化/恢复、输入历史、模型配置页

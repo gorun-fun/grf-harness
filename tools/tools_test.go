@@ -20,8 +20,8 @@ func newTestPolicy(t *testing.T, workspace string) *FsPolicy {
 
 func TestSpecCoversAllTools(t *testing.T) {
 	names := SpecNames()
-	if len(names) != 27 {
-		t.Fatalf("spec should define 27 tools, got %d: %v", len(names), names)
+	if len(names) != 28 {
+		t.Fatalf("spec should define 28 tools, got %d: %v", len(names), names)
 	}
 	for _, n := range names {
 		if _, ok := SpecDef(n); !ok {

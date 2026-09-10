@@ -40,7 +40,7 @@ replace git.gorun.fun/share/grf-harness => /path/to/grf-harness
 
 ## 2. 库接入：app.New
 
-`app` 包是嵌入方的门面，一次构建拿到完整 harness（agent 循环、26 个
+`app` 包是嵌入方的门面，一次构建拿到完整 harness（agent 循环、28 个
 工具、会话存储）：
 
 ```go
@@ -87,7 +87,7 @@ prompt set` 落盘的那份）> 内置默认。非最高优先级非空者**替�
 
 - **注册新工具**：`tools.Registry.RegisterCustom(def llm.Tool, h Handler)`
   是嵌入方的扩展入口——工具定义（名称/描述/参数 Schema）由调用方完整
-  给出，随请求发给模型。名字不得与内置 26 个冲突（spec 是内置工具定义
+  给出，随请求发给模型。名字不得与内置 28 个冲突（spec 是内置工具定义
   的唯一来源，不允许借道覆盖），违反即 panic。
 
   ```go
@@ -103,7 +103,7 @@ prompt set` 落盘的那份）> 内置默认。非最高优先级非空者**替�
   ```
 - **替换内置实现**：对根 agent 的 registry 重新 `Register` 同名工具即可
   换掉内置 Handler。注意：`tools.Registry.Register` 要求名字必须在内置
-  spec 的 26 个之内，未知名 panic。
+  spec 的 28 个之内，未知名 panic。
 
   ```go
   a.Root().Reg().Register("web_search", myHandler) // 前提：该工具已注册

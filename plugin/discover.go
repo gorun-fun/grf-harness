@@ -39,7 +39,7 @@ func discoverPlugins() []config.Plugin {
 	return out
 }
 
-// specHasTool 名字是否与内置 27 个工具重名。
+// specHasTool 名字是否与内置 28 个工具重名。
 func specHasTool(name string) bool {
 	_, ok := tools.SpecDef(name)
 	return ok

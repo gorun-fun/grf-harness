@@ -1,7 +1,7 @@
 # grf-harness（gh）工作区说明
 
 零依赖终端 agent harness：纯 Go 标准库重构自 `~/AiProjects/gh`（bubbletea/glamour 版）。
-27 个工具的**定义（名称/描述/参数 Schema）内嵌于 `tools/spec/tools.json`**（唯一来源），
+28 个工具的**定义（名称/描述/参数 Schema）内嵌于 `tools/spec/tools.json`**（唯一来源），
 一个不能少。改动工具相关代码前先读 spec 与对接文档。
 
 文档分工：`docs/architecture.md`（架构总览：功能线条分层、关键机制、并发
@@ -42,7 +42,7 @@ ANSI→验证帧），历史会话输出落在 `.grf/sessions/`。
 - **工具定义唯一来源**：`tools/spec/tools.json`（go:embed 内嵌；docs/ 下的
   开发参考原稿已移除，spec 即唯一事实）。`tools.Registry.Register` 会拒绝
   spec 里不存在的名字。改工具行为不改 spec 文本。嵌入方扩展走 `RegisterCustom`（自带定义、
-  不得与内置 27 个重名），内置工具不借道覆盖；ORS 客户端执行工具走 `RegisterClient`
+  不得与内置 28 个重名），内置工具不借道覆盖；ORS 客户端执行工具走 `RegisterClient`
   （模型调用时转入暂停协议，见 agent/pause.go）。
 - 回复**不做 markdown 渲染**，只显示原始文本（需求如此，勿加渲染）。
 - **Git 远端分工**：origin = 私有主库 `https://git.gorun.fun/ai/grf-harnees.git`
@@ -55,7 +55,7 @@ ANSI→验证帧），历史会话输出落在 `.grf/sessions/`。
 接入表面（并列，各自薄装配，全部直接组装 agent.Build）
   main(package main) ── tui（全屏）/ app（库门面）/ server（HTTP ORS）/ weixin（微信渠道）
 核心层    agent（回合循环 turn.go + 暂停/恢复 pause.go + 子代理/goal/workflow/ralph）
-能力层    tools（26 工具+注册表）/ js（workflow 解释器）/ llm（传输+回退解析）
+能力层    tools（28 工具+注册表）/ js（workflow 解释器）/ llm（传输+回退解析）
           mcp（MCP 客户端：stdio + Streamable HTTP）/ plugin（MCP 插件管理器 +
           download.go 官方插件下载）
 基础层    term / config / store / selfupdate（自更新：目录探测 + semver 比较 +
@@ -75,9 +75,11 @@ ANSI→验证帧），历史会话输出落在 `.grf/sessions/`。
   Run/RunAs/RunWithImages 与 `RunTurn/RunTurnParts/Resume` 都是其薄委托）、
   goal 状态机、Manager（子代理树）、ralph、workflow 接线、系统提示词。
   工具与 harness 在此组装（`agent/build.go`，四表面共用的唯一装配事实）。
-- `tools`：27 个工具的实现与注册表；orchestration 类工具（subagent/goal/
+- `tools`：28 个工具的实现与注册表；orchestration 类工具（subagent/goal/
   workflow/ralph）的处理器注册在 `agent` 包，纯工具（fs/bash/jobs/web/
-  image/交互类）在 `tools` 包。
+  image/交互类/记忆）在 `tools` 包。memory 跨会话记忆是 JSON 条目库
+  （增删改查），两级落点：project（默认）= 工作区 `.grf/memory.json`，
+  user = `~/.grf/memory.json`（`agent/build.go` 的 `memoryDeps` 装配）。
 - `app`：库入口（`app.New(app.Options{...})`）+ 会话门面 + 单任务直出渲染 +
   非 TTY REPL + TaskHost。
 - `tui`：全屏聊天（`chat.go` 事件循环 / `hub.go` 流式汇聚 / `render.go` 组帧）
@@ -100,7 +102,7 @@ ANSI→验证帧），历史会话输出落在 `.grf/sessions/`。
 - `plugins/`：独立 Go 模块的插件二进制（grf-browser=chromedp 浏览器操作、
   grf-computer=平台命令适配的电脑操作；`plugins/internal/mcpserver` 是插件
   侧 SDK，一份工具代码同时支持 stdio 与 `serve --addr` HTTP 双模式）。
-  工具名自带前缀命名空间、不得与内置 27 个重名；`readOnlyHint` 决定计划
+  工具名自带前缀命名空间、不得与内置 28 个重名；`readOnlyHint` 决定计划
   模式是否放行（未标注的插件工具在 `agent/turn.go` 的 `planBlocked` 里按
   改动类拦截，集合经 `Agent.planExtra` 下发）。
 

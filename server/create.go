@@ -65,6 +65,16 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// grf:history 截断（编辑重发）：在解析 input 与暂停判定之前替换
+	// 历史，使 paused 状态按覆写后的历史计算（截掉未闭合 tool_call 即
+	// 解除暂停，随后的普通文本输入即可继续）。
+	if len(req.GrfHistory) > 0 {
+		if err := sess.overrideHistory(req.GrfHistory); err != nil {
+			writeError(w, 409, errInvalid, "grf:history: "+err.Error(), "grf:history")
+			return
+		}
+	}
+
 	// 请求级配置。
 	if req.Instructions != nil && *req.Instructions != "" {
 		sess.root.SetSystemText(*req.Instructions)

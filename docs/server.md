@@ -96,7 +96,7 @@ gh server [-addr 127.0.0.1:7400] [-data ~/.grf/server] [-token <t>]
 → 终态事件（`response.completed` / `.failed` / `.incomplete`，携带完整
 response 快照）。
 
-内置 26 个工具是 hosted tool（服务端执行），每次调用产出
+内置 28 个工具是 hosted tool（服务端执行），每次调用产出
 `grf:tool_call` item（字段：`name` / `input` / `output_text` / `err` /
 `agent_id` / `label`，全量不截断），事件 `grf:tool_call.in_progress` →
 `.completed` / `.failed` / `.denied`。思考流映射为标准 reasoning summary

@@ -1,4 +1,4 @@
-// build.go 组装完整的 harness：注册全部 26 个工具（与内嵌 spec
+// build.go 组装完整的 harness：注册全部 28 个工具（与内嵌 spec
 // 一一对齐）、构建根 agent 与子代理工厂。根会话与子代理共享 job/fs 实例
 // 的边界：子代理拥有独立 JobManager/FsPolicy（其工作区一致）；goal 与
 // ralph 仅根可用。
@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -54,7 +55,7 @@ type Options struct {
 	NoPlugins     bool                // 关闭 MCP 插件接入（嵌入方裁剪；go test 下插件本就自动空转）
 }
 
-// Build 组装根 harness（全部 26 个工具就位）。
+// Build 组装根 harness（全部 28 个工具就位）。
 func Build(opts Options) (*Harness, error) {
 	if opts.Workspace == "" {
 		wd, err := os.Getwd()
@@ -133,7 +134,7 @@ func Build(opts Options) (*Harness, error) {
 	root.goals = h.Goals
 	h.Root = root
 
-	// 根工具链（26 个全部注册）
+	// 根工具链（28 个全部注册）
 	h.registerTools(root, true)
 	// 子代理工厂
 	h.Manager.NewChild = func(parent *Agent, label string, seed []llm.Message) *Agent {
@@ -213,7 +214,7 @@ func (h *Harness) applyPolicy(normalized string) {
 	h.Fs.SetPolicy(writeLimit, readLimit)
 }
 
-// registerTools 为 agent 注册其可用工具。root=true 注册全部 26 个；
+// registerTools 为 agent 注册其可用工具。root=true 注册全部 28 个；
 // 子代理不注册 goal 三件套与 ralph（文档语义：非人类/子代理权限拒绝，
 // 直接不给入口；ask_user 子代理同样不可用）。
 func (h *Harness) registerTools(a *Agent, root bool) {
@@ -235,6 +236,7 @@ func (h *Harness) registerTools(a *Agent, root bool) {
 	tools.RegisterWebSearch(r)
 	tools.RegisterSkill(r, h.Skills)
 	tools.RegisterTodoWrite(r, h.Todos)
+	tools.RegisterMemory(r, h.memoryDeps())
 	RegisterAgentTools(r, a, h.Manager)
 	RegisterWorkflow(r, a, h.Manager)
 	if root {
@@ -271,6 +273,16 @@ func (h *Harness) managedEnv() []string {
 		"DSH_MODEL=" + model,
 		"GRF_WORKSPACE=" + h.root,
 		"GRF_MODEL=" + model,
+	}
+}
+
+// memoryDeps memory 工具的两级落点：project = 工作区 .grf/memory.json
+// （终端交互的记忆主体），user = ~/.grf/memory.json（config.Home()，
+// GRF_HOME 可重定位）。JSON 条目库增删改查，根与子代理共用同一对文件。
+func (h *Harness) memoryDeps() tools.MemoryDeps {
+	return tools.MemoryDeps{
+		ProjectPath: filepath.Join(h.root, ".grf", tools.MemoryFile),
+		UserPath:    filepath.Join(config.Home(), tools.MemoryFile),
 	}
 }
 

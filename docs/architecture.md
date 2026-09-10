@@ -16,7 +16,7 @@
 │  agent/       回合循环（turn.go）+ 暂停/恢复协议（pause.go）+        │
 │               子代理树 Manager + goal 状态机 + workflow/ralph 编排   │
 ├─ 能力层 ────────────────────────────────────────────────────────────┤
-│  tools/       26 个工具实现 + Registry（spec/tools.json 内嵌）       │
+│  tools/       28 个工具实现 + Registry（spec/tools.json 内嵌）       │
 │  js/          迷你 JS 解释器（仅 workflow 使用，受控子集）           │
 │  llm/         OpenAI 兼容客户端（SSE/多模态）+ 正文回退工具调用解析   │
 ├─ 基础层 ────────────────────────────────────────────────────────────┤
@@ -75,7 +75,7 @@
 
 四个宿主表面都直接 `agent.Build(agent.Options{...})`（或经 `app.New` 薄
 封装）拿到 `*agent.Harness`：根 agent、子代理工厂（Manager）、goal/todo/
-FsPolicy/JobManager/Store/技能目录一次就位，26 个工具按根/子代理规则注册
+FsPolicy/JobManager/Store/技能目录一次就位，28 个工具按根/子代理规则注册
 （goal 三件套、ralph、ask_user 仅根会话）。表面之间不互相依赖——`server`
 不 import `app`，`weixin` 不 import `app`，只有 main 把它们接成 CLI。
 多会话 = 多个 Harness 实例（见 integration.md §9、server 的会话池、
@@ -113,10 +113,27 @@ server → SSE 事件（bridge.go）；weixin → 控制台日志 + 消息回复
 
 ### 3.7 工具定义唯一来源
 
-26 个内置工具的定义（名称/描述/参数 Schema）内嵌于
+28 个内置工具的定义（名称/描述/参数 Schema）内嵌于
 `tools/spec/tools.json`（go:embed），`Registry.Register` 拒绝 spec 外的
 名字；嵌入方扩展走 `RegisterCustom`（自带定义、不得与内置重名），ORS
 客户端工具走 `RegisterClient`。改工具行为不改 spec 文本。
+
+### 3.8 跨会话记忆（tools/memory.go）
+
+`memory` 工具把跨会话记忆存成 **JSON 条目库**（可增删改查），两级作用域、
+写死落点（不经 FsPolicy，模型不可传路径）：**project（默认，终端交互的
+记忆主体）= 工作区 `.grf/memory.json`，user = `~/.grf/memory.json`**
+（`config.Home()`，GRF_HOME 可重定位；路径由 `agent/build.go` 的
+`memoryDeps` 装配，根与子代理共用）。库文件是纯条目数组，条目
+`{key, content, updated}`——key 由调用方自选（作用域内唯一、单行
+≤64 字符、可用于检索；add 撞 key 拒绝并引导 update）；动作 list（不带
+scope 两级都列）/ find（检索词三级匹配：key 精确 → key 子串 → content
+子串，均大小写不敏感，无命中回提示不算错）/ add / update / delete——
+scope 缺省 project，仅 list 缺省时两级都列。单文件 4KB 硬上限，超限拒绝并
+引导删改精简，list 对超限库截取前 20 条展示；读改写经进程级互斥锁串行
+（gh server 多会话共享同一对文件）；库文件 JSON 损坏报错不静默清空。
+计划模式下放行——记忆是 harness 元数据而非工作区交付物，与 todo_write
+同类。
 
 ## 4. 平台支持
 

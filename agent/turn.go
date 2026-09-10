@@ -240,7 +240,9 @@ func (a *Agent) planBlocked(name string) bool {
 
 // planBlockTools 计划模式下硬拦截的改动/执行类工具。只读工具（read/
 // grep/glob 等）与呈报类（exit_plan_mode/ask_user_question/todo_write）
-// 放行；subagent 系放行（委派调研），其内部调用同样受拦截。
+// 放行；memory 同样放行——记忆是 harness 元数据而非工作区交付物，计划
+// 阶段记下的用户偏好本就应立即沉淀；subagent 系放行（委派调研），其内部
+// 调用同样受拦截。
 var planBlockTools = map[string]bool{
 	"write":    true,
 	"edit":     true,

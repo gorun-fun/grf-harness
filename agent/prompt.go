@@ -58,6 +58,8 @@ func rootPromptBody(o PromptOptions) string {
 
 	b.WriteString("The workspace root may contain an AGENTS.md with project conventions. It is NOT auto-loaded into your context — read it early when your task touches the codebase, and keep it in mind for the session.\n\n")
 
+	b.WriteString("Long-term memory persists across sessions as JSON entry stores reached ONLY through the memory tool: project memory (the default scope) at .grf/memory.json in this workspace for project conventions, decisions and environment quirks, and user memory at ~/.grf/memory.json for the user's cross-project preferences. List memory early in a substantive session; when the user states a durable preference, decision or correction worth keeping, add it under a short unique topic key of your choosing (e.g. build-cmd); recall entries later with find, which matches exact keys first and then substrings of keys or contents. Each store is capped at 4KB — when full, update or delete stale entries instead of adding more. Never record secrets or transient task state, and never touch these files with read/write/edit.\n\n")
+
 	b.WriteString("Paths prefixed with @ are files explicitly referenced by the user. Use the read tool when their contents are needed; do not claim to have inspected a file before reading it.\n\n")
 
 	b.WriteString("Use the read tool — not shell commands like cat — to inspect text files. Results include line numbers. Use offset and limit to continue reading large files.\n\n")
