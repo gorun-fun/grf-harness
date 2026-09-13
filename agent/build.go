@@ -48,11 +48,15 @@ type Options struct {
 	Settings      *config.Settings // 可为 nil（用默认）
 	Host          tools.Host       // 交互宿主；nil 用 NoopHost
 	MaxSteps      int
-	SystemPrompt  string   // 用户自定义静态提示词；空用内置
-	DepthLimit    int      // 子代理深度上限；0 用默认
-	DisabledTools []string // 按场景禁用的工具名（根与子代理统一剔除）
+	SystemPrompt  string              // 用户自定义静态提示词；空用内置
+	DepthLimit    int                 // 子代理深度上限；0 用默认
+	DisabledTools []string            // 按场景禁用的工具名（根与子代理统一剔除）
 	Skills        *tools.SkillCatalog // 技能目录；nil 自动加载两级默认目录，非 nil 完全替换（空目录即关闭技能）
 	NoPlugins     bool                // 关闭 MCP 插件接入（嵌入方裁剪；go test 下插件本就自动空转）
+	// StoreRoot 会话存档根目录（<root>/.grf/sessions）；空则用 Workspace。
+	// 多会话进程（如 gh server）必须按会话隔离，否则新会话会恢复到
+	// workspace 里最新一次存档——把别的会话的历史带进来。
+	StoreRoot string
 }
 
 // Build 组装根 harness（全部 28 个工具就位）。
@@ -90,13 +94,17 @@ func Build(opts Options) (*Harness, error) {
 	if !opts.NoPlugins {
 		pm = plugin.Shared(st)
 	}
+	storeRoot := opts.StoreRoot
+	if storeRoot == "" {
+		storeRoot = opts.Workspace
+	}
 	h := &Harness{
 		Goals:     &GoalState{},
 		Todos:     &tools.TodoState{},
 		Artifacts: artifacts,
 		Skills:    skills,
 		Plugins:   pm,
-		Store:     store.New(opts.Workspace),
+		Store:     store.New(storeRoot),
 		client:    opts.Client,
 		Settings:  st,
 		root:      opts.Workspace,

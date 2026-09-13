@@ -13,6 +13,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -639,6 +641,100 @@ func TestRestartRecovery(t *testing.T) {
 	if r2.Status != statusCompleted || !strings.Contains(r2.Output[len(r2.Output)-1].Content[0].Text, "恢复完成") {
 		t.Fatalf("重启后恢复不符: %s %+v", r2.Status, r2.Output)
 	}
+}
+
+// 存档按会话隔离：同 workspace 新会话不继承旧会话历史，"重启"（重建
+// Server 同 dataDir）后各会话也只恢复自己的历史——修复新会话把别的
+// 会话历史串进来的问题（曾按 workspace 取最新存档导致串档）。
+func TestSessionArchiveIsolation(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("GRF_HOME", t.TempDir())
+	ws := t.TempDir()
+
+	mkServer := func(f *fakeLLM) *httptest.Server {
+		s, err := New(dataDir, "test-token")
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.clientFactory = func() (*llm.Client, error) {
+			return llm.NewClient(llm.Config{BaseURL: f.URL(), APIKey: "t", Model: "m"}), nil
+		}
+		ts := httptest.NewServer(s.Handler())
+		return ts
+	}
+	postTurn := func(ts *httptest.Server, text string) ResponseResource {
+		_, b := post(t, ts, "/v1/responses", map[string]any{
+			"model": "m", "input": text, "grf:session": map[string]any{"workspace": ws},
+		})
+		var r ResponseResource
+		_ = json.Unmarshal(b, &r)
+		return r
+	}
+
+	f1 := newFakeLLM([]string{`A 的回复`, `B 的回复`})
+	defer f1.Close()
+	ts1 := mkServer(f1)
+	ra := postTurn(ts1, "A 的问题") // 会话 A 先落一次存档
+	rb := postTurn(ts1, "B 的问题") // 同 workspace 新开会话 B
+	msgs := f1.lastMsgs()
+	if len(msgs) != 2 || msgContent(msgs[1]) != "B 的问题" {
+		t.Fatalf("新会话 B 继承了会话 A 的历史: %+v", msgs)
+	}
+	ts1.Close() // 模拟 server 重启（内存缓存清空）
+
+	f2 := newFakeLLM([]string{`C 的回复`, `B 追问的回复`})
+	ts2 := mkServer(f2)
+	defer ts2.Close()
+	rc := postTurn(ts2, "C 的问题") // 重启后同 workspace 新开会话 C
+	msgs = f2.lastMsgs()
+	if len(msgs) != 2 || msgContent(msgs[1]) != "C 的问题" {
+		t.Fatalf("重启后新会话 C 继承了其他会话的历史: %+v", msgs)
+	}
+
+	// 重启后续接会话 B：只恢复 B 自己的历史（system + B 两轮 + 追问）。
+	_, bb := post(t, ts2, "/v1/responses", map[string]any{
+		"model": "m", "input": "B 追问", "previous_response_id": rb.ID,
+	})
+	var r2 ResponseResource
+	_ = json.Unmarshal(bb, &r2)
+	if r2.Status != statusCompleted {
+		t.Fatalf("续接会话 B 失败: %s %s", r2.Status, bb)
+	}
+	msgs = f2.lastMsgs()
+	if len(msgs) != 4 || msgContent(msgs[1]) != "B 的问题" || msgContent(msgs[3]) != "B 追问" {
+		t.Fatalf("会话 B 重启恢复串入了其他会话的历史: %+v", msgs)
+	}
+
+	// 分开保存的落盘契约：存档只进各自会话目录，服务端绝不写
+	// workspace 的 .grf/sessions（那本是 CLI 终端续聊的目录）。
+	if entries := listArchives(t, filepath.Join(ws, ".grf", "sessions")); len(entries) > 0 {
+		t.Fatalf("服务端不应写 workspace 存档目录: %v", entries)
+	}
+	for _, r := range []ResponseResource{ra, rb, rc} {
+		if r.SessionID == "" {
+			t.Fatalf("响应缺少 grf:session_id: %+v", r)
+		}
+		entries := listArchives(t, filepath.Join(dataDir, "conversations", r.SessionID, ".grf", "sessions"))
+		if len(entries) == 0 {
+			t.Fatalf("会话 %s 目录下应有自己的存档", r.SessionID)
+		}
+	}
+}
+
+// listArchives 列目录里的 .json 存档文件；目录不存在返回空。
+func listArchives(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
+			names = append(names, e.Name())
+		}
+	}
+	return names
 }
 
 // 错误 call_id 的恢复处置：400 且不推进链尾（respID 回滚），正确应答后闭环。

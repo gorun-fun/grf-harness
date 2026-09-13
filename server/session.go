@@ -206,6 +206,9 @@ func (s *Server) buildSession(meta *sessionMeta) (*session, error) {
 	}
 	settings.AutoApprove = meta.AutoApprove
 	host := &deferredHost{NoopHost: tools.NoopHost{AutoApprove: meta.AutoApprove}}
+	// 存档根目录按会话隔离（conversations/<sid>/.grf/sessions）：新会话
+	// 不再继承 workspace 里最新一次存档（跨会话串历史的根源），重启后
+	// 也只恢复本会话自己的历史与暂停态。
 	h, err := agent.Build(agent.Options{
 		Workspace:     meta.Workspace,
 		Client:        client,
@@ -214,6 +217,7 @@ func (s *Server) buildSession(meta *sessionMeta) (*session, error) {
 		SystemPrompt:  meta.SystemPrompt,
 		MaxSteps:      meta.MaxSteps,
 		DisabledTools: meta.DisabledTools,
+		StoreRoot:     s.convDir(meta.ID),
 	})
 	if err != nil {
 		return nil, err
@@ -224,7 +228,7 @@ func (s *Server) buildSession(meta *sessionMeta) (*session, error) {
 		h.Root.Reg().RegisterClient(llm.Tool{Name: td.Name, Description: td.Description, Parameters: td.Parameters})
 		sess.clientTools = append(sess.clientTools, td.Name)
 	}
-	// 恢复该目录下最新存档（磁盘为准：重启后自动接上历史与暂停态）。
+	// 恢复本会话最新存档（磁盘为准：重启后自动接上历史与暂停态）。
 	if infos := h.Store.ListSessions(1); len(infos) > 0 {
 		if full, err := store.LoadSessionFull(infos[0].Path); err == nil && len(full.Messages) > 0 {
 			h.Root.RestoreFull(full.Messages, full.System)
@@ -447,11 +451,11 @@ func jsonSemanticallyEqual(a, b []byte) bool {
 // llm.Message——标准 Unmarshal 不接受 content 数组，这里手动分流。
 func wireToMessage(raw json.RawMessage) (llm.Message, error) {
 	var w struct {
-		Role       string         `json:"role"`
+		Role       string          `json:"role"`
 		Content    json.RawMessage `json:"content"`
-		ToolCalls  []llm.ToolCall `json:"tool_calls"`
-		ToolCallID string         `json:"tool_call_id"`
-		Name       string         `json:"name"`
+		ToolCalls  []llm.ToolCall  `json:"tool_calls"`
+		ToolCallID string          `json:"tool_call_id"`
+		Name       string          `json:"name"`
 	}
 	if err := json.Unmarshal(raw, &w); err != nil {
 		return llm.Message{}, err
