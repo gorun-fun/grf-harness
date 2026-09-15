@@ -85,6 +85,39 @@ func (g *GoalState) Marshal() string {
 	return string(data)
 }
 
+// Create 直接创建目标（斜杠指令 /goal 用；与 create_goal 工具同一套
+// 规则）。maxGoalRounds <= 0 时取默认值。返回创建后的目标快照。
+func (g *GoalState) Create(objective string, maxGoalRounds int) (*Goal, error) {
+	objective = strings.TrimSpace(objective)
+	if objective == "" {
+		return nil, fmt.Errorf("objective is required")
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.cur != nil && (g.cur.Phase == "working" || g.cur.Phase == "paused") {
+		return nil, fmt.Errorf("an active goal already exists (goal_id=%s, phase=%s); use update_goal to edit or complete it first", g.cur.ID, g.cur.Phase)
+	}
+	limit := goalDefaultRounds
+	if maxGoalRounds > 0 {
+		limit = maxGoalRounds
+	}
+	if limit > goalMaxRounds {
+		limit = goalMaxRounds
+	}
+	g.seq++
+	g.cur = &Goal{
+		ID:         fmt.Sprintf("goal_%d_%s", g.seq, shortID()),
+		Objective:  objective,
+		Revision:   1,
+		Phase:      "working",
+		RoundLimit: limit,
+		Armed:      true,
+		CreatedAt:  time.Now().Format(time.RFC3339),
+	}
+	cp := *g.cur
+	return &cp, nil
+}
+
 // RegisterGoalTools 注册三个 goal 工具（rootOnly 由调用方保证：子代理
 // 不注册）。
 func RegisterGoalTools(r *tools.Registry, a *Agent, goals *GoalState) {
@@ -102,31 +135,12 @@ func RegisterGoalTools(r *tools.Registry, a *Agent, goals *GoalState) {
 		if !a.isHumanTurn() {
 			return tools.Result{}, fmt.Errorf("create_goal is rejected for non-human or subagent authority; goals belong to the direct human conversation")
 		}
-		goals.mu.Lock()
-		defer goals.mu.Unlock()
-		if goals.cur != nil && (goals.cur.Phase == "working" || goals.cur.Phase == "paused") {
-			return tools.Result{}, fmt.Errorf("an active goal already exists (goal_id=%s, phase=%s); use update_goal to edit or complete it first", goals.cur.ID, goals.cur.Phase)
+		cp, err := goals.Create(p.Objective, p.MaxGoalRounds)
+		if err != nil {
+			return tools.Result{}, err
 		}
-		limit := goalDefaultRounds
-		if p.MaxGoalRounds > 0 {
-			limit = p.MaxGoalRounds
-		}
-		if limit > goalMaxRounds {
-			limit = goalMaxRounds
-		}
-		goals.seq++
-		goals.cur = &Goal{
-			ID:         fmt.Sprintf("goal_%d_%s", goals.seq, shortID()),
-			Objective:  p.Objective,
-			Revision:   1,
-			Phase:      "working",
-			RoundLimit: limit,
-			Armed:      true,
-			CreatedAt:  time.Now().Format(time.RFC3339),
-		}
-		cp := *goals.cur
 		a.emit("goal", fmt.Sprintf("created: %s", oneLine(cp.Objective, 80)))
-		return tools.TextResult(goalCreatedText(&cp)), nil
+		return tools.TextResult(goalCreatedText(cp)), nil
 	})
 
 	r.Register("get_goal", func(ctx context.Context, args string) (tools.Result, error) {

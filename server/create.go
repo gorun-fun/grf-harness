@@ -156,6 +156,33 @@ func (s *Server) execute(ctx context.Context, sess *session, req *createRequest,
 	}
 	pre := sess.root.LLMStats()
 
+	// 斜杠指令拦截（grf-harness 会话级行为，不经模型或由 harness 定义任务）：
+	// 纯本地指令直接完成回合；任务型指令改写输入后继续正常执行。
+	if resume == nil && len(images) == 0 && isSlashCommand(text) {
+		out, rewrite, handled, cerr := s.runSlashCommand(ctx, sess, text)
+		if cerr != nil {
+			sess.rollbackResp(respID)
+			return nil, cerr
+		}
+		if handled {
+			now := time.Now().Unix()
+			base.CompletedAt = &now
+			base.Status = statusCompleted
+			base.Output = []Item{{
+				Type: itemMessage, ID: "it_1", Status: "completed", Role: "assistant",
+				Content: []contentPart{{Type: "output_text", Text: out}},
+			}}
+			base.Usage = usageFrom(sess.root.LLMStats(), pre)
+			if store {
+				sess.h.Store.SetCacheKey(sess.h.CacheKey())
+				_, _ = sess.h.Store.SaveSession(sess.root.History())
+				sess.saveSnap(base)
+			}
+			return base, nil
+		}
+		text = rewrite
+	}
+
 	br := newBridge(sink, sess.nextSeq)
 	sess.root.SetStreamHooks(br.OnContent, br.OnReasoning)
 	sess.root.SetToolArgsHook(br.OnToolArgs)
