@@ -158,6 +158,7 @@ func (s *Server) execute(ctx context.Context, sess *session, req *createRequest,
 
 	br := newBridge(sink, sess.nextSeq)
 	sess.root.SetStreamHooks(br.OnContent, br.OnReasoning)
+	sess.root.SetToolArgsHook(br.OnToolArgs)
 	sess.root.SetOnToolEvent(br.OnToolEvent)
 	sess.root.SetOnEvent(br.OnNotice)
 

@@ -175,10 +175,17 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []Tool) (Me
 	return msg, nil
 }
 
+// ToolArgsHook 工具调用参数生成增量回调：模型流式生成 tool_call 参数期间
+// 逐片触发。index 为本次响应内的工具调用序号；id/name 为累计值（个别
+// 服务端分片先后到达，参数开始流出时 name 一般已齐）；delta 为本片参数
+// 增量。DSML 正文回退路径不触发本回调。
+type ToolArgsHook func(index int, id, name, delta string)
+
 // StreamHooks 流式输出回调。
 type StreamHooks struct {
 	Content   func(delta string)
 	Reasoning func(delta string)
+	ToolArgs  ToolArgsHook
 }
 
 type streamChunk struct {
@@ -303,22 +310,22 @@ func (c *Client) ChatStream(ctx context.Context, messages []Message, tools []Too
 				outEst += estimateTokens(tc.Function.Name) + estimateTokens(tc.Function.Arguments)
 			}
 		}
-	if reasoning := delta.Reasoning + delta.ReasonAlt; reasoning != "" {
-		msg.Reasoning += reasoning
-		if hooks.Reasoning != nil {
-			if d := rf.delta(msg.Reasoning); d != "" {
-				hooks.Reasoning(d)
+		if reasoning := delta.Reasoning + delta.ReasonAlt; reasoning != "" {
+			msg.Reasoning += reasoning
+			if hooks.Reasoning != nil {
+				if d := rf.delta(msg.Reasoning); d != "" {
+					hooks.Reasoning(d)
+				}
 			}
 		}
-	}
-	if delta.Content != "" {
-		msg.Content += delta.Content
-		if hooks.Content != nil {
-			if d := cf.delta(msg.Content); d != "" {
-				hooks.Content(d)
+		if delta.Content != "" {
+			msg.Content += delta.Content
+			if hooks.Content != nil {
+				if d := cf.delta(msg.Content); d != "" {
+					hooks.Content(d)
+				}
 			}
 		}
-	}
 		for _, tc := range delta.ToolCalls {
 			cur, ok := calls[tc.Index]
 			if !ok {
@@ -330,6 +337,12 @@ func (c *Client) ChatStream(ctx context.Context, messages []Message, tools []Too
 			}
 			cur.Function.Name += tc.Function.Name
 			cur.Function.Arguments += tc.Function.Arguments
+			// 工具调用头(name/id 先到、参数为空)与参数增量都即时报给宿主
+			// ——头片一到宿主就能建卡(工具名先显示,不再干等参数)。
+			if hooks.ToolArgs != nil &&
+				(tc.ID != "" || tc.Function.Name != "" || tc.Function.Arguments != "") {
+				hooks.ToolArgs(tc.Index, cur.ID, cur.Function.Name, tc.Function.Arguments)
+			}
 		}
 	}
 	if err := scanner.Err(); err != nil {

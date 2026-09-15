@@ -1,7 +1,7 @@
 // turn.go 核心回合循环：并入 user 输入（或恢复处置）→ LLM 请求 → 执行
 // 工具调用 → 结果回传，直至产生最终回复或命中暂停点（转 pause.go 的
 // 暂停/恢复协议）。RunTurn/RunTurnParts 是可暂停入口；run* 系列
-//（run.go）经 runMessage 也走这里。
+// （run.go）经 runMessage 也走这里。
 package agent
 
 import (
@@ -66,7 +66,7 @@ func (a *Agent) runTurn(ctx context.Context, userMsg *llm.Message, human bool, r
 		}
 	}
 
-	hooks := llm.StreamHooks{Content: a.onContent, Reasoning: a.onReason}
+	hooks := llm.StreamHooks{Content: a.onContent, Reasoning: a.onReason, ToolArgs: a.onToolArgs}
 
 	for step := step0; step < a.MaxSteps(); step++ {
 		// 通知并入（在 LLM 请求前，此时 tool 结果均已闭合）

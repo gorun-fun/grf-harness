@@ -41,6 +41,7 @@ type Agent struct {
 	onToolEvent OnToolEvent
 	onContent   func(string)
 	onReason    func(string)
+	onToolArgs  llm.ToolArgsHook
 	maxSteps    int
 	humanTurn   bool
 	running     bool
@@ -48,12 +49,12 @@ type Agent struct {
 	notices     []string
 	planMode    bool
 	approveEach bool
-	planGuard   func() bool   // 子代理生效计划模式判定（指向根；根为 nil 时用自身）
+	planGuard   func() bool     // 子代理生效计划模式判定（指向根；根为 nil 时用自身）
 	planExtra   map[string]bool // 计划模式额外拦截的工具名（未标只读的插件工具）
-	toolCalls   int           // 已执行的工具调用数
-	toolTime    time.Duration // 工具执行累计耗时
-	bgReminded  bool          // 已发过后台作业收割提醒（每会话至多一次）
-	pausedSteps int           // 暂停时已消耗的工具循环步数（Resume 续用，见 pause.go）
+	toolCalls   int             // 已执行的工具调用数
+	toolTime    time.Duration   // 工具执行累计耗时
+	bgReminded  bool            // 已发过后台作业收割提醒（每会话至多一次）
+	pausedSteps int             // 暂停时已消耗的工具循环步数（Resume 续用，见 pause.go）
 
 	mgr        *Manager
 	goals      *GoalState
@@ -120,6 +121,10 @@ func (a *Agent) SetHost(h tools.Host) { a.host = h }
 func (a *Agent) SetStreamHooks(content, reasoning func(string)) {
 	a.onContent, a.onReason = content, reasoning
 }
+
+// SetToolArgsHook 注册工具参数生成增量回调（与 SetStreamHooks 同级，根
+// agent 生效；子代理不回流）。
+func (a *Agent) SetToolArgsHook(fn llm.ToolArgsHook) { a.onToolArgs = fn }
 
 // SystemText 当前 system prompt。
 func (a *Agent) SystemText() string { return a.system }

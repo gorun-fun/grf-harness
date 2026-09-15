@@ -14,18 +14,19 @@ import (
 
 // bridge 一次回合的事件桥。
 type bridge struct {
-	sink    func(*event) // 事件出口（nil = 仅收集 items，非流式用）
-	nextSeq func() int64
-	items   []Item
-	open    map[string]int // CallID → items 下标（工具 item 生命周期）
-	cur     int            // 当前开放 item 下标；-1 无
-	curKind string         // "message" | "reasoning"
-	curText strings.Builder
-	itemSeq int
+	sink     func(*event) // 事件出口（nil = 仅收集 items，非流式用）
+	nextSeq  func() int64
+	items    []Item
+	open     map[string]int // CallID → items 下标（工具 item 生命周期）
+	argsOpen map[int]int    // 参数流式已开、尚未开跑的工具 item（流内 index → items 下标）
+	cur      int            // 当前开放 item 下标；-1 无
+	curKind  string         // "message" | "reasoning"
+	curText  strings.Builder
+	itemSeq  int
 }
 
 func newBridge(sink func(*event), nextSeq func() int64) *bridge {
-	return &bridge{sink: sink, nextSeq: nextSeq, open: map[string]int{}, cur: -1}
+	return &bridge{sink: sink, nextSeq: nextSeq, open: map[string]int{}, argsOpen: map[int]int{}, cur: -1}
 }
 
 // emit 发一个事件（sink 为 nil 时静默）。
@@ -129,11 +130,88 @@ func (b *bridge) OnReasoning(delta string) {
 		SummaryIndex: 0, Delta: delta})
 }
 
+// OnToolArgs 工具调用生成增量（llm.StreamHooks.ToolArgs）：头片（name/id
+// 先到、参数为空）即开 grf:tool_call 待定项——宿主在模型开始生成就有卡
+// 可看，不再干等参数；参数增量逐片发 grf:tool_call.args_delta 扩展事件
+// （如 edit/write 的 +nn/-nn 实时统计）。不发 output_item.added——标准
+// ORS 客户端对整个过程无感，待定项由执行/暂停事件收编或收尾兜底。不动
+// b.cur：正文与参数可交错，文本 item 的生命周期不受影响。
+func (b *bridge) OnToolArgs(index int, id, name, delta string) {
+	idx, ok := b.argsOpen[index]
+	fresh := false
+	if !ok {
+		it := Item{Type: itemGrfToolCall, ID: b.itemID(), Status: "in_progress",
+			CallID: id, Name: name}
+		b.items = append(b.items, it)
+		idx = len(b.items) - 1
+		b.argsOpen[index] = idx
+		fresh = true
+	}
+	it := &b.items[idx]
+	if id != "" {
+		it.CallID = id
+	}
+	nameSet := false
+	if name != "" && it.Name == "" {
+		it.Name = name
+		nameSet = true
+	}
+	it.Input += delta
+	// 仅在有待发布信息时发事件：新开 item、工具名刚到位或参数有增量
+	// （name 碎片重发对宿主无信息量）。
+	if fresh || nameSet || delta != "" {
+		b.emit(&event{Type: "grf:tool_call.args_delta", ItemID: it.ID, OutputIndex: idx,
+			Kind: it.Name, Delta: delta})
+	}
+}
+
+// takeArgsItem 取出与执行事件匹配的参数流式 item：优先 call_id 精确匹配，
+// 其次同名的未标识项（个别服务端不回 tool_call id）。取出即从待定表移除。
+func (b *bridge) takeArgsItem(callID, name string) (int, bool) {
+	found := -1
+	if callID != "" {
+		for _, v := range b.argsOpen {
+			if b.items[v].CallID == callID {
+				found = v
+				break
+			}
+		}
+	}
+	if found < 0 {
+		for _, v := range b.argsOpen {
+			if it := b.items[v]; it.CallID == "" && it.Name == name {
+				found = v
+				break
+			}
+		}
+	}
+	if found < 0 {
+		return 0, false
+	}
+	for k, v := range b.argsOpen {
+		if v == found {
+			delete(b.argsOpen, k)
+		}
+	}
+	return found, true
+}
+
 // OnToolEvent 工具事件：running 开 grf:tool_call item，终态关闭。
 func (b *bridge) OnToolEvent(e agent.ToolEvent) {
 	switch e.Status {
 	case agent.ToolStatusRunning:
 		b.closeCur() // 文本段与工具调用是不同 item
+		if idx, ok := b.takeArgsItem(e.CallID, e.Name); ok {
+			// 参数流式已开的 item：补全执行信息后复用（不重发 output_item.
+			// added，宿主已建卡）；Input 以 ToolEvent 全量参数为准。
+			it := &b.items[idx]
+			it.CallID, it.Input = e.CallID, e.Input
+			it.AgentID, it.Label = e.AgentID, e.Label
+			b.open[e.CallID] = idx
+			b.emit(&event{Type: "grf:tool_call.in_progress", ItemID: it.ID, OutputIndex: idx,
+				Kind: e.Name, Detail: e.Input, Item: it})
+			return
+		}
 		it := Item{
 			Type: itemGrfToolCall, ID: b.itemID(), Status: "in_progress",
 			CallID: e.CallID, Name: e.Name, Input: e.Input,
@@ -194,6 +272,12 @@ func (b *bridge) finish(reply string) []Item {
 		it.Content = []contentPart{{Type: "output_text", Text: reply}}
 	}
 	b.closeCur()
+	// 参数流式中断（生成失败/取消）残留的待定项：标 incomplete 留在快照
+	// 里（未发过 added，不补 done；宿主侧按终态事件自行收口）。
+	for _, v := range b.argsOpen {
+		b.items[v].Status = "incomplete"
+	}
+	b.argsOpen = map[int]int{}
 	// 暂停中未闭合的工具调用保持 in_progress（暂停语义：等交互应答）
 	out := make([]Item, len(b.items))
 	copy(out, b.items)
@@ -222,8 +306,17 @@ func (b *bridge) pausedItems(paused *agent.PausedTurn) (bool, []IncompleteReques
 			b.emit(&event{Type: "response.output_item.done", OutputIndex: idx, Item: &b.items[idx]})
 		default:
 			hasInteraction = true
-			// 交互请求 item（in_progress：应答后经 Resume 续跑）
+			// 交互请求 item（in_progress：应答后经 Resume 续跑）。参数流式
+			// 已开的待定项直接收编（补 call_id/全量参数），避免与生成期
+			// 卡片重复。
 			if _, exists := b.open[pc.CallID]; !exists {
+				if idx, ok := b.takeArgsItem(pc.CallID, pc.Name); ok {
+					it := &b.items[idx]
+					it.CallID, it.Input = pc.CallID, pc.Arguments
+					b.emit(&event{Type: "grf:tool_call.in_progress", ItemID: it.ID, OutputIndex: idx,
+						Kind: pc.Name, Detail: pc.Arguments, Item: it})
+					continue
+				}
 				it := Item{
 					Type: itemGrfToolCall, ID: b.itemID(), Status: "in_progress",
 					CallID: pc.CallID, Name: pc.Name, Input: pc.Arguments,
