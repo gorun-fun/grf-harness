@@ -85,6 +85,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/responses/{id}/cancel", s.guard(s.handleCancel))
 	mux.HandleFunc("GET /v1/conversations", s.guard(s.handleListConversations))
 	mux.HandleFunc("GET /v1/conversations/{id}", s.guard(s.handleGetConversation))
+	mux.HandleFunc("PUT /v1/conversations/{id}/policy", s.guard(s.handleSetPolicy))
 	mux.HandleFunc("DELETE /v1/conversations/{id}", s.guard(s.handleArchiveConversation))
 	mux.HandleFunc("GET /v1/conversations/{id}/items", s.guard(s.handleConversationItems))
 	mux.HandleFunc("GET /v1/health", s.guard(s.handleHealth))

@@ -222,6 +222,19 @@ func (h *Harness) applyPolicy(normalized string) {
 	h.Fs.SetPolicy(writeLimit, readLimit)
 }
 
+// SetPolicy 宿主（GUI 等）直接变更本会话 policy：规范化后走与 set_policy
+// 批准落地同一条路径，立即生效、仅本会话、不落盘。返回规范化结果。
+func (h *Harness) SetPolicy(policy string) string {
+	n := config.NormalizePolicy(policy)
+	h.applyPolicy(n)
+	return n
+}
+
+// Policy 当前生效的 policy（规范化串；运行时变更后即时反映）。
+func (h *Harness) Policy() string {
+	return config.NormalizePolicy(h.Settings.Policy)
+}
+
 // registerTools 为 agent 注册其可用工具。root=true 注册全部 28 个；
 // 子代理不注册 goal 三件套与 ralph（文档语义：非人类/子代理权限拒绝，
 // 直接不给入口；ask_user 子代理同样不可用）。

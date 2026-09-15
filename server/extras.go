@@ -5,6 +5,8 @@
 package server
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -137,11 +139,46 @@ func (s *Server) handleGetConversation(w http.ResponseWriter, r *http.Request) {
 		"workspace": dto.Workspace, "last_response_id": dto.LastResponseID,
 		"paused":  sess.root.HasPausedCalls(),
 		"running": sess.root.IsRunning(),
+		"policy":  sess.h.Policy(),
 		"stats": map[string]any{
 			"llm":   sess.root.LLMStats(),
 			"tools": map[string]any{"calls": calls, "time_ms": dur.Milliseconds()},
 		},
 	})
+}
+
+// handleSetPolicy PUT /v1/conversations/{id}/policy {"policy":"write-workspace"}：
+// 宿主 GUI 运行时变更本会话访问策略，立即生效（与 set_policy 批准后同一
+// 落地路径），仅本会话、不落盘。
+func (s *Server) handleSetPolicy(w http.ResponseWriter, r *http.Request) {
+	sid := r.PathValue("id")
+	sess, err := s.getSession(sid)
+	if err != nil {
+		writeJSONError(w, err)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		writeError(w, 400, errInvalid, "read body: "+err.Error(), "")
+		return
+	}
+	var req struct {
+		Policy string `json:"policy"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeError(w, 400, errInvalid, "invalid JSON body: "+err.Error(), "")
+		return
+	}
+	// 只收预制两值（与 set_policy 用户可选值一致）；组合串仍可经
+	// grf:session 首条消息配置。
+	switch req.Policy {
+	case "write-workspace", "off":
+	default:
+		writeError(w, 400, errInvalid, "policy must be one of: write-workspace, off", "policy")
+		return
+	}
+	applied := sess.h.SetPolicy(req.Policy)
+	writeJSON(w, 200, map[string]any{"policy": applied})
 }
 
 // handleArchiveConversation DELETE /v1/conversations/{id}：归档（终止在跑
