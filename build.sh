@@ -10,6 +10,9 @@
 #   windows-arm64 windows/arm64  → dist/gh-windows-arm64.exe
 #   all           上述六个平台全部
 # 兼容别名：linux-arm = linux-arm64
+# upx：linux/windows 产物构建后经 upx 压缩（装了才压，UPX=0 可禁用）；
+# darwin 与 windows/arm64 一律跳过——upx 会破坏 darwin 内嵌的 adhoc 签名
+# （拷贝到 macOS 后运行即 SIGKILL），且至 5.2 尚不支持 win64/arm64 PE
 set -e
 cd "$(dirname "$0")"
 GO=${GO:-go}
@@ -22,6 +25,27 @@ fi
 VERSION=${CI_COMMIT_TAG:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}
 case "$VERSION" in v[0-9]*) VERSION=${VERSION#v};; esac
 LDFLAGS="-s -w -X git.gorun.fun/share/grf-harness/config.Version=$VERSION"
+
+# upx_compress 参数：目标 goos、goarch、产物路径。压缩失败只警告不中断（保留未压缩版本）。
+upx_compress() {
+    if [ "$1" = darwin ]; then
+        return 0
+    fi
+    if [ "$1$2" = "windowsarm64" ]; then
+        # goos goarch 拼串判断：upx 至 5.2 尚不支持 win64/arm64 PE
+        return 0
+    fi
+    if [ "${UPX:-1}" = "0" ]; then
+        return 0
+    fi
+    if ! command -v upx >/dev/null 2>&1; then
+        echo "提示: 未安装 upx，$3 未压缩"
+        return 0
+    fi
+    if ! upx "$3"; then
+        echo "警告: upx 压缩 $3 失败，保留未压缩版本"
+    fi
+}
 
 # 交叉编译单个目标：参数为 名称 GOOS GOARCH 产物路径
 # vet 也带 GOOS/GOARCH，可顺带检查平台专属文件（termios/term 回退等）
@@ -36,6 +60,8 @@ build_one() {
     if [ "$2" = darwin ] && command -v codesign >/dev/null 2>&1; then
         codesign -f -s - "$4" >/dev/null 2>&1 || true
     fi
+    # darwin 与 windows/arm64 跳过压缩（见文件头说明），其余压完再报 OK
+    upx_compress "$2" "$3" "$4"
     echo "OK: $4"
 }
 

@@ -17,7 +17,9 @@
 ./build.sh macos|macos-arm64|linux|linux-arm64|windows|windows-arm64|all   # 交叉编译，产物在 dist/
 ./build.sh all            # 6 平台全量；CI（.gitlab-ci.yml，仅 tag 触发、无 test job）用它构建后发布到
                           # 10.8.0.5:/data/download/grf-harness/{平台}/{tag去v}/gh(.exe)；
-                          # 版本号经 ldflags 注入 config.Version（CI 取 tag、本地取 git describe，去 v 前缀）
+                          # 版本号经 ldflags 注入 config.Version（CI 取 tag、本地取 git describe，去 v 前缀）；
+                          # 交叉编译产物 linux/windows 经 upx 压缩（UPX=0 禁用；darwin 与 windows/arm64
+                          # 跳过，同 plugins/build.sh 规则）
 ./plugins/build.sh        # 插件独立构建（独立模块，产物 plugins/bin/；install 安装到
                           # ~/.grf/plugins/ 自动发现；all 交叉编译 6 平台 → plugins/dist/，
                           # linux/windows 产物经 upx 压缩——darwin 与 windows/arm64 跳过）

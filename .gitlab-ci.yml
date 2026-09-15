@@ -10,8 +10,8 @@
 #          去掉平台后缀——目录已标识平台,与 gh plugins download 的约定一致）
 #
 # 零第三方依赖、纯标准库,直接用 golang 镜像跑 ./build.sh 即可,无需 Docker 打包。
-# 插件模块（plugins/,独立 go.mod）拉第三方依赖走 GOPROXY 国内镜像;其
-# linux/windows 产物在 build.sh all 内经 upx 压缩。
+# 插件模块（plugins/,独立 go.mod）拉第三方依赖走 GOPROXY 国内镜像;主程序与
+# 插件的 linux/windows 产物均在各自 build.sh all 内经 upx 压缩。
 # 发布侧需在 GitLab CI/CD Variables 配置文件型变量:
 #   DEPLOY_SSH_PRIVATE_KEY (发布机 SSH 私钥,类型选 File)
 # ============================================================================
@@ -46,14 +46,15 @@ stages:
   - publish
 
 # 打 tag:交叉编译 6 平台产物(主程序 build.sh 逐平台带 GOOS/GOARCH vet;
-# 插件 build.sh all 一次 vet + 12 个产物,linux/windows 经 upx 压缩)
+# 插件 build.sh all 一次 vet + 12 个产物;两者 linux/windows 均经 upx 压缩)
 build:
   stage: build
   tags:
     - docker
   before_script:
     # 使用国内 Alpine 源加速;upx 在 community 仓库,统一补一行再安装
-    # (darwin 产物不经 upx——会破坏 adhoc 签名,见 plugins/build.sh)
+    # (darwin 与 windows/arm64 产物不经 upx——会破坏 adhoc 签名/不支持
+    # win64/arm64 PE,见 build.sh 与 plugins/build.sh)
     - sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
     - echo "https://mirrors.aliyun.com/alpine/v$(cut -d. -f1,2 /etc/alpine-release)/community" >> /etc/apk/repositories
     - apk add --no-cache upx
