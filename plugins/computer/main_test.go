@@ -17,6 +17,7 @@ func TestComputerToolsRegistered(t *testing.T) {
 	names := s.Names()
 	want := map[string]bool{
 		"computer_screenshot": true, "computer_screen_size": true, "computer_click": true,
+		"computer_list_displays": true,
 		"computer_move": true, "computer_drag": true, "computer_scroll": true,
 		"computer_type": true, "computer_key": true, "computer_clipboard": true,
 		"computer_wait": true,

@@ -1,5 +1,6 @@
 // tools.go grf-computer 工具面：截屏回传多模态图像，其余操作返回文本
-// 结果。坐标均为屏幕绝对坐标（原点左上）。
+// 结果。坐标均为全局虚拟桌面坐标（原点=主屏左上，多屏时副屏坐标可为负，
+// 各屏边界见 computer_list_displays）。
 package main
 
 import (
@@ -7,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"git.gorun.fun/share/grf-harness/plugins/internal/mcpserver"
@@ -30,14 +32,72 @@ func ctext(s string) []mcpserver.Content {
 // registerComputerTools 注册全部 computer_* 工具。
 func registerComputerTools(s *mcpserver.Server, p platform) {
 	s.Add(mcpserver.Tool{
-		Name:        "computer_screenshot",
-		Description: "截取整块屏幕，PNG 图像直接回传（多模态）。操作前先截图确认现状。",
+		Name:        "computer_list_displays",
+		Description: "枚举显示器：每屏编号(index)/名称/全局边界 x,y,w,h/是否主屏/缩放 scale（截图像素与坐标的倍率，Retina=2）。鼠标/坐标工具一律用全局坐标系（原点=主屏左上，副屏排左侧/上方时坐标为负）。",
 		Schema:      cobj(map[string]any{}),
 		ReadOnly:    true,
 		Handler: func(ctx context.Context, args json.RawMessage) ([]mcpserver.Content, error) {
-			data, err := p.Screenshot(ctx)
+			ds, err := p.Displays(ctx)
 			if err != nil {
 				return nil, err
+			}
+			var b strings.Builder
+			for _, d := range ds {
+				main := ""
+				if d.Main {
+					main = " [主屏]"
+				}
+				name := d.Name
+				if name != "" {
+					name = " name=" + name
+				}
+				fmt.Fprintf(&b, "#%d x=%d y=%d w=%d h=%d scale=%d%s%s\n", d.Index, d.X, d.Y, d.W, d.H, d.Scale, main, name)
+			}
+			return ctext(strings.TrimRight(b.String(), "\n")), nil
+		},
+	})
+
+	s.Add(mcpserver.Tool{
+		Name:        "computer_screenshot",
+		Description: "截屏，PNG 图像直接回传（多模态），并附文字说明图像覆盖的全局坐标范围与像素倍率 scale。只截单个显示器：指定 display 编号截该屏，省略则截主屏（Retina 下图像为 scale 倍像素）。点击等坐标工具用全局坐标：图上目标像素位置 ÷ scale + 覆盖范围起点 即为全局坐标。操作前先截图确认现状。多屏注意：本工具一次只截一屏，要找的窗口/应用可能不在当前所截屏幕上——若图上找不到目标，先用 computer_list_displays 枚举各屏，再用 display 参数逐屏截图定位目标。",
+		Schema: cobj(map[string]any{
+			"display": cnum("显示器编号（computer_list_displays 的 index，可省略=主屏）"),
+		}),
+		ReadOnly: true,
+		Handler: func(ctx context.Context, args json.RawMessage) ([]mcpserver.Content, error) {
+			var a struct {
+				Display *int `json:"display"`
+			}
+			if err := json.Unmarshal(args, &a); err != nil {
+				return nil, err
+			}
+			// 截图永远只截单屏（省略 display=主屏），截到的内容与该屏的
+			// 全局坐标一致；连同实际图像尺寸/倍率一起回传，供模型把图上
+			// 像素换算成全局坐标
+			ds, err := p.Displays(ctx)
+			if err != nil {
+				return nil, err
+			}
+			d, err := pickDisplay(ds, a.Display)
+			if err != nil {
+				return nil, err
+			}
+			data, err := p.Screenshot(ctx, &d.Index)
+			if err != nil {
+				return nil, err
+			}
+			scale := 0
+			if pw, ph, ok := pngSize(data); ok {
+				if d.W > 0 && pw%d.W == 0 {
+					scale = pw / d.W
+				}
+				meta := fmt.Sprintf("图像 %dx%d 像素；覆盖 display#%d（全局坐标 x=%d..%d, y=%d..%d）", pw, ph, d.Index, d.X, d.X+d.W, d.Y, d.Y+d.H)
+				if scale > 1 {
+					meta += fmt.Sprintf("；scale=%d，图上像素坐标 ÷ %d 再加起点 (%d,%d) 才是点击用的全局坐标", scale, scale, d.X, d.Y)
+				} else {
+					meta += fmt.Sprintf("；scale=1，图上像素坐标加起点 (%d,%d) 即点击用的全局坐标", d.X, d.Y)
+				}
+				return []mcpserver.Content{mcpserver.Text(meta), mcpserver.ImagePNG(base64.StdEncoding.EncodeToString(data))}, nil
 			}
 			return []mcpserver.Content{mcpserver.ImagePNG(base64.StdEncoding.EncodeToString(data))}, nil
 		},
@@ -45,11 +105,19 @@ func registerComputerTools(s *mcpserver.Server, p platform) {
 
 	s.Add(mcpserver.Tool{
 		Name:        "computer_screen_size",
-		Description: "查询主屏分辨率（宽高像素）。截图/点击前可用来换算坐标。",
-		Schema:      cobj(map[string]any{}),
-		ReadOnly:    true,
+		Description: "查询屏幕分辨率（宽高；省略 display=主屏）。截图/点击前可用来换算坐标。",
+		Schema: cobj(map[string]any{
+			"display": cnum("显示器编号（可省略=主屏）"),
+		}),
+		ReadOnly: true,
 		Handler: func(ctx context.Context, args json.RawMessage) ([]mcpserver.Content, error) {
-			w, h, err := p.ScreenSize(ctx)
+			var a struct {
+				Display *int `json:"display"`
+			}
+			if err := json.Unmarshal(args, &a); err != nil {
+				return nil, err
+			}
+			w, h, err := p.ScreenSize(ctx, a.Display)
 			if err != nil {
 				return nil, err
 			}
@@ -59,7 +127,7 @@ func registerComputerTools(s *mcpserver.Server, p platform) {
 
 	s.Add(mcpserver.Tool{
 		Name:        "computer_click",
-		Description: "在屏幕绝对坐标 (x,y) 点击鼠标（可指定按键与连击次数）。",
+		Description: "在全局坐标 (x,y) 点击鼠标（原点=主屏左上，多屏时副屏坐标可为负；可指定按键与连击次数）。",
 		Schema: cobj(map[string]any{
 			"x":      cnum("横坐标（像素，原点左上）"),
 			"y":      cnum("纵坐标"),
@@ -88,7 +156,7 @@ func registerComputerTools(s *mcpserver.Server, p platform) {
 
 	s.Add(mcpserver.Tool{
 		Name:        "computer_move",
-		Description: "移动鼠标指针到屏幕绝对坐标（不点击）。",
+		Description: "移动鼠标指针到全局坐标（不点击；多屏坐标约定见 computer_list_displays）。",
 		Schema:      cobj(map[string]any{"x": cnum("横坐标"), "y": cnum("纵坐标")}, "x", "y"),
 		Handler: func(ctx context.Context, args json.RawMessage) ([]mcpserver.Content, error) {
 			var a struct {
@@ -138,40 +206,40 @@ func registerComputerTools(s *mcpserver.Server, p platform) {
 			"direction": map[string]any{"type": "string", "enum": []string{"up", "down"}, "description": "滚动方向（默认 down）"},
 			"amount":    cnum("滚动行数（默认 3）"),
 		}),
-			Handler: func(ctx context.Context, args json.RawMessage) ([]mcpserver.Content, error) {
-				var a struct {
-					X         *int   `json:"x"`
-					Y         *int   `json:"y"`
-					Direction string `json:"direction"`
-					Amount    int    `json:"amount"`
-				}
-				if err := json.Unmarshal(args, &a); err != nil {
-					return nil, err
-				}
-				if a.Direction == "" {
-					a.Direction = "down"
-				}
-				if a.Amount == 0 {
-					a.Amount = 3
-				}
-				// 指针区分"显式给了坐标（含 0）"与"省略"，(0,0) 不再被误当省略
-				hasPos := a.X != nil || a.Y != nil
-				x, y := 0, 0
-				if a.X != nil {
-					x = *a.X
-				}
-				if a.Y != nil {
-					y = *a.Y
-				}
-				if err := p.Scroll(ctx, x, y, hasPos, a.Direction, a.Amount); err != nil {
-					return nil, err
-				}
-				pos := "当前位置"
-				if hasPos {
-					pos = fmt.Sprintf("(%d,%d)", x, y)
-				}
-				return ctext(fmt.Sprintf("已在 %s 向 %s 滚动 %d 行", pos, a.Direction, a.Amount)), nil
-			},
+		Handler: func(ctx context.Context, args json.RawMessage) ([]mcpserver.Content, error) {
+			var a struct {
+				X         *int   `json:"x"`
+				Y         *int   `json:"y"`
+				Direction string `json:"direction"`
+				Amount    int    `json:"amount"`
+			}
+			if err := json.Unmarshal(args, &a); err != nil {
+				return nil, err
+			}
+			if a.Direction == "" {
+				a.Direction = "down"
+			}
+			if a.Amount == 0 {
+				a.Amount = 3
+			}
+			// 指针区分"显式给了坐标（含 0）"与"省略"，(0,0) 不再被误当省略
+			hasPos := a.X != nil || a.Y != nil
+			x, y := 0, 0
+			if a.X != nil {
+				x = *a.X
+			}
+			if a.Y != nil {
+				y = *a.Y
+			}
+			if err := p.Scroll(ctx, x, y, hasPos, a.Direction, a.Amount); err != nil {
+				return nil, err
+			}
+			pos := "当前位置"
+			if hasPos {
+				pos = fmt.Sprintf("(%d,%d)", x, y)
+			}
+			return ctext(fmt.Sprintf("已在 %s 向 %s 滚动 %d 行", pos, a.Direction, a.Amount)), nil
+		},
 	})
 
 	s.Add(mcpserver.Tool{

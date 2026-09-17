@@ -32,7 +32,7 @@ func mouseButton(name string) (down, up, id int, ok bool) {
 // CGEvent 数值常量：事件类型 LeftMouseDown=1 LeftMouseUp=2 RightMouseDown=3
 // RightMouseUp=4 MouseMoved=5 LeftMouseDragged=6 OtherMouseDown=25
 // OtherMouseUp=26 OtherMouseDragged=27；鼠标键 Left=0 Right=1 Center=2；
-// kCGMouseEventClickState=1；kCGScrollEventUnitLine=1（正 delta 向上）。
+// kCGMouseEventClickState=1；kCGScrollEventUnitPixel=0（正 delta 向上）。
 const jxaHeader = `ObjC.import('CoreGraphics');
 ObjC.import('Foundation');
 function postMouse(type, x, y, btn, clicks) {
@@ -115,7 +115,21 @@ func (d darwinPlatform) Scroll(ctx context.Context, x, y int, hasPos bool, dir s
 	} else {
 		b.WriteString(jxaHeader)
 	}
-	fmt.Fprintf(&b, "const e = $.CGEventCreateScrollWheelEvent($(), 1, 1, %d);\n$.CGEventPost(0, e);", delta)
+	// kCGScrollEventUnitLine(1) 的合成滚轮事件在 macOS 新系统（SwiftUI 应用
+	// 如天气面板、备忘录）会被直接忽略（实测无效果），改用像素单位
+	// kCGScrollEventUnitPixel(0)：1"行"按 40px 折算（≈标准滚轮一格 3 行），
+	// 且必须拆成多个带 20ms 间隔的连续事件——单个像素滚动事件同样会被忽略。
+	pixels := delta * 40
+	events := amount
+	if events < 3 {
+		events = 3
+	}
+	per := pixels / events
+	if per == 0 {
+		per = pixels
+		events = 1
+	}
+	fmt.Fprintf(&b, "for (let i = 0; i < %d; i++) { const e = $.CGEventCreateScrollWheelEvent($(), 0, 1, %d);\n$.CGEventPost(0, e); $.NSThread.sleepForTimeInterval(0.02); }", events, per)
 	_, err := jxa(ctx, b.String())
 	return d.wrap(err)
 }
@@ -183,24 +197,79 @@ func (d darwinPlatform) Key(ctx context.Context, combo string) error {
 	return fmt.Errorf("未知按键 %q", key)
 }
 
-func (d darwinPlatform) ScreenSize(ctx context.Context) (int, int, error) {
-	out, err := jxa(ctx, "ObjC.import('CoreGraphics');\nconst b = $.CGDisplayBounds($.CGMainDisplayID());\nJSON.stringify({w: b.size.width, h: b.size.height});")
+func (d darwinPlatform) ScreenSize(ctx context.Context, display *int) (int, int, error) {
+	ds, err := d.Displays(ctx)
 	if err != nil {
-		return 0, 0, d.wrap(err)
+		return 0, 0, err
 	}
-	var dim struct {
-		W, H float64
+	disp, err := pickDisplay(ds, display)
+	if err != nil {
+		return 0, 0, err
 	}
-	if err := parseJSONLoose(out, &dim); err != nil {
-		return 0, 0, fmt.Errorf("解析屏幕尺寸 %q: %w", out, err)
-	}
-	return int(dim.W), int(dim.H), nil
+	return disp.W, disp.H, nil
 }
 
-func (d darwinPlatform) Screenshot(ctx context.Context) ([]byte, error) {
+// displaysJXA 枚举显示器：NSScreen 的 frame 是 AppKit 坐标（原点=主屏左下、
+// y 向上），这里翻转为全局显示坐标（原点=主屏左上、y 向下，与 CGEvent/
+// screencapture -R 一致，单位为 point）。
+const displaysJXA = `ObjC.import('AppKit');
+const screens = $.NSScreen.screens;
+let ph = 0;
+for (let i = 0; i < screens.count; i++) {
+  const f = screens.objectAtIndex(i).frame;
+  if (f.origin.x === 0 && f.origin.y === 0) { ph = f.size.height; }
+}
+const res = [];
+for (let i = 0; i < screens.count; i++) {
+  const s = screens.objectAtIndex(i);
+  const f = s.frame;
+  res.push({x: f.origin.x, y: ph - (f.origin.y + f.size.height),
+            w: f.size.width, h: f.size.height, scale: s.backingScaleFactor});
+}
+JSON.stringify(res);`
+
+func (d darwinPlatform) Displays(ctx context.Context) ([]Display, error) {
+	out, err := jxa(ctx, displaysJXA)
+	if err != nil {
+		return nil, d.wrap(err)
+	}
+	var arr []struct {
+		X, Y, W, H, Scale float64
+	}
+	if err := parseJSONLoose(out, &arr); err != nil {
+		return nil, fmt.Errorf("解析显示器列表 %q: %w", out, err)
+	}
+	if len(arr) == 0 {
+		return nil, fmt.Errorf("未检测到显示器")
+	}
+	ds := make([]Display, 0, len(arr))
+	for i, a := range arr {
+		// 全局坐标系里主屏即原点 (0,0)
+		ds = append(ds, Display{
+			Index: i, X: int(a.X), Y: int(a.Y), W: int(a.W), H: int(a.H),
+			Main: a.X == 0 && a.Y == 0, Scale: int(a.Scale),
+		})
+	}
+	return ds, nil
+}
+
+func (d darwinPlatform) Screenshot(ctx context.Context, display *int) ([]byte, error) {
 	tmp := filepath.Join(os.TempDir(), fmt.Sprintf("grf-computer-%d.png", time.Now().UnixNano()))
 	defer os.Remove(tmp)
-	if _, err := run(ctx, "screencapture", "-x", "-t", "png", tmp); err != nil {
+	args := []string{"-x", "-t", "png"}
+	// 单屏截图：screencapture 不带 -R 时默认只截主屏，显式给该屏的
+	// bounds，保证截到的内容与该屏的全局坐标系一致（省略编号=主屏）
+	ds, err := d.Displays(ctx)
+	if err != nil {
+		return nil, err
+	}
+	disp, err := pickDisplay(ds, display)
+	if err != nil {
+		return nil, err
+	}
+	args = append(args, fmt.Sprintf("-R%d,%d,%d,%d", disp.X, disp.Y, disp.W, disp.H))
+	args = append(args, tmp)
+	if _, err := run(ctx, "screencapture", args...); err != nil {
 		return nil, d.wrap(err)
 	}
 	data, err := os.ReadFile(tmp)

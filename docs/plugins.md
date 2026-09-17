@@ -88,11 +88,16 @@ chromedp（纯 Go CDP 客户端）实现，工具面对齐微软 playwright-mcp 
 原生对话框（alert/confirm/prompt）自动 dismiss 并记入控制台日志，
 避免挂起后续指令；下载自动落到插件工作目录 `downloads/`。
 
-### grf-computer（电脑操作，10 个工具）
+### grf-computer（电脑操作，11 个工具）
 
-经操作系统自带命令实现（插件本身零 cgo、零第三方依赖）：
+经操作系统自带命令实现（插件本身零 cgo、零第三方依赖）。坐标一律为全局
+虚拟桌面坐标（原点=主屏左上，多屏时副屏坐标可为负）：
 
-- `computer_screenshot`（PNG 多模态回传）、`computer_screen_size`
+- `computer_screenshot`（PNG 多模态回传，可选 `display` 编号=只截该屏，
+  省略=整桌面）、`computer_screen_size`（可选 `display`，省略=主屏）
+- `computer_list_displays`（多屏枚举：编号/全局边界/主屏标记/Retina
+  缩放；macOS NSScreen、Windows AllScreens、Linux xrandr，无 xrandr
+  退回单屏）
 - `computer_click`（按键/连击）、`computer_move`、`computer_drag`、
   `computer_scroll`
 - `computer_type`、`computer_key`、`computer_clipboard`（get/set）、

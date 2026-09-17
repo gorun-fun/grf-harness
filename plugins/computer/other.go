@@ -18,10 +18,15 @@ func (unsupportedPlatform) Scroll(context.Context, int, int, bool, string, int) 
 }
 func (unsupportedPlatform) Type(context.Context, string) error { return errUnsupported }
 func (unsupportedPlatform) Key(context.Context, string) error  { return errUnsupported }
-func (unsupportedPlatform) ScreenSize(context.Context) (int, int, error) {
+func (unsupportedPlatform) ScreenSize(context.Context, *int) (int, int, error) {
 	return 0, 0, errUnsupported
 }
-func (unsupportedPlatform) Screenshot(context.Context) ([]byte, error) { return nil, errUnsupported }
+func (unsupportedPlatform) Screenshot(context.Context, *int) ([]byte, error) {
+	return nil, errUnsupported
+}
+func (unsupportedPlatform) Displays(context.Context) ([]Display, error) {
+	return nil, errUnsupported
+}
 func (unsupportedPlatform) ClipboardGet(context.Context) (string, error) {
 	return "", errUnsupported
 }

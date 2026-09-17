@@ -159,23 +159,67 @@ func (w windowsPlatform) Key(ctx context.Context, combo string) error {
 	return err
 }
 
-func (w windowsPlatform) ScreenSize(ctx context.Context) (int, int, error) {
-	out, err := ps(ctx, "Add-Type -AssemblyName System.Windows.Forms;$b=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds;Write-Output ($b.Width.ToString()+' '+$b.Height.ToString())")
+func (w windowsPlatform) ScreenSize(ctx context.Context, display *int) (int, int, error) {
+	ds, err := w.Displays(ctx)
 	if err != nil {
 		return 0, 0, err
 	}
-	var width, height int
-	if _, err := fmt.Sscanf(strings.TrimSpace(out), "%d %d", &width, &height); err != nil {
-		return 0, 0, fmt.Errorf("解析屏幕尺寸 %q: %w", out, err)
+	d, err := pickDisplay(ds, display)
+	if err != nil {
+		return 0, 0, err
 	}
-	return width, height, nil
+	return d.W, d.H, nil
 }
 
-func (w windowsPlatform) Screenshot(ctx context.Context) ([]byte, error) {
+// Displays 枚举显示器（AllScreens，bounds 即虚拟桌面像素坐标，Windows
+// 鼠标坐标同坐标系，Scale=1）。
+func (w windowsPlatform) Displays(ctx context.Context) ([]Display, error) {
+	out, err := ps(ctx, `Add-Type -AssemblyName System.Windows.Forms;
+[System.Windows.Forms.Screen]::AllScreens | ForEach-Object {
+  $b = $_.Bounds
+  "$([int]$_.Primary) $($b.X) $($b.Y) $($b.Width) $($b.Height) $($_.DeviceName)"
+}`)
+	if err != nil {
+		return nil, err
+	}
+	var ds []Display
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		var primary int
+		var x, y, wid, ht int
+		var name string
+		if _, err := fmt.Sscanf(strings.TrimSpace(line), "%d %d %d %d %d %s",
+			&primary, &x, &y, &wid, &ht, &name); err != nil {
+			return nil, fmt.Errorf("解析显示器列表 %q: %w", line, err)
+		}
+		ds = append(ds, Display{
+			Index: len(ds), Name: name, X: x, Y: y, W: wid, H: ht,
+			Main: primary == 1, Scale: 1,
+		})
+	}
+	if len(ds) == 0 {
+		return nil, fmt.Errorf("未检测到显示器")
+	}
+	return ds, nil
+}
+
+func (w windowsPlatform) Screenshot(ctx context.Context, display *int) ([]byte, error) {
 	tmp := filepath.Join(os.TempDir(), fmt.Sprintf("grf-computer-%d.png", time.Now().UnixNano()))
 	defer os.Remove(tmp)
+	// 省略编号=整桌面（VirtualScreen 含副屏，可为负原点）；指定编号=该屏 bounds
+	rect := "$b=[System.Windows.Forms.SystemInformation]::VirtualScreen;"
+	if display != nil {
+		ds, err := w.Displays(ctx)
+		if err != nil {
+			return nil, err
+		}
+		d, err := pickDisplay(ds, display)
+		if err != nil {
+			return nil, err
+		}
+		rect = fmt.Sprintf("$b=New-Object System.Drawing.Rectangle(%d,%d,%d,%d);", d.X, d.Y, d.W, d.H)
+	}
 	script := fmt.Sprintf(`Add-Type -AssemblyName System.Windows.Forms,System.Drawing;
-$b=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds;
+`+rect+`
 $bmp=New-Object System.Drawing.Bitmap($b.Width,$b.Height);
 $g=[System.Drawing.Graphics]::FromImage($bmp);
 $g.CopyFromScreen($b.Location,[System.Drawing.Point]::Empty,$b.Size);
