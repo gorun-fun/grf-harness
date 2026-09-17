@@ -28,12 +28,19 @@ type Client struct {
 	http     *http.Client
 	st       stats
 	cacheKey string // prompt_cache_key：会话级缓存路由提示（OpenAI 协议）
+	effort   string // reasoning_effort：思考强度（low/high/max…，空 = 服务端默认）
 }
 
 func NewClient(cfg Config) *Client {
+	// 不设整体 Timeout：思考型模型静默思考可达十几分钟，总超时会掐断流
+	// （"context deadline exceeded (Client.Timeout ...)"）。连接建立与响应头
+	// 各自有超时，杜绝挂死；读体阶段交给调用方 context 取消。
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.TLSHandshakeTimeout = 30 * time.Second
+	tr.ResponseHeaderTimeout = 30 * time.Minute
 	return &Client{
 		cfg:  cfg,
-		http: &http.Client{Timeout: 10 * time.Minute},
+		http: &http.Client{Transport: tr},
 	}
 }
 
@@ -46,16 +53,21 @@ func (c *Client) Model() string { return c.cfg.Model }
 func (c *Client) SetCacheKey(key string) { c.cacheKey = key }
 func (c *Client) CacheKey() string       { return c.cacheKey }
 
+// SetReasoningEffort 设置思考强度（"low"/"high"/"max" 等，空串 = 不发送，
+// 用服务端默认）。值原样透传 reasoning_effort 字段，由上游决定语义。
+func (c *Client) SetReasoningEffort(e string) { c.effort = e }
+
 // Stats 累计用量统计快照。
 func (c *Client) Stats() StatsSnapshot { return c.st.snapshot() }
 
 type chatRequest struct {
-	Model          string         `json:"model"`
-	Messages       []Message      `json:"messages"`
-	Tools          []toolDef      `json:"tools,omitempty"`
-	Stream         bool           `json:"stream,omitempty"`
-	StreamOptions  *streamOptions `json:"stream_options,omitempty"`
-	PromptCacheKey string         `json:"prompt_cache_key,omitempty"`
+	Model           string         `json:"model"`
+	Messages        []Message      `json:"messages"`
+	Tools           []toolDef      `json:"tools,omitempty"`
+	Stream          bool           `json:"stream,omitempty"`
+	StreamOptions   *streamOptions `json:"stream_options,omitempty"`
+	PromptCacheKey  string         `json:"prompt_cache_key,omitempty"`
+	ReasoningEffort string         `json:"reasoning_effort,omitempty"` // 思考强度（OpenAI 兼容扩展，不支持的服务端忽略）
 }
 
 // streamOptions 请求服务端在流式尾包携带 usage（OpenAI 兼容协议）。
@@ -146,7 +158,7 @@ func parseWhole(data []byte) (Message, error) {
 
 // Chat 发送一次对话请求，返回 assistant 消息（可能携带 ToolCalls）。
 func (c *Client) Chat(ctx context.Context, messages []Message, tools []Tool) (Message, error) {
-	req := chatRequest{Model: c.cfg.Model, Messages: messages, PromptCacheKey: c.cacheKey}
+	req := chatRequest{Model: c.cfg.Model, Messages: messages, PromptCacheKey: c.cacheKey, ReasoningEffort: c.effort}
 	for _, t := range tools {
 		req.Tools = append(req.Tools, toolDef{Type: "function", Function: t})
 	}
@@ -208,9 +220,27 @@ type streamChunk struct {
 	Usage *usageInfo `json:"usage"`
 }
 
-// ChatStream 流式请求：通过 hooks 回调正文/思考增量，返回完整 assistant
-// 消息。服务端不支持 SSE 时自动回退整包解析。
+// ChatStream 流式请求：连接在产出任何增量之前断开（上游重启/网关掐线，
+// 典型报错 "read stream: unexpected EOF"）时自动重试最多 10 次；已流出
+// 增量的中断不内部重试（会造成 UI 重复输出），交由上层（宿主整回合重发）
+// 处理。服务端明确拒绝（api error，如图片输入不支持）不重试——那属于
+// 请求本身的问题，盲重试会掩盖 agent 的自愈路径（图片降级重发）。
 func (c *Client) ChatStream(ctx context.Context, messages []Message, tools []Tool, hooks StreamHooks) (Message, error) {
+	const maxRetry = 10
+	for attempt := 0; ; attempt++ {
+		msg, emitted, err := c.chatStreamOnce(ctx, messages, tools, hooks)
+		if err == nil {
+			return msg, nil
+		}
+		if ctx.Err() != nil || emitted || attempt >= maxRetry || strings.HasPrefix(err.Error(), "api error") {
+			return Message{}, err
+		}
+		time.Sleep(time.Duration(attempt+1) * 500 * time.Millisecond)
+	}
+}
+
+// chatStreamOnce 单次流式尝试；emitted 表示是否已向宿主回调过任何增量。
+func (c *Client) chatStreamOnce(ctx context.Context, messages []Message, tools []Tool, hooks StreamHooks) (_ Message, emitted bool, _ error) {
 	start := time.Now()
 	var first time.Duration // 首 token 延迟
 	var u *usageInfo
@@ -220,6 +250,7 @@ func (c *Client) ChatStream(ctx context.Context, messages []Message, tools []Too
 		if first == 0 {
 			first = time.Since(start)
 		}
+		emitted = true
 	}
 	ok := false
 	defer func() {
@@ -234,14 +265,14 @@ func (c *Client) ChatStream(ctx context.Context, messages []Message, tools []Too
 
 	req := chatRequest{Model: c.cfg.Model, Messages: messages, Stream: true,
 		StreamOptions:  &streamOptions{IncludeUsage: true}, // 请求尾包 usage（统计用）
-		PromptCacheKey: c.cacheKey}
+		PromptCacheKey: c.cacheKey, ReasoningEffort: c.effort}
 	for _, t := range tools {
 		req.Tools = append(req.Tools, toolDef{Type: "function", Function: t})
 	}
 
 	resp, err := c.doStream(ctx, req)
 	if err != nil {
-		return Message{}, err
+		return Message{}, false, err
 	}
 	defer resp.Body.Close()
 
@@ -249,7 +280,7 @@ func (c *Client) ChatStream(ctx context.Context, messages []Message, tools []Too
 		first = time.Since(start)
 		data, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 		if err != nil {
-			return Message{}, fmt.Errorf("read response: %w", err)
+			return Message{}, false, fmt.Errorf("read response: %w", err)
 		}
 		var whole chatResponse
 		if json.Unmarshal(data, &whole) == nil && whole.Usage != nil {
@@ -257,7 +288,7 @@ func (c *Client) ChatStream(ctx context.Context, messages []Message, tools []Too
 		}
 		msg, err := parseWhole(data)
 		if err != nil {
-			return Message{}, err
+			return Message{}, false, err
 		}
 		fallbackContentToolCalls(&msg)
 		outEst = estimateTokens(msg.Content) + estimateTokens(msg.Reasoning)
@@ -268,7 +299,7 @@ func (c *Client) ChatStream(ctx context.Context, messages []Message, tools []Too
 			hooks.Reasoning(msg.Reasoning)
 		}
 		ok = true
-		return msg, nil
+		return msg, true, nil
 	}
 
 	msg := Message{Role: "assistant"}
@@ -347,9 +378,9 @@ func (c *Client) ChatStream(ctx context.Context, messages []Message, tools []Too
 	}
 	if err := scanner.Err(); err != nil {
 		if ctx.Err() != nil {
-			return Message{}, ctx.Err() // 取消/超时：不得把半截消息当成功返回
+			return Message{}, emitted, ctx.Err() // 取消：不得把半截消息当成功返回
 		}
-		return Message{}, fmt.Errorf("read stream: %w", err)
+		return Message{}, emitted, fmt.Errorf("read stream: %w", err)
 	}
 	if len(calls) > 0 {
 		idxs := make([]int, 0, len(calls))
@@ -363,7 +394,7 @@ func (c *Client) ChatStream(ctx context.Context, messages []Message, tools []Too
 	}
 	fallbackContentToolCalls(&msg)
 	ok = true
-	return msg, nil
+	return msg, true, nil
 }
 
 // Models 查询服务端模型列表（GET /models）。

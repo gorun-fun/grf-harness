@@ -96,6 +96,10 @@ func (a *Agent) Model() string { return a.client.Model() }
 
 func (a *Agent) SetClient(c *llm.Client) { a.client = c }
 
+// SetReasoningEffort 设置思考强度（透传 llm 客户端 reasoning_effort；
+// 换模型重建 client 后需重设，由调用方保证）。
+func (a *Agent) SetReasoningEffort(e string) { a.client.SetReasoningEffort(e) }
+
 func (a *Agent) SetMaxSteps(n int) {
 	if n > 0 {
 		a.mu.Lock()

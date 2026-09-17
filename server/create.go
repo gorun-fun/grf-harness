@@ -88,6 +88,11 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 	if req.Model != "" {
 		s.trySwitchModel(sess, req.Model)
 	}
+	if req.Reasoning != nil && req.Reasoning.Effort != "" {
+		// 思考强度：作用在当前（可能刚切换的）client 上；换模型重建
+		// client 后由后续请求重设。
+		sess.root.SetReasoningEffort(req.Reasoning.Effort)
+	}
 	if err := s.applyTools(sess, &req); err != nil {
 		writeError(w, 400, errInvalid, err.Error(), "tools")
 		return

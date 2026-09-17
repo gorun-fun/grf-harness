@@ -65,6 +65,7 @@ type createRequest struct {
 	SafetyIdentifier   string            `json:"safety_identifier"`
 	PromptCacheKey     string            `json:"prompt_cache_key"`
 	Truncation         string            `json:"truncation"` // "" | auto | disabled
+	Reasoning          *reasoningParam   `json:"reasoning"`  // 思考强度（effort 透传上游）
 	Store              *bool             `json:"store"`
 	ServiceTier        string            `json:"service_tier"`
 	// grf:session 首次请求的会话配置（ORS §11：加字段扩展）。
@@ -73,6 +74,12 @@ type createRequest struct {
 	// 前缀"替换会话历史后再处理本次 input。服务端逐条校验前缀一致，
 	// 防止伪造或漂移；单项保留原始 JSON 以便与当前历史做语义比较。
 	GrfHistory []json.RawMessage `json:"grf:history"`
+}
+
+// reasoningParam 请求 reasoning 对象（ORS 标准字段）：effort 思考强度，
+// 值原样透传上游（low/high/max 等），不支持的服务端忽略。
+type reasoningParam struct {
+	Effort string `json:"effort,omitempty"`
 }
 
 // toolParam 请求 tools 数组项（ORS 只保留 function 类型；grf: 前缀 hosted
