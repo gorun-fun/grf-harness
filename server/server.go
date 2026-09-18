@@ -88,6 +88,17 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /v1/conversations/{id}/policy", s.guard(s.handleSetPolicy))
 	mux.HandleFunc("DELETE /v1/conversations/{id}", s.guard(s.handleArchiveConversation))
 	mux.HandleFunc("GET /v1/conversations/{id}/items", s.guard(s.handleConversationItems))
+	// 智能体配置(网页设置页用;密钥掩码,空值=保留,见 agentapi.go)
+	mux.HandleFunc("GET /v1/agent/models", s.guard(s.handleAgentModelsGet))
+	mux.HandleFunc("PUT /v1/agent/models", s.guard(s.handleAgentModelsPut))
+	mux.HandleFunc("POST /v1/agent/models/detect", s.guard(s.handleAgentModelsDetect))
+	mux.HandleFunc("GET /v1/agent/plugins", s.guard(s.handleAgentPluginsGet))
+	mux.HandleFunc("PUT /v1/agent/plugins", s.guard(s.handleAgentPluginsPut))
+	mux.HandleFunc("GET /v1/agent/skills", s.guard(s.handleAgentSkillsGet))
+	mux.HandleFunc("GET /v1/agent/skills/{name}", s.guard(s.handleAgentSkillGet))
+	mux.HandleFunc("PUT /v1/agent/skills/{name}", s.guard(s.handleAgentSkillPut))
+	mux.HandleFunc("DELETE /v1/agent/skills/{name}", s.guard(s.handleAgentSkillDelete))
+	mux.HandleFunc("POST /v1/agent/skills/{name}/enabled", s.guard(s.handleAgentSkillEnabled))
 	mux.HandleFunc("GET /v1/health", s.guard(s.handleHealth))
 	return mux
 }
