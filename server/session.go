@@ -116,7 +116,7 @@ func defaultClient() (*llm.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return llm.NewClient(llm.Config{BaseURL: eff.BaseURL, APIKey: eff.APIKey, Model: eff.Model}), nil
+	return llm.NewClient(llm.Config{Provider: eff.Provider, BaseURL: eff.BaseURL, APIKey: eff.APIKey, Model: eff.Model}), nil
 }
 
 // loadOrCreateToken 读取或生成持久令牌。

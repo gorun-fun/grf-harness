@@ -94,6 +94,9 @@ func NewAgent(id string, client *llm.Client, reg *tools.Registry, st *store.Stor
 
 func (a *Agent) Model() string { return a.client.Model() }
 
+// ModelRef 模型全名 "provider/model"（server 回报 ORS 客户端用）。
+func (a *Agent) ModelRef() string { return a.client.ModelRef() }
+
 func (a *Agent) SetClient(c *llm.Client) { a.client = c }
 
 // SetReasoningEffort 设置思考强度（透传 llm 客户端 reasoning_effort；

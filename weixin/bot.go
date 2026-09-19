@@ -33,7 +33,7 @@ func Run(ctx context.Context, systemPrompt, workspace string) error {
 	if err != nil {
 		return fmt.Errorf("加载模型配置失败: %w", err)
 	}
-	client := llm.NewClient(llm.Config{BaseURL: eff.BaseURL, APIKey: eff.APIKey, Model: eff.Model})
+	client := llm.NewClient(llm.Config{Provider: eff.Provider, BaseURL: eff.BaseURL, APIKey: eff.APIKey, Model: eff.Model})
 	fmt.Printf("🤖 模型: %s (%s)\n", eff.Model, eff.BaseURL)
 
 	if workspace == "" {

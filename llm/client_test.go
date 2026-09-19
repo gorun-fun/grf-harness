@@ -148,3 +148,23 @@ func TestChatStreamFinishReason(t *testing.T) {
 		t.Fatalf("FinishReason=%q Reasoning=%q", msg.FinishReason, msg.Reasoning)
 	}
 }
+
+// TestModelRef 全名访问器：provider 与模型都设置时拼 "provider/model"
+// （模型名可含 "/"，按首个 "/" 拆分往返）；provider 未设置或模型为空时退化。
+func TestModelRef(t *testing.T) {
+	cases := []struct {
+		cfg  Config
+		want string
+	}{
+		{Config{Provider: "deepseek", Model: "deepseek-chat"}, "deepseek/deepseek-chat"},
+		{Config{Model: "gpt-4o"}, "gpt-4o"},
+		{Config{Provider: "deepseek", Model: ""}, ""},
+		// 模型名自身含 "/"：纯拼接，SplitDefault 按首个 "/" 拆分仍可无损往返
+		{Config{Provider: "九天", Model: "deepseek/deepseek-r1"}, "九天/deepseek/deepseek-r1"},
+	}
+	for _, c := range cases {
+		if got := NewClient(c.cfg).ModelRef(); got != c.want {
+			t.Errorf("ModelRef(%+v) = %q, want %q", c.cfg, got, c.want)
+		}
+	}
+}

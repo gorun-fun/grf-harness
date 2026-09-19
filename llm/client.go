@@ -17,9 +17,12 @@ import (
 
 // Config 客户端配置。
 type Config struct {
-	BaseURL string
-	APIKey  string
-	Model   string
+	// Provider 供应商名（settings.json providers 的键）。仅用于 ModelRef
+	// 组装对客户端回报的全名；上游 API 请求体始终用裸名 Model。
+	Provider string
+	BaseURL  string
+	APIKey   string
+	Model    string
 }
 
 // Client OpenAI 兼容接口客户端。
@@ -45,6 +48,18 @@ func NewClient(cfg Config) *Client {
 }
 
 func (c *Client) Model() string { return c.cfg.Model }
+
+// ModelRef 模型全名 "provider/model"，供 server 等接入表面回报给客户端
+// （ORS 的 response.model）。客户端拿全名可原样回传请求体切换模型；
+// 裸名会被忽略。模型名自身可含 "/"（如 "qwen/qwen3.8-27b"），拼接后
+// 仍可无损往返：SplitDefault 按首个 "/" 拆分。Provider 未设置（环境
+// 变量直连等）或 Model 为空时退化为裸名/空串。
+func (c *Client) ModelRef() string {
+	if c.cfg.Model == "" || c.cfg.Provider == "" {
+		return c.cfg.Model
+	}
+	return c.cfg.Provider + "/" + c.cfg.Model
+}
 
 // SetCacheKey / CacheKey 会话级提示词缓存路由键：同一会话的多轮请求
 // 携带同一 key，支持该字段的服务端会把请求路由到同一缓存分片，提高

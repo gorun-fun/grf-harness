@@ -356,7 +356,9 @@ func (s *Server) buildResource(sess *session, req *createRequest, respID string)
 	}
 	return &ResponseResource{
 		ID: respID, Object: "response", CreatedAt: time.Now().Unix(),
-		Status: statusInProgress, Model: sess.root.Model(),
+		// model 回报全名 "provider/model"：客户端可原样回传请求体切换模型；
+		// 裸名会被 trySwitchModel 忽略，曾导致 UI 侧模型继承静默失效。
+		Status: statusInProgress, Model: sess.root.ModelRef(),
 		PreviousResponseID: req.PreviousResponseID, Instructions: req.Instructions,
 		Output: []Item{}, Tools: req.Tools, ToolChoice: rawOrNull(req.ToolChoice),
 		Truncation: trunc, ParallelToolCalls: req.ParallelToolCalls,
@@ -477,7 +479,7 @@ func (s *Server) trySwitchModel(sess *session, model string) {
 	if !found {
 		return
 	}
-	nc := llm.NewClient(llm.Config{BaseURL: p.BaseURL, APIKey: p.APIKey, Model: name})
+	nc := llm.NewClient(llm.Config{Provider: provider, BaseURL: p.BaseURL, APIKey: p.APIKey, Model: name})
 	nc.SetCacheKey(sess.h.CacheKey())
 	sess.root.SetClient(nc)
 }

@@ -211,7 +211,7 @@ func (m *ModelPage) fetchModels(name string) {
 	ch := make(chan fetchResult, 1)
 	m.fetchDone = ch
 	go func() {
-		client := llm.NewClient(llm.Config{BaseURL: p.BaseURL, APIKey: p.APIKey, Model: ""})
+		client := llm.NewClient(llm.Config{Provider: name, BaseURL: p.BaseURL, APIKey: p.APIKey, Model: ""})
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		models, err := client.Models(ctx)
