@@ -19,6 +19,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"git.gorun.fun/share/grf-harness/plugin"
 )
 
 // ---------- DTO(与 goder 前端 host/bridge.ts 对齐,camelCase) ----------
@@ -414,10 +416,10 @@ func (s *Server) handleAgentPluginsGet(w http.ResponseWriter, r *http.Request) {
 	}
 	if ents, err := os.ReadDir(dir); err == nil {
 		for _, e := range ents {
-			if e.IsDir() || strings.HasPrefix(e.Name(), ".") || strings.HasSuffix(e.Name(), ".md") {
+			if e.IsDir() || strings.HasPrefix(e.Name(), ".") || strings.HasSuffix(e.Name(), ".md") || plugin.IsStaleOldName(e.Name()) {
 				continue
 			}
-			if info, err := e.Info(); err == nil && info.Mode()&0o111 != 0 {
+			if info, err := e.Info(); err == nil && plugin.IsExecutableFile(e.Name(), info.Mode()) {
 				out.Discovered = append(out.Discovered, e.Name())
 			}
 		}
