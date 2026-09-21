@@ -18,10 +18,6 @@ func Size(fd int) (int, int) {
 	return int(ws.col), int(ws.row)
 }
 
-// resizeSignal 窗口尺寸变化信号（unix: SIGWINCH；Windows 无此信号，
-// 由 tty_other.go 提供空实现）。
-func resizeSignal() os.Signal { return syscall.SIGWINCH }
-
 // IsTTY 判断 fd 是否字符设备（终端）。
 func IsTTY(fd int) bool {
 	var st syscall.Stat_t

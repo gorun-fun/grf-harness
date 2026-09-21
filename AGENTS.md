@@ -114,8 +114,9 @@ ANSI→验证帧），历史会话输出落在 `.grf/sessions/`。
 - **TUI 单 goroutine 规则**：`tui/chat.go` 的所有状态（blocks/todos/popups）
   只能在事件循环 goroutine 上改。后台 goroutine（agent 回调/Host）必须经
   `c.events` 通道投递（见 `onEvent`/`eventMsg`），直接改状态会 data race。
-- `term.Screen` 是整帧全量重绘（无 diff）；resize（SIGWINCH）→ 上层按新宽度
-  重新软换行后整帧 Paint。PTY 初始 winsize 可能为 0，Screen 已内置 80x24 兜底。
+- `term.Screen` 是整帧全量重绘（无 diff）；resize（unix SIGWINCH / Windows
+  轮询，见 `term/resize_*.go`）→ 上层按新宽度重新软换行后整帧 Paint。PTY
+  初始 winsize 可能为 0，Screen 已内置 80x24 兜底。
 - agent 历史并发：`history` 一律走 `a.mu`；异步通知用 `EnqueueNotice`（空闲时
   触发 `OnIdleNotice` 自动续跑），通知只在 LLM 请求前 drain（tool 结果必须紧跟
   assistant 消息，OpenAI 协议要求）。
@@ -170,6 +171,10 @@ ANSI→验证帧），历史会话输出落在 `.grf/sessions/`。
 ## 平台
 
 termios ioctl 用 build tags 分 darwin（TIOCGETA/SETA）与 linux（TCGETS/SETS），
-其他平台回退非交互（`term/tty_other.go`）；守护进程平台差异在根目录
+Windows 用 Console API 提供同套能力（`term/tty_windows.go`：VT 输入模式把
+方向键等翻译成 ANSI 序列喂给 input.go 既有解析器、VT 输出模式让备用屏幕等
+转义序列生效；老 conhost 不支持 VT 时 OpenRaw 报错照旧回退行模式），其余
+平台回退非交互（`term/tty_other.go`）。resize 监听平台化（`term/resize_*.go`）：
+unix 走 SIGWINCH，Windows 无等价信号改轮询。守护进程平台差异在根目录
 `daemon_unix.go`/`daemon_other.go`。全屏交互要求 stdin+stdout 均为 TTY，
 否则自动回退纯文本行模式。

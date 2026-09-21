@@ -137,6 +137,13 @@ scope 缺省 project，仅 list 缺省时两级都列。单文件 4KB 硬上限�
 
 ## 4. 平台支持
 
-termios ioctl 按 build tags 分 darwin/linux（`term/tty_*.go`），其他平台
-回退非交互；守护进程脱离会话与进程探测在 `daemon_unix.go` /
-`daemon_other.go`（package main）。交叉编译见 `./build.sh`（产物 `dist/`）。
+termios ioctl 按 build tags 分 darwin/linux（`term/tty_*.go`），Windows 用
+Console API 提供同套能力（`term/tty_windows.go`：输入句柄开
+ENABLE_VIRTUAL_TERMINAL_INPUT，方向键等按键由 conhost/Windows Terminal 翻译
+成 ANSI 序列直接进 `input.go` 既有解析器，Ctrl+C 变为字节 \x03 而非信号，
+行为对齐 unix raw；输出句柄开 VT 处理使备用屏幕/整帧重画转义序列生效。
+不支持 VT 的老 conhost 上 OpenRaw 报错，上层照常回退纯文本行模式）；窗口
+尺寸变化监听平台化（`term/resize_*.go`：unix 走 SIGWINCH，Windows 无等价
+信号改 250ms 轮询，其余平台无通知）。其余平台回退非交互；守护进程脱离
+会话与进程探测在 `daemon_unix.go` / `daemon_other.go`（package main）。
+交叉编译见 `./build.sh`（产物 `dist/`）。

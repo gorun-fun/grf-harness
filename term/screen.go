@@ -8,7 +8,6 @@ import (
 	"bufio"
 	"fmt"
 	"os"
-	"os/signal"
 	"strings"
 	"sync"
 )
@@ -69,26 +68,15 @@ func (s *Screen) Start(mouse bool) error {
 	s.out.WriteString(b.String())
 	s.out.Flush()
 
-	// SIGWINCH → 同步尺寸并通知重绘（非 unix 平台无此信号，仅等待关闭）
-	go func() {
-		sig := make(chan os.Signal, 1)
-		if rs := resizeSignal(); rs != nil {
-			signal.Notify(sig, rs)
+	// 尺寸变化监听 → 同步尺寸并通知重绘（unix 用 SIGWINCH，Windows 轮询
+	// 控制台尺寸，其他平台无通知能力，见 resize_*.go）
+	go watchResize(s.sigClose, func() {
+		s.SyncSize()
+		select {
+		case s.resizeCh <- struct{}{}:
+		default:
 		}
-		defer signal.Stop(sig)
-		for {
-			select {
-			case <-sig:
-				s.SyncSize()
-				select {
-				case s.resizeCh <- struct{}{}:
-				default:
-				}
-			case <-s.sigClose:
-				return
-			}
-		}
-	}()
+	})
 	return nil
 }
 
