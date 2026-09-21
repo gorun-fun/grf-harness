@@ -69,6 +69,27 @@ func (a *Agent) SetSystemText(text string) {
 	}
 }
 
+// UpdateModelIdentity 切换模型后原位重写系统提示词中的模型身份行：身份
+// 行在会话构建期按当时的 client 烘焙（新会话为全局 default 模型），切换
+// 只换 client 不更新会让模型以旧身份自我认知（如实际调用 glm 却按提示词
+// 自称旧模型）。只改模型名、其余逐字保留；模型行位于运行环境段（静态段
+// 之后），切换模型时上游前缀缓存本就失效，改写无额外缓存代价。
+func (a *Agent) UpdateModelIdentity(model string) {
+	if model == "" {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	next := RewriteModelIdentity(a.system, model)
+	if next == a.system {
+		return
+	}
+	a.system = next
+	if len(a.history) > 0 && a.history[0].Role == "system" {
+		a.history[0].Content = next
+	}
+}
+
 // sanitizeSnapshot 请求前清洗历史：剔除任何没有正文、没有多模态 parts
 // 也没有工具调用的 assistant/user 消息（中断残留的半截消息序列化后
 // content 整个省略，会被服务端以缺 messages.content 拒绝）。tool 消息

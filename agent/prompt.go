@@ -22,6 +22,34 @@ type PromptOptions struct {
 	Label     string              // 子代理标签
 }
 
+// 模型身份行（运行环境段内、全文唯一）：会话构建期按当时 client 的模型
+// 烘焙，切换模型后由 Agent.UpdateModelIdentity 原位重写，保证模型自我
+// 认知与实际调用一致。
+const (
+	modelIdentityPrefix = "You are a coding agent powered by the "
+	modelIdentitySuffix = " model.\n"
+)
+
+// ModelIdentityLine 生成模型身份行原文。
+func ModelIdentityLine(model string) string {
+	return modelIdentityPrefix + model + modelIdentitySuffix
+}
+
+// RewriteModelIdentity 把 system 提示词中的模型身份行改为 model，其余
+// 逐字保留。身份行不存在（customBase 之外的历史形状等）时原样返回。
+func RewriteModelIdentity(system, model string) string {
+	i := strings.Index(system, modelIdentityPrefix)
+	if i < 0 {
+		return system
+	}
+	j := strings.Index(system[i+len(modelIdentityPrefix):], modelIdentitySuffix)
+	if j < 0 {
+		return system
+	}
+	end := i + len(modelIdentityPrefix) + j + len(modelIdentitySuffix)
+	return system[:i] + ModelIdentityLine(model) + system[end:]
+}
+
 // BuildSystemPrompt 生成根会话 system prompt。段序（缓存友好）：静态指导
 // 段（或 customBase 替换）→ 运行时事实 → 子代理身份 → 技能列表。customBase
 // 非空时只替换静态指导部分（用户自定义提示词），运行时事实与技能列表仍
@@ -39,7 +67,7 @@ func BuildSystemPrompt(o PromptOptions, customBase string) string {
 	// 保证静态前缀字节级稳定（customBase 会话同样携带）。
 	b.WriteString("\n## 运行环境\n")
 	fmt.Fprintf(&b, "Your working directory is %s. Use pwd via the bash tool to confirm the current working directory when path precision matters.\n", o.Workspace)
-	fmt.Fprintf(&b, "You are a coding agent powered by the %s model.\n", o.Model)
+	b.WriteString(ModelIdentityLine(o.Model))
 
 	if o.Subagent {
 		b.WriteString("\n## 子代理身份\n")

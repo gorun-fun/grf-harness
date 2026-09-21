@@ -482,6 +482,9 @@ func (s *Server) trySwitchModel(sess *session, model string) {
 	nc := llm.NewClient(llm.Config{Provider: provider, BaseURL: p.BaseURL, APIKey: p.APIKey, Model: name})
 	nc.SetCacheKey(sess.h.CacheKey())
 	sess.root.SetClient(nc)
+	// 系统提示词的模型身份行在会话构建期烘焙（新会话为全局 default 模型），
+	// 切换须同步重写，否则模型按旧身份自我认知（自称旧模型名）。
+	sess.root.UpdateModelIdentity(name)
 }
 
 // parseInput 解析 input（string 或 item 数组）：
