@@ -7,8 +7,9 @@
 文档分工：`docs/architecture.md`（架构总览：功能线条分层、关键机制、并发
 规则）、`docs/integration.md`（Go 库对接：go get 安装、事件、多会话）、
 `docs/server.md`（HTTP Responses API 接入，ORS 兼容）、
-`docs/plugins.md`（MCP 插件：grf-browser/grf-computer、写插件指南、
-协议子集与安全模型）。
+`docs/plugins.md`（MCP 插件：grf-browser/grf-computer、安装配置、
+协议子集与安全模型）、`docs/plugin-dev.md`（插件开发规范：运行时
+契约、工具准入、SDK 与裸写、测试、构建分发）。
 
 ## 构建与测试
 

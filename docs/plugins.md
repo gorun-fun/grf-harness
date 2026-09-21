@@ -113,50 +113,13 @@ chromedp（纯 Go CDP 客户端）实现，工具面对齐微软 playwright-mcp 
 
 ## 写一个新插件
 
-`plugins/` 是独立 Go 模块（`git.gorun.fun/share/grf-harness/plugins`），
-内置 `internal/mcpserver` SDK——工具实现一次注册，stdio / HTTP 双模式
-自动可用：
+完整开发规范（运行时契约、工具准入、SDK API、裸写协议子集、测试、
+构建分发、安全与检查清单）见 **[docs/plugin-dev.md](plugin-dev.md)**。
+要点：
 
-```go
-package main
-
-import (
-	"context"
-	"encoding/json"
-
-	"git.gorun.fun/share/grf-harness/plugins/internal/mcpserver"
-)
-
-func main() {
-	s := mcpserver.New("grf-demo", "0.1.0")
-	s.Add(mcpserver.Tool{
-		Name:        "demo_hello",
-		Description: "示例工具：返回问候语",
-		Schema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"who": map[string]any{"type": "string", "description": "对谁问好"},
-			},
-			"required": []string{"who"},
-		},
-		ReadOnly: true, // 只读工具：计划模式放行
-		Handler: func(ctx context.Context, args json.RawMessage) ([]mcpserver.Content, error) {
-			var a struct{ Who string `json:"who"` }
-			if err := json.Unmarshal(args, &a); err != nil {
-				return nil, err
-			}
-			return []mcpserver.Content{mcpserver.Text("hello, " + a.Who)}, nil
-		},
-	})
-	if err := s.ServeStdio(context.Background()); err != nil { // 本地模式
-		panic(err)
-	}
-	// 远程模式：编译后以 `grf-demo serve --addr 127.0.0.1:7620` 启动
-}
-```
-
-约定：
-
+- `plugins/` 是独立 Go 模块（`git.gorun.fun/share/grf-harness/plugins`），
+  内置 `internal/mcpserver` SDK——工具实现一次注册，stdio / HTTP 双模式
+  自动可用（SDK 是 internal 包，外部仓库需拷贝三文件或按规范裸写协议）。
 - **工具名自带命名空间前缀**（如 `demo_*`），限 `[a-zA-Z0-9_-]{1,64}`；
   与内置 28 个工具重名会被跳过（警告），多插件重名先连者胜。
 - 有副作用的工具不要设 `ReadOnly`——harness 据此在计划模式下拦截。

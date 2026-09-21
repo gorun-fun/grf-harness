@@ -1,6 +1,9 @@
-// prompt.go 系统提示词构建：工具使用纪律、后台作业、goal、workflow/
-// ralph、子代理后台默认等指导段，适配本 harness 的运行时事实（终端交互、
-// 当前工作目录、实际模型、技能目录）。
+// prompt.go 系统提示词构建：静态指导段（工具使用纪律、后台作业、goal、
+// workflow/ralph、子代理后台默认等）+ 运行时事实段（当前工作目录、实际
+// 模型、技能目录）。静态段恒定在前、易变的运行时事实一律后置——服务端
+// 前缀缓存按最长公共前缀命中，这样跨项目/跨模型也能共享静态前缀；改动
+// 本文件时保持「稳定内容靠前、易变内容靠后」的排序，不要在静态段里嵌
+// 入任何会话间会变化的字符串。
 package agent
 
 import (
@@ -19,16 +22,25 @@ type PromptOptions struct {
 	Label     string              // 子代理标签
 }
 
-// BuildSystemPrompt 生成根会话 system prompt。customBase 非空时替换静态
-// 指导部分（用户自定义提示词），运行时事实与技能列表仍然附加。
+// BuildSystemPrompt 生成根会话 system prompt。段序（缓存友好）：静态指导
+// 段（或 customBase 替换）→ 运行时事实 → 子代理身份 → 技能列表。customBase
+// 非空时只替换静态指导部分（用户自定义提示词），运行时事实与技能列表仍
+// 然附加。
 func BuildSystemPrompt(o PromptOptions, customBase string) string {
 	var b strings.Builder
 	if customBase != "" {
 		b.WriteString(strings.TrimRight(customBase, "\n"))
 		b.WriteString("\n\n")
 	} else {
-		b.WriteString(rootPromptBody(o))
+		b.WriteString(rootPromptBody())
 	}
+
+	// 运行时事实段：工作区路径/模型名随会话变化，后置在静态段之后，
+	// 保证静态前缀字节级稳定（customBase 会话同样携带）。
+	b.WriteString("\n## 运行环境\n")
+	fmt.Fprintf(&b, "Your working directory is %s. Use pwd via the bash tool to confirm the current working directory when path precision matters.\n", o.Workspace)
+	fmt.Fprintf(&b, "You are a coding agent powered by the %s model.\n", o.Model)
+
 	if o.Subagent {
 		b.WriteString("\n## 子代理身份\n")
 		fmt.Fprintf(&b, "You are running as a background subagent (label %q). You do not see the parent conversation; rely only on the prompt you were given and the workspace. Complete the self-contained task and reply with the final result — not your intermediate steps. You may not ask the user questions and may not create session goals.\n", o.Label)
@@ -51,10 +63,11 @@ func BuildSystemPrompt(o PromptOptions, customBase string) string {
 // 提示词（无需模型主动调用 skill 工具）。
 const DefaultSkill = "grf-usage"
 
-func rootPromptBody(o PromptOptions) string {
+// rootPromptBody 静态指导段：与运行环境无关的固定内容（缓存前缀）。
+// 不得嵌入工作区路径、模型名、日期等会话间变化的值。
+func rootPromptBody() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "You are an AI agent powered by grf-harness, talking to the user through a terminal fullscreen UI. Your working directory is %s. Use pwd via the bash tool to confirm the current working directory when path precision matters.\n", o.Workspace)
-	fmt.Fprintf(&b, "You are a coding agent powered by the %s model.\n\n", o.Model)
+	b.WriteString("You are an AI agent powered by grf-harness, talking to the user through a terminal fullscreen UI.\n\n")
 
 	b.WriteString("The workspace root may contain an AGENTS.md with project conventions. It is NOT auto-loaded into your context — read it early when your task touches the codebase, and keep it in mind for the session.\n\n")
 
