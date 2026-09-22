@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -33,13 +34,16 @@ type Harness struct {
 	Skills    *tools.SkillCatalog
 	Plugins   *plugin.Manager // MCP 插件（进程级共享；NoPlugins 时为 nil）
 	Store     *store.Store
-	client    *llm.Client
-	Settings  *config.Settings
-	root      string
-	seq       atomic.Int64
-	cacheKey  string   // 会话级 prompt_cache_key；随会话文件持久化，resume 复用
-	disabled  []string // 按场景禁用的工具名（Options.DisabledTools）
-	plugWarn  []string // 插件状态警告（构建期取一次；子代理提示词复用）
+
+	clientMu sync.Mutex // client 引用的并发读写（运行中切换模型，见 SwitchClient）
+	client   *llm.Client
+
+	Settings *config.Settings
+	root     string
+	seq      atomic.Int64
+	cacheKey string   // 会话级 prompt_cache_key；随会话文件持久化，resume 复用
+	disabled []string // 按场景禁用的工具名（Options.DisabledTools）
+	plugWarn []string // 插件状态警告（构建期取一次；子代理提示词复用）
 }
 
 // Options 组装参数。
@@ -165,7 +169,7 @@ func (h *Harness) SetCacheKey(key string) {
 		return
 	}
 	h.cacheKey = key
-	h.bindClient(h.client)
+	h.bindClient(h.getClient())
 }
 
 // bindClient 把缓存键绑定到 client（client 可为 nil，测试用）。
@@ -173,6 +177,31 @@ func (h *Harness) bindClient(c *llm.Client) {
 	if c != nil {
 		c.SetCacheKey(h.cacheKey)
 	}
+}
+
+// getClient 取当前 client 引用（副本）。运行中切换模型（SwitchClient）与
+// 子代理工厂（newChild）、bash 事实变量（managedEnv）、提示词装配
+// （systemPromptFor）并发，引用经 clientMu 保护。
+func (h *Harness) getClient() *llm.Client {
+	h.clientMu.Lock()
+	defer h.clientMu.Unlock()
+	return h.client
+}
+
+// SwitchClient 切换会话当前模型：换 client 引用、迁移缓存路由键，并重写
+// 系统提示词的模型身份行。h.client 与 root 的 client 必须一起换——子代理
+// （newChild）按 h.client 取 client，bash 的 GRF_MODEL 又懒取自它（Env 为
+// 函数），只换 root 会让切换后新生的子代理仍跑旧模型；身份行是会话构建期
+// 烘焙的，不重写则模型以旧身份自我认知（实际调新模型却自称旧模型名）。
+// 并发安全（引用经锁）：可与运行中的回合并发调用，但建议在回合边界切换，
+// 避免同一回合前后半落在不同模型上。
+func (h *Harness) SwitchClient(c *llm.Client) {
+	h.clientMu.Lock()
+	h.client = c
+	h.clientMu.Unlock()
+	h.bindClient(c)
+	h.Root.SetClient(c)
+	h.Root.UpdateModelIdentity(c.Model())
 }
 
 // newCacheKey 生成会话缓存键（随机 16 字节 hex）。
@@ -189,8 +218,8 @@ func newCacheKey() string {
 // （插件警告两者都携带——插件工具对子代理同样注册）。
 func (h *Harness) systemPromptFor(subagent bool, label, override string) string {
 	model := ""
-	if h.client != nil {
-		model = h.client.Model()
+	if c := h.getClient(); c != nil {
+		model = c.Model()
 	}
 	return BuildSystemPrompt(PromptOptions{
 		Workspace:      h.root,
@@ -241,7 +270,6 @@ func (h *Harness) Policy() string {
 // 直接不给入口；ask_user 子代理同样不可用）。
 func (h *Harness) registerTools(a *Agent, root bool) {
 	r := a.reg
-	env := h.managedEnv()
 
 	tools.RegisterFs(r, h.root, h.Fs, h.Artifacts)
 	tools.RegisterReadImage(r, h.Fs)
@@ -252,7 +280,7 @@ func (h *Harness) registerTools(a *Agent, root bool) {
 		Fs:        h.Fs,
 		Jobs:      a.Jobs,
 		Artifacts: h.Artifacts,
-		Env:       env,
+		Env:       h.managedEnv, // 懒取：切换模型后 GRF_MODEL 即时反映
 	})
 	tools.RegisterJobTools(r, a.Jobs)
 	tools.RegisterWebSearch(r)
@@ -284,11 +312,12 @@ func (h *Harness) registerTools(a *Agent, root bool) {
 	}
 }
 
-// managedEnv bash 子进程注入的 harness 事实变量。
+// managedEnv bash 子进程注入的 harness 事实变量。注册时以方法值懒取
+//（BashDeps.Env 为函数）：切换模型后新建 bash 进程的 GRF_MODEL 即时反映。
 func (h *Harness) managedEnv() []string {
 	model := ""
-	if h.client != nil {
-		model = h.client.Model()
+	if c := h.getClient(); c != nil {
+		model = c.Model()
 	}
 	return []string{
 		"DSH_WORKSPACE=" + h.root,
@@ -311,7 +340,7 @@ func (h *Harness) memoryDeps() tools.MemoryDeps {
 // newChild 构建子代理（独立历史与工具链；goal/ralph/ask_user 不可用）。
 func (h *Harness) newChild(parent *Agent, label string, seed []llm.Message) *Agent {
 	system := h.systemPromptFor(true, label, "")
-	child := NewAgent("pending", h.client, tools.NewRegistry(), h.Store, h.root, system)
+	child := NewAgent("pending", h.getClient(), tools.NewRegistry(), h.Store, h.root, system)
 	child.host = &tools.NoopHost{AutoApprove: h.Settings.AutoApprove, OnEvent: nil}
 	child.Todos = &tools.TodoState{}
 	child.Fs = h.newFsPolicy(child.host)

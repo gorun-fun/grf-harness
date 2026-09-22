@@ -305,6 +305,11 @@ func (c *Chat) openModelPopup() {
 			if len(parts) != 2 {
 				return
 			}
+			// 弹窗打开期间后台作业落定可自动续跑回合：执行时再校验一次
+			if c.running {
+				c.emitBlock(block{kind: blkErr, text: "当前有任务在执行，等空闲后再切换模型"})
+				return
+			}
 			if err := c.app.SwitchModel(parts[0], parts[1]); err != nil {
 				c.emitBlock(block{kind: blkErr, text: "切换模型失败: " + err.Error()})
 			} else {

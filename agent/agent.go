@@ -28,11 +28,12 @@ type Agent struct {
 	ID    string
 	Label string
 
-	client *llm.Client
-	reg    *tools.Registry
-	st     *store.Store
-	root   string
-	system string
+	client   *llm.Client
+	clientMu sync.Mutex // client 引用的并发读写（运行中切换模型，见 SetClient）
+	reg      *tools.Registry
+	st       *store.Store
+	root     string
+	system   string
 
 	mu      sync.Mutex
 	history []llm.Message
@@ -92,16 +93,30 @@ func NewAgent(id string, client *llm.Client, reg *tools.Registry, st *store.Stor
 
 // ---- 基础访问 ----
 
-func (a *Agent) Model() string { return a.client.Model() }
+// getClient 取当前 client 引用（副本）。运行中切换模型（SwitchClient →
+// SetClient）与回合循环/统计读取并发，引用经 clientMu 保护；取回副本后
+// 的长调用（如 ChatStream）不持锁，落在旧 client 上的在途请求自然走完。
+func (a *Agent) getClient() *llm.Client {
+	a.clientMu.Lock()
+	defer a.clientMu.Unlock()
+	return a.client
+}
+
+func (a *Agent) Model() string { return a.getClient().Model() }
 
 // ModelRef 模型全名 "provider/model"（server 回报 ORS 客户端用）。
-func (a *Agent) ModelRef() string { return a.client.ModelRef() }
+func (a *Agent) ModelRef() string { return a.getClient().ModelRef() }
 
-func (a *Agent) SetClient(c *llm.Client) { a.client = c }
+// SetClient 替换 client（并发安全；完整切换见 Harness.SwitchClient）。
+func (a *Agent) SetClient(c *llm.Client) {
+	a.clientMu.Lock()
+	a.client = c
+	a.clientMu.Unlock()
+}
 
 // SetReasoningEffort 设置思考强度（透传 llm 客户端 reasoning_effort；
 // 换模型重建 client 后需重设，由调用方保证）。
-func (a *Agent) SetReasoningEffort(e string) { a.client.SetReasoningEffort(e) }
+func (a *Agent) SetReasoningEffort(e string) { a.getClient().SetReasoningEffort(e) }
 
 func (a *Agent) SetMaxSteps(n int) {
 	if n > 0 {
@@ -170,7 +185,7 @@ func (a *Agent) SetApproveMode(on bool) {
 }
 
 // LLMStats 根客户端累计用量统计（UI 底栏展示）。
-func (a *Agent) LLMStats() llm.StatsSnapshot { return a.client.Stats() }
+func (a *Agent) LLMStats() llm.StatsSnapshot { return a.getClient().Stats() }
 
 // ToolStats 已执行工具调用数与累计耗时。
 func (a *Agent) ToolStats() (calls int, d time.Duration) {

@@ -464,6 +464,12 @@ func (c *Chat) submit(raw string) bool {
 		return false
 	}
 	if input == "/model" || strings.HasPrefix(input, "/model ") {
+		// 回合运行中不切换：中途换模型会让同一回合前后半落在不同模型上
+		//（身份行/子代理 client 的改写虽然并发安全，但行为不可预期）
+		if c.running {
+			c.emitBlock(block{kind: blkErr, text: "当前有任务在执行，等空闲后再切换模型"})
+			return false
+		}
 		arg := strings.TrimSpace(strings.TrimPrefix(input, "/model"))
 		if arg == "" {
 			c.openModelPopup()

@@ -30,8 +30,10 @@ type BashDeps struct {
 	Jobs      *JobManager
 	Artifacts *Artifacts
 	// 沙箱开关实时读 d.Fs.Limits()（set_policy 可运行时调整 policy）
-	Host      func() Host // 懒取宿主：注册后 SetHost 注入的真宿主才能收到审批询问
-	Env       []string   // 附加环境变量（$DSH_*/$GRF_* 事实变量）
+	Host func() Host // 懒取宿主：注册后 SetHost 注入的真宿主才能收到审批询问
+	// Env 懒取附加环境变量（$DSH_*/$GRF_* 事实变量）：每次命令执行时求值，
+	// 切换模型后新建 bash 进程的 GRF_MODEL 即时反映。可为 nil。
+	Env func() []string
 }
 
 // fsLimits 从 FsPolicy 实时读取策略开关；无 FsPolicy 视为不限制（兜底）。
@@ -163,7 +165,9 @@ func RegisterBash(r *Registry, d BashDeps) {
 			}
 			cmd.Dir = a.Workdir
 			env := os.Environ()
-			env = append(env, d.Env...)
+			if d.Env != nil {
+				env = append(env, d.Env()...)
+			}
 			cmd.Env = env
 			cmd.WaitDelay = 5 * time.Second
 			return cmd

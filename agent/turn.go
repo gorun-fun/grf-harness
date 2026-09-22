@@ -79,7 +79,8 @@ func (a *Agent) runTurn(ctx context.Context, userMsg *llm.Message, human bool, r
 		a.mu.Lock()
 		snapshot := sanitizeSnapshot(a.history)
 		a.mu.Unlock()
-		reply, err := a.client.ChatStream(turnCtx, snapshot, a.reg.Defs(), hooks)
+		client := a.getClient() // 副本：流式调用不持锁，运行中切换模型不阻塞
+		reply, err := client.ChatStream(turnCtx, snapshot, a.reg.Defs(), hooks)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || turnCtx.Err() != nil {
 				if userMsg != nil {

@@ -194,8 +194,7 @@ func (a *App) SwitchModel(provider, model string) error {
 		return fmt.Errorf("模型 %q 未配置（%s 可用: %v）", model, provider, p.Models)
 	}
 	nc := llm.NewClient(llm.Config{Provider: provider, BaseURL: p.BaseURL, APIKey: p.APIKey, Model: model})
-	nc.SetCacheKey(a.Harness.CacheKey()) // 缓存路由键随会话迁移到新 client
-	a.Root().SetClient(nc)
+	a.Harness.SwitchClient(nc) // 缓存键迁移 + 子代理 client + 提示词身份行
 	return nil
 }
 
