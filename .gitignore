@@ -4,6 +4,7 @@ coverage.out
 .grf/
 gh
 .zcode/
+.workbuddy/
 .DS_Store
 plugins/bin/
 plugins/dist/
