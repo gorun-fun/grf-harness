@@ -72,8 +72,8 @@ func (a *Agent) SetSystemText(text string) {
 // UpdateModelIdentity 切换模型后原位重写系统提示词中的模型身份行：身份
 // 行在会话构建期按当时的 client 烘焙（新会话为全局 default 模型），切换
 // 只换 client 不更新会让模型以旧身份自我认知（如实际调用 glm 却按提示词
-// 自称旧模型）。只改模型名、其余逐字保留；模型行位于运行环境段（静态段
-// 之后），切换模型时上游前缀缓存本就失效，改写无额外缓存代价。
+// 自称旧模型）。只改模型名、其余逐字保留；模型行按改变频率排在提示词
+// 最末（见 prompt.go 文件头），切换模型时改写只作废其后的尾部缓存。
 func (a *Agent) UpdateModelIdentity(model string) {
 	if model == "" {
 		return

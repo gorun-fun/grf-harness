@@ -1,9 +1,14 @@
-// prompt.go 系统提示词构建：静态指导段（工具使用纪律、后台作业、goal、
-// workflow/ralph、子代理后台默认等）+ 运行时事实段（当前工作目录、实际
-// 模型、技能目录）。静态段恒定在前、易变的运行时事实一律后置——服务端
-// 前缀缓存按最长公共前缀命中，这样跨项目/跨模型也能共享静态前缀；改动
-// 本文件时保持「稳定内容靠前、易变内容靠后」的排序，不要在静态段里嵌
-// 入任何会话间会变化的字符串。
+// prompt.go 系统提示词构建。段序按改变频率递增（缓存友好）：最稳定的
+// 内容在前、最容易变的在后——服务端前缀缓存按最长公共前缀命中，重排后
+// 即使某一段变化，也只作废它之后的尾部。改动本文件时保持「稳定内容靠前、
+// 易变内容靠后」的排序，不要在靠前的段里嵌入更高频变化的字符串：
+//
+//	1. 静态指导段        —— 二进制版本级，恒定
+//	2. 技能段            —— 项目级（SKILL.md 可被编辑）
+//	3. 运行环境(工作区)   —— 项目级（同项目内恒定，会话内根/子代理共享）
+//	4. 插件状态          —— 会话构建级，随每次连接结果变化
+//	5. 子代理身份        —— 每个子代理唯一（同会话内亦变）
+//	6. 模型身份行        —— 最易变：会话内可被 UpdateModelIdentity 改写
 package agent
 
 import (
@@ -15,16 +20,17 @@ import (
 
 // PromptOptions 系统提示词的运行时事实。
 type PromptOptions struct {
-	Workspace string
-	Model     string
-	Skills    *tools.SkillCatalog // 可为 nil
-	Subagent  bool                // 子代理身份（附加说明）
-	Label     string              // 子代理标签
+	Workspace      string
+	Model          string
+	Skills         *tools.SkillCatalog // 可为 nil
+	Subagent       bool                // 子代理身份（附加说明）
+	Label          string              // 子代理标签
+	PluginWarnings []string            // 不可用插件（为空不拼段）
 }
 
-// 模型身份行（运行环境段内、全文唯一）：会话构建期按当时 client 的模型
-// 烘焙，切换模型后由 Agent.UpdateModelIdentity 原位重写，保证模型自我
-// 认知与实际调用一致。
+// 模型身份行（全文唯一，位于提示词末尾——最易变段）：会话构建期按当时
+// client 的模型烘焙，切换模型后由 Agent.UpdateModelIdentity 原位重写，
+// 保证模型自我认知与实际调用一致；放最后使改写只作废尾部缓存。
 const (
 	modelIdentityPrefix = "You are a coding agent powered by the "
 	modelIdentitySuffix = " model.\n"
@@ -50,29 +56,20 @@ func RewriteModelIdentity(system, model string) string {
 	return system[:i] + ModelIdentityLine(model) + system[end:]
 }
 
-// BuildSystemPrompt 生成根会话 system prompt。段序（缓存友好）：静态指导
-// 段（或 customBase 替换）→ 运行时事实 → 子代理身份 → 技能列表。customBase
-// 非空时只替换静态指导部分（用户自定义提示词），运行时事实与技能列表仍
-// 然附加。
+// BuildSystemPrompt 生成 system prompt。段序按改变频率递增（见文件头
+// 注释）：静态指导段（或 customBase 替换）→ 技能 → 工作区路径 → 插件
+// 状态 → 子代理身份 → 模型身份行。customBase 非空时只替换静态指导部分
+// （用户自定义提示词），其余段仍然附加。
 func BuildSystemPrompt(o PromptOptions, customBase string) string {
 	var b strings.Builder
 	if customBase != "" {
 		b.WriteString(strings.TrimRight(customBase, "\n"))
-		b.WriteString("\n\n")
+		b.WriteString("\n")
 	} else {
 		b.WriteString(rootPromptBody())
 	}
 
-	// 运行时事实段：工作区路径/模型名随会话变化，后置在静态段之后，
-	// 保证静态前缀字节级稳定（customBase 会话同样携带）。
-	b.WriteString("\n## 运行环境\n")
-	fmt.Fprintf(&b, "Your working directory is %s. Use pwd via the bash tool to confirm the current working directory when path precision matters.\n", o.Workspace)
-	b.WriteString(ModelIdentityLine(o.Model))
-
-	if o.Subagent {
-		b.WriteString("\n## 子代理身份\n")
-		fmt.Fprintf(&b, "You are running as a background subagent (label %q). You do not see the parent conversation; rely only on the prompt you were given and the workspace. Complete the self-contained task and reply with the final result — not your intermediate steps. You may not ask the user questions and may not create session goals.\n", o.Label)
-	}
+	// 技能段：项目级（SKILL.md 可被编辑）。
 	if o.Skills != nil && len(o.Skills.Names()) > 0 {
 		if content, ok := o.Skills.Load(DefaultSkill); ok {
 			b.WriteString("\n## 默认技能（已加载全文）\n")
@@ -84,6 +81,29 @@ func BuildSystemPrompt(o PromptOptions, customBase string) string {
 			fmt.Fprintf(&b, "- %s: %s\n", name, o.Skills.Summary(name))
 		}
 	}
+
+	// 工作区路径：项目级（同项目内恒定）——会话内根与全部子代理共享，
+	// 前置到插件状态等更易变段之前，最大化公共前缀。
+	b.WriteString("\n## 运行环境\n")
+	fmt.Fprintf(&b, "Your working directory is %s. Use pwd via the bash tool to confirm the current working directory when path precision matters.\n", o.Workspace)
+
+	// 插件状态：会话构建级（随每次构建的连接结果变化；根与子代理都拼
+	// ——子代理同样注册了插件工具，需要知道哪些插件不可用）。
+	if len(o.PluginWarnings) > 0 {
+		b.WriteString("\n## 插件状态\n以下插件不可用，调用其工具会失败，请向用户说明并避免依赖：\n- ")
+		b.WriteString(strings.Join(o.PluginWarnings, "\n- "))
+		b.WriteString("\n")
+	}
+
+	// 子代理身份：每个子代理唯一（label 不同）。
+	if o.Subagent {
+		b.WriteString("\n## 子代理身份\n")
+		fmt.Fprintf(&b, "You are running as a background subagent (label %q). You do not see the parent conversation; rely only on the prompt you were given and the workspace. Complete the self-contained task and reply with the final result — not your intermediate steps. You may not ask the user questions and may not create session goals.\n", o.Label)
+	}
+
+	// 模型身份行：最易变（会话内可切换模型被改写），恒在末尾。
+	b.WriteString("\n")
+	b.WriteString(ModelIdentityLine(o.Model))
 	return b.String()
 }
 
@@ -114,6 +134,8 @@ func rootPromptBody() string {
 	b.WriteString("Check the [exit code: N] marker on every bash result; investigate failures before moving on.\n\n")
 
 	b.WriteString("Track every background job id you start. You are notified in-session when a job finishes — do not busy-poll or sleep on one; keep working on independent steps and do not duplicate a running job's work. Before giving a final answer, collect every still-relevant job with job_output (set wait: true only when you are genuinely blocked on it), and job_kill jobs that stopped mattering.\n\n")
+
+	b.WriteString("Use the todo_write tool to plan and track multi-step work in the session task list, shown to the user as a live todo panel. Before starting non-trivial work, break it into concrete steps — one todo per step — and send the ENTIRE list every call: it replaces the previous list (no partial updates). Mark the todo you are actively working on in_progress (several only when work genuinely runs in parallel, e.g. concurrent subagents or background commands) and mark a todo completed the moment it is done — never batch completions. While work remains, at least one todo stays in_progress; all completed means the task is done. Skip the list for trivial single-step work.\n\n")
 
 	b.WriteString("Use the web_search tool to discover current information on the web. The required queries array accepts 1–4 non-empty search queries; use a one-item array for a single search. It returns an optional answer plus a list of source URLs. Use the returned source snippets when available, and cite the relevant URLs as markdown links.\n\n")
 

@@ -39,6 +39,7 @@ type Harness struct {
 	seq       atomic.Int64
 	cacheKey  string   // 会话级 prompt_cache_key；随会话文件持久化，resume 复用
 	disabled  []string // 按场景禁用的工具名（Options.DisabledTools）
+	plugWarn  []string // 插件状态警告（构建期取一次；子代理提示词复用）
 }
 
 // Options 组装参数。
@@ -113,14 +114,12 @@ func Build(opts Options) (*Harness, error) {
 	}
 	h.bindClient(opts.Client)
 	h.Fs = h.newFsPolicy(host)
-	system := h.systemPromptFor(false, "", opts.SystemPrompt)
+	// 插件连接失败不致命（警告进入系统提示词，见 BuildSystemPrompt），
+	// 但要告知模型：相关工具调用会失败。构建期取一次，子代理工厂复用。
 	if pm != nil {
-		// 插件连接失败不致命，但要告知模型：相关工具调用会失败
-		if warns := pm.Warnings(); len(warns) > 0 {
-			system += "\n## 插件状态\n以下插件不可用，调用其工具会失败，请向用户说明并避免依赖：\n- " +
-				strings.Join(warns, "\n- ") + "\n"
-		}
+		h.plugWarn = pm.Warnings()
 	}
+	system := h.systemPromptFor(false, "", opts.SystemPrompt)
 
 	root := NewAgent("agent_root", opts.Client, tools.NewRegistry(), h.Store, opts.Workspace, system)
 	root.host = host
@@ -186,18 +185,20 @@ func newCacheKey() string {
 }
 
 // systemPromptFor 构建指定角色（根/子代理）的系统提示词；根可用
-// Options.SystemPrompt 覆盖内置默认段。根与子代理的提示词装配共用此入口。
+// Options.SystemPrompt 覆盖内置默认段。根与子代理的提示词装配共用此入口
+// （插件警告两者都携带——插件工具对子代理同样注册）。
 func (h *Harness) systemPromptFor(subagent bool, label, override string) string {
 	model := ""
 	if h.client != nil {
 		model = h.client.Model()
 	}
 	return BuildSystemPrompt(PromptOptions{
-		Workspace: h.root,
-		Model:     model,
-		Skills:    h.Skills,
-		Subagent:  subagent,
-		Label:     label,
+		Workspace:      h.root,
+		Model:          model,
+		Skills:         h.Skills,
+		Subagent:       subagent,
+		Label:          label,
+		PluginWarnings: h.plugWarn, // 构建期取好，根与子代理同一份
 	}, override)
 }
 
