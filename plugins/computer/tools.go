@@ -301,7 +301,7 @@ func registerComputerTools(s *mcpserver.Server, p platform) {
 
 	s.Add(mcpserver.Tool{
 		Name: "computer_type",
-		Description: "输入文本。优先元素模式（state_id+index，经可达性 API 直接设值，不依赖焦点与输入法）；省略元素则向当前焦点输入（纯 ASCII 按键模拟，中文等自动经剪贴板粘贴并恢复）。",
+		Description: "输入文本。优先元素模式（state_id+index）：先尝试可达性 API 直设值（不依赖焦点与输入法）；元素不支持下直设（Electron/浏览器等）时自动兜底——激活应用→点击输入框聚焦→三击全选→键入（整体替换原内容）。省略元素则向当前焦点输入（注意：键盘输入只落进前台应用，务必先点击目标输入框）。",
 		Schema: cobj(mergeProps(map[string]any{
 			"text": cstr("要输入的文本"),
 		}), "text"),
@@ -318,10 +318,35 @@ func registerComputerTools(s *mcpserver.Server, p platform) {
 				return nil, err
 			}
 			if n != nil {
-				if _, err := p.ElementAction(ctx, st.PID, n.Path, n.Role, n.Name, "set_value", a.Text); err != nil {
+				if _, err := p.ElementAction(ctx, st.PID, n.Path, n.Role, n.Name, "set_value", a.Text); err == nil {
+					return ctext(fmt.Sprintf("已向元素 [%d] %s 设值 %d 字符", *a.Index, n.Role, len([]rune(a.Text)))), nil
+				} else if _, changed := err.(*errChanged); changed {
 					return nil, err
 				}
-				return ctext(fmt.Sprintf("已向元素 [%d] %s 设值 %d 字符", *a.Index, n.Role, len([]rune(a.Text)))), nil
+				// 元素不支持 AXSetValue（Electron/浏览器等常见）：聚焦输入框后
+				// 走真实键盘输入兜底。不聚焦就打字是"输入不了"的头号根因——
+				// keystroke 只落进前台应用，而 agent 跑在终端里，焦点常常就
+				// 在终端自己身上。
+				res, lerr := p.ElementAction(ctx, st.PID, n.Path, n.Role, n.Name, "locate", "")
+				if lerr != nil {
+					return nil, lerr
+				}
+				if !res.HasPos {
+					return nil, err
+				}
+				if err := p.ActivateApp(ctx, st.App); err != nil {
+					return nil, err
+				}
+				time.Sleep(250 * time.Millisecond)
+				// 三击=全选输入框原内容，随后的输入整体替换（与 set_value 语义一致）
+				if err := p.Click(ctx, res.X, res.Y, "left", 3); err != nil {
+					return nil, err
+				}
+				time.Sleep(200 * time.Millisecond)
+				if err := p.Type(ctx, a.Text); err != nil {
+					return nil, err
+				}
+				return ctext(fmt.Sprintf("元素 [%d] 不支持直设值，已聚焦输入框键入 %d 字符（替换原内容）", *a.Index, len([]rune(a.Text)))), nil
 			}
 			if err := p.Type(ctx, a.Text); err != nil {
 				return nil, err

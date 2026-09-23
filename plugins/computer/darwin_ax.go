@@ -163,6 +163,9 @@ on run argv
 				error "ERR_NOACTION " & errMsg
 			end try
 		else if act is "set_value" then
+			try
+				set focused of r to true
+			end try
 			set value of r to (item 6 of argv)
 			return "set"
 		else if act is "locate" then
@@ -264,10 +267,14 @@ func (d darwinPlatform) Apps(ctx context.Context) ([]AppInfo, error) {
 		return nil, fmt.Errorf("解析应用列表: %w", err)
 	}
 	apps := make([]AppInfo, 0, len(arr))
+	// 按名去重：浏览器/Electron 的渲染子进程在 NSWorkspace 里与主进程同名
+	// （如 Safari浏览器 + 其 Networking/网页内容进程），保留首个（主进程）
+	seen := map[string]bool{}
 	for _, a := range arr {
-		if a.Name == "" {
+		if a.Name == "" || seen[a.Name] {
 			continue
 		}
+		seen[a.Name] = true
 		apps = append(apps, AppInfo{PID: a.PID, Name: a.Name, Frontmost: a.Front})
 	}
 	return apps, nil

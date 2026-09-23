@@ -6,10 +6,23 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
+
+	"git.gorun.fun/share/grf-harness/plugins/internal/mcpserver"
 )
+
+// toolByName 从注册表按名取工具（冒烟直调 handler 用）。
+func toolByName(s *mcpserver.Server, name string) mcpserver.Tool {
+	for _, t := range s.Tools() {
+		if t.Name == name {
+			return t
+		}
+	}
+	panic("tool not found: " + name)
+}
 
 func TestSmokeDarwinActions(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -106,4 +119,68 @@ func TestSmokeDarwinActions(t *testing.T) {
 			t.Logf("窗口截图 %dx%d 通过", w, h)
 		}
 	}
+}
+
+// TestSmokeSafariType 端到端验证 computer_type 的元素模式全链路（Safari
+// 地址栏 = 旧版"输入不了"的典型场景：直设值或兜底聚焦键入）。
+func TestSmokeSafariType(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	d := darwinPlatform{}
+	if err := d.ActivateApp(ctx, "Safari"); err != nil {
+		t.Skipf("无 Safari: %v", err)
+	}
+	time.Sleep(1200 * time.Millisecond)
+
+	apps, _ := d.Apps(ctx)
+	var pid int
+	for _, a := range apps {
+		if strings.HasPrefix(a.Name, "Safari") {
+			pid = a.PID
+			break
+		}
+	}
+	if pid == 0 {
+		t.Skip("Safari 未在运行")
+	}
+	nodes, err := d.DumpElements(ctx, pid, 8)
+	if err != nil {
+		t.Fatalf("DumpElements: %v", err)
+	}
+	st := states.put(pid, "Safari", nodes)
+	var addr *Node
+	for _, n := range nodes {
+		if n.Role == "AXTextField" || n.Role == "AXComboBox" {
+			addr = n
+			break
+		}
+	}
+	if addr == nil {
+		t.Skip("未找到地址栏（无窗口？）")
+	}
+	t.Logf("地址栏: [%d] %s %q path=%s", indexOfNode(st, addr), addr.Role, addr.Name, addr.Path)
+
+	// 直调 computer_type 工具 handler（元素模式），验证直设值或兜底路径
+	s := mcpserver.New("grf-computer", "test")
+	registerComputerTools(s, d)
+	tool := toolByName(s, "computer_type")
+	args := []byte(fmt.Sprintf(`{"text":"example.com","state_id":%q,"index":%d}`, st.ID, indexOfNode(st, addr)))
+	res, err := tool.Handler(ctx, args)
+	if err != nil {
+		t.Fatalf("computer_type: %v", err)
+	}
+	for _, c := range res {
+		if c.Type == "text" {
+			t.Log(c.Text)
+		}
+	}
+}
+
+func indexOfNode(st *State, n *Node) int {
+	for i, x := range st.Nodes {
+		if x == n {
+			return i
+		}
+	}
+	return -1
 }

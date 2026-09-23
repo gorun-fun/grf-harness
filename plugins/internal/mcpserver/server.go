@@ -89,6 +89,17 @@ func (s *Server) Names() []string {
 	return names
 }
 
+// Tools 已注册工具的快照（嵌入方测试直调 handler 用）。
+func (s *Server) Tools() []Tool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Tool, 0, len(s.tools))
+	for _, t := range s.tools {
+		out = append(out, t)
+	}
+	return out
+}
+
 // ---- JSON-RPC 信封 ----
 
 type rpcRequest struct {
