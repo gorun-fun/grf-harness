@@ -326,8 +326,10 @@ func (m *Manager) RegisterInto(reg *tools.Registry) map[string]bool {
 			Description: entry.def.Description + fmt.Sprintf("\n\n[grf 插件 %s]", entry.plugin),
 			Parameters:  entry.def.InputSchema,
 		}
-		if def.Parameters == nil {
-			def.Parameters = map[string]any{"type": "object"}
+		// 部分服务端（LM Studio 的 zod 校验）要求 parameters.properties
+		// 也是对象，nil 兜底必须带上空 properties
+		if def.Parameters == nil || def.Parameters["properties"] == nil {
+			def.Parameters = map[string]any{"type": "object", "properties": map[string]any{}}
 		}
 		reg.RegisterCustom(def, entry.conn.handler(entry.def.Name))
 	}
