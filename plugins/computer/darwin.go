@@ -36,10 +36,11 @@ func mouseButton(name string) (down, up, id int, ok bool) {
 // kCGMouseEventClickState=1；kCGScrollEventUnitPixel=0（正 delta 向上）。
 const jxaHeader = `ObjC.import('CoreGraphics');
 ObjC.import('Foundation');
-// 事件源用 kCGEventSourceStateHIDSystem(1)：合成鼠标事件经 HID 源发出时
-// 更接近真实硬件事件，点击后台窗口能更可靠地带起目标应用（无源事件在
-// 部分系统上只投递不激活，随后 keystroke 会静默落进错误的前台应用）。
-const msrc = $.CGEventSourceCreate(1);
+// 事件源必须用 kCGEventSourceStateCombinedSessionState(0)：实测用
+// kCGEventSourceStateHIDSystem(1) 时合成的 mouse-up 不回写按钮状态——
+// CGEventSourceButtonState 点击后仍报按住，后续一切指针移动都被系统判成
+// 按住拖动（"点击变拖动"的根因）。Combined 源合成 down/up 状态正确收放。
+const msrc = $.CGEventSourceCreate(0);
 function postMouse(type, x, y, btn, clicks) {
   const e = $.CGEventCreateMouseEvent(msrc, type, $.CGPointMake(x, y), btn);
   $.CGEventSetIntegerValueField(e, 1, clicks);
@@ -75,10 +76,21 @@ func (d darwinPlatform) Click(ctx context.Context, x, y int, button string, clic
 	}
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf(jxaHeader+"postMouse(5, %d, %d, %d, 1);\n", x, y, btn))
+	// down/up 之间与连击对之间必须有间隔：零间隔连发的事件批会被部分应用
+	// （Electron/Qt/Finder）把批间的指针位移判成按住拖动——"点击变拖动"
+	// 的根因；双击/三击还需落在系统双击判定窗口（<500ms）内
+	b.WriteString("sleep(0.03);\n")
 	for i := 1; i <= clicks; i++ {
 		fmt.Fprintf(&b, "postMouse(%d, %d, %d, %d, %d);\n", down, x, y, btn, i)
+		b.WriteString("sleep(0.05);\n")
 		fmt.Fprintf(&b, "postMouse(%d, %d, %d, %d, %d);\n", up, x, y, btn, i)
+		if i < clicks {
+			b.WriteString("sleep(0.08);\n")
+		}
 	}
+	// 兜底再补一次 mouse-up（同状态重复 up 幂等）：确保任何应用视角下按键
+	// 已释放，后续指针移动不会被当成拖动延续
+	fmt.Fprintf(&b, "sleep(0.02);\npostMouse(%d, %d, %d, %d, 1);\n", up, x, y, btn)
 	_, err := jxa(ctx, b.String())
 	return d.wrap(err)
 }
@@ -87,6 +99,7 @@ func (d darwinPlatform) Drag(ctx context.Context, fromX, fromY, toX, toY int) er
 	steps := 25
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf(jxaHeader+"postMouse(5, %d, %d, 0, 1);\n", fromX, fromY))
+	b.WriteString("sleep(0.03);\n")
 	b.WriteString(fmt.Sprintf("postMouse(1, %d, %d, 0, 1);\n", fromX, fromY))
 	for i := 1; i <= steps; i++ {
 		x := fromX + (toX-fromX)*i/steps
@@ -94,6 +107,8 @@ func (d darwinPlatform) Drag(ctx context.Context, fromX, fromY, toX, toY int) er
 		b.WriteString("sleep(0.005);\n")
 		fmt.Fprintf(&b, "postMouse(6, %d, %d, 0, 1);\n", x, y)
 	}
+	// 到达终点稍作停留再松开：立即 up 时部分应用仍按上一插值点结算拖放
+	b.WriteString("sleep(0.05);\n")
 	b.WriteString(fmt.Sprintf("postMouse(2, %d, %d, 0, 1);\n", toX, toY))
 	_, err := jxa(ctx, b.String())
 	return d.wrap(err)
