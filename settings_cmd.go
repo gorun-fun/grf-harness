@@ -197,7 +197,7 @@ func runPromptCmd(args []string, s *config.Settings) {
 		if err := s.Save(); err != nil {
 			fatal(err)
 		}
-		fmt.Println("自定义提示词已保存")
+		fmt.Println("自定义提示词已保存（作为 custom 段生效：只替换身份/工作方式，内置工具使用说明段仍恒定拼装）")
 	case "reset":
 		s.SystemPrompt = ""
 		if err := s.Save(); err != nil {

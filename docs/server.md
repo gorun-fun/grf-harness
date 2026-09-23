@@ -81,7 +81,8 @@ gh server [-addr 127.0.0.1:7400] [-data ~/.grf/server] [-token <t>]
 {"grf:session": {
   "policy": "write-workspace|read-workspace",  // 统一规则串，空值默认 off | write-workspace | read-workspace
   "auto_approve": true,        // 沙箱升级/计划审批的默认值（见 §7）
-  "system_prompt": "…",        // 等同 instructions 的会话级版本
+  "system_prompt": "…",        // 会话级 custom 段（身份/工作方式）；内置工具说明段恒定追加，不被它替换
+  "default_skill": "grf-start", // 默认技能名（目录中存在该名字时 SKILL.md 全文注入系统提示词）；缺省不注入任何默认技能
   "max_steps": 100,
   "disabled_tools": ["ralph"]
 }}

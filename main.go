@@ -28,6 +28,7 @@ import (
 	"os"
 	"strings"
 
+	"git.gorun.fun/share/grf-harness/agent"
 	"git.gorun.fun/share/grf-harness/app"
 	"git.gorun.fun/share/grf-harness/term"
 	"git.gorun.fun/share/grf-harness/weixin"
@@ -120,9 +121,11 @@ func interactive() bool {
 	return term.IsTTY(int(os.Stdin.Fd())) && term.IsTTY(int(os.Stdout.Fd()))
 }
 
-// bootApp 构建应用（读配置、连模型）。
+// bootApp 构建应用（读配置、连模型）。终端交互形态把 grf-usage 设为
+// 默认技能（全文注入系统提示词）；三方集成经 app/agent Options 自行
+// 指定，空值不注入任何默认技能。
 func bootApp() *app.App {
-	a, err := app.New(app.Options{})
+	a, err := app.New(app.Options{DefaultSkill: agent.DefaultSkill})
 	if err != nil {
 		fatal(err)
 	}

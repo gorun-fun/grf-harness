@@ -55,8 +55,10 @@ func (a *Agent) Reset() {
 	}
 }
 
-// SetSystemText 运行期替换静态系统提示词段（Responses 请求级 instructions
-// 生效用）。会改写请求前缀，提示词缓存将失效。
+// SetSystemText 替换静态系统提示词：构建期在工具注册完成后按实际可用
+// 工具集组装 inner prompt 再回填（见 Harness.systemPromptFor）；运行期
+// 由 Responses 请求级 instructions 生效。会改写请求前缀，提示词缓存将
+// 失效。
 func (a *Agent) SetSystemText(text string) {
 	if text == "" {
 		return

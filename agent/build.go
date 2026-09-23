@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -43,6 +44,7 @@ type Harness struct {
 	seq      atomic.Int64
 	cacheKey string   // 会话级 prompt_cache_key；随会话文件持久化，resume 复用
 	disabled []string // 按场景禁用的工具名（Options.DisabledTools）
+	defSkill string   // 默认技能名（Options.DefaultSkill；空 = 不注入默认技能，gh CLI 终端形态配 grf-usage）
 	plugWarn []string // 插件状态警告（构建期取一次；子代理提示词复用）
 }
 
@@ -53,10 +55,11 @@ type Options struct {
 	Settings      *config.Settings // 可为 nil（用默认）
 	Host          tools.Host       // 交互宿主；nil 用 NoopHost
 	MaxSteps      int
-	SystemPrompt  string              // 用户自定义静态提示词；空用内置
+	SystemPrompt  string              // 用户自定义 custom 段（身份/工作方式）；空用内置默认。inner prompt（内置工具说明）恒定拼装，不被它替换
 	DepthLimit    int                 // 子代理深度上限；0 用默认
 	DisabledTools []string            // 按场景禁用的工具名（根与子代理统一剔除）
 	Skills        *tools.SkillCatalog // 技能目录；nil 自动加载两级默认目录，非 nil 完全替换（空目录即关闭技能）
+	DefaultSkill  string              // 默认技能名（目录中存在时全文注入系统提示词）；空 = 不注入，gh CLI 终端形态配 DefaultSkill 常量（grf-usage）
 	NoPlugins     bool                // 关闭 MCP 插件接入（嵌入方裁剪；go test 下插件本就自动空转）
 	// StoreRoot 会话存档根目录（<root>/.grf/sessions）；空则用 Workspace。
 	// 多会话进程（如 gh server）必须按会话隔离，否则新会话会恢复到
@@ -115,6 +118,7 @@ func Build(opts Options) (*Harness, error) {
 		root:      opts.Workspace,
 		cacheKey:  newCacheKey(),
 		disabled:  opts.DisabledTools,
+		defSkill:  opts.DefaultSkill,
 	}
 	h.bindClient(opts.Client)
 	h.Fs = h.newFsPolicy(host)
@@ -123,9 +127,8 @@ func Build(opts Options) (*Harness, error) {
 	if pm != nil {
 		h.plugWarn = pm.Warnings()
 	}
-	system := h.systemPromptFor(false, "", opts.SystemPrompt)
 
-	root := NewAgent("agent_root", opts.Client, tools.NewRegistry(), h.Store, opts.Workspace, system)
+	root := NewAgent("agent_root", opts.Client, tools.NewRegistry(), h.Store, opts.Workspace, "")
 	root.host = host
 	root.Todos = h.Todos
 	root.Fs = h.Fs
@@ -147,6 +150,9 @@ func Build(opts Options) (*Harness, error) {
 
 	// 根工具链（28 个全部注册）
 	h.registerTools(root, true)
+	// 提示词在工具注册后组装：inner prompt 按实际注册结果（含
+	// DisabledTools 剔除）拼装，说明段与真实可用工具集一致。
+	root.SetSystemText(h.systemPromptFor(root.Reg(), false, "", opts.SystemPrompt))
 	// 子代理工厂
 	h.Manager.NewChild = func(parent *Agent, label string, seed []llm.Message) *Agent {
 		return h.newChild(parent, label, seed)
@@ -214,12 +220,24 @@ func newCacheKey() string {
 }
 
 // systemPromptFor 构建指定角色（根/子代理）的系统提示词；根可用
-// Options.SystemPrompt 覆盖内置默认段。根与子代理的提示词装配共用此入口
-// （插件警告两者都携带——插件工具对子代理同样注册）。
-func (h *Harness) systemPromptFor(subagent bool, label, override string) string {
+// Options.SystemPrompt 覆盖内置默认 custom 段（身份/工作方式），inner
+// prompt（内置工具说明）两者恒定拼装。根与子代理的提示词装配共用此入口
+// （插件警告两者都携带——插件工具对子代理同样注册）。reg 为该角色注册
+// 完成后的工具注册表，inner prompt 只为其中实际可用的内置工具拼说明段。
+func (h *Harness) systemPromptFor(reg *tools.Registry, subagent bool, label, override string) string {
 	model := ""
 	if c := h.getClient(); c != nil {
 		model = c.Model()
+	}
+	var names []string
+	if reg != nil {
+		names = reg.Registered()
+	}
+	if subagent {
+		// ask_user_question 在子代理注册的是拒绝桩（不可用），不拼说明段
+		names = slices.DeleteFunc(slices.Clone(names), func(n string) bool {
+			return n == "ask_user_question"
+		})
 	}
 	return BuildSystemPrompt(PromptOptions{
 		Workspace:      h.root,
@@ -228,6 +246,8 @@ func (h *Harness) systemPromptFor(subagent bool, label, override string) string 
 		Subagent:       subagent,
 		Label:          label,
 		PluginWarnings: h.plugWarn, // 构建期取好，根与子代理同一份
+		Tools:          names,
+		DefaultSkill:   h.defSkill,
 	}, override)
 }
 
@@ -339,19 +359,21 @@ func (h *Harness) memoryDeps() tools.MemoryDeps {
 
 // newChild 构建子代理（独立历史与工具链；goal/ralph/ask_user 不可用）。
 func (h *Harness) newChild(parent *Agent, label string, seed []llm.Message) *Agent {
-	system := h.systemPromptFor(true, label, "")
-	child := NewAgent("pending", h.getClient(), tools.NewRegistry(), h.Store, h.root, system)
+	child := NewAgent("pending", h.getClient(), tools.NewRegistry(), h.Store, h.root, "")
 	child.host = &tools.NoopHost{AutoApprove: h.Settings.AutoApprove, OnEvent: nil}
 	child.Todos = &tools.TodoState{}
 	child.Fs = h.newFsPolicy(child.host)
 	child.Jobs = tools.NewJobManager()
 	child.SetMaxSteps(parent.MaxSteps())
+	h.registerTools(child, false)
+	// 提示词在工具注册后组装（inner prompt 按子代理实际工具集拼装）
+	system := h.systemPromptFor(child.Reg(), true, label, "")
+	child.SetSystemText(system)
 	if len(seed) > 0 {
 		child.mu.Lock()
 		child.history = append([]llm.Message{{Role: "system", Content: system}}, seed[1:]...)
 		child.mu.Unlock()
 	}
-	h.registerTools(child, false)
 	// 计划模式开关仅根可切换，但改动拦截对子代理同样生效
 	child.planGuard = h.Root.InPlanMode
 	return child

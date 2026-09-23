@@ -19,7 +19,7 @@ import (
 	"git.gorun.fun/share/grf-harness/tools"
 )
 
-// Version 版本号，事实来源在 config.Version（构建时经 build.sh 注入，见 config/version.go）。
+// Version 版本号，事实来源在 config.Version（构建时经 run.sh 注入，见 config/version.go）。
 var Version = config.Version
 
 // Options 应用构建参数（库使用方入口）。
@@ -33,10 +33,11 @@ type Options struct {
 	Client        *llm.Client               // 指定客户端；nil 时从配置加载
 	Host          tools.Host                // 交互宿主；nil 时按交互性自动选择
 	MaxSteps      int                       // 循环上限；0 用配置/默认
-	SystemPrompt  string                    // 自定义静态提示词；空用配置文件/内置
+	SystemPrompt  string                    // 自定义 custom 段（身份/工作方式）；空用配置文件/内置默认。内置工具说明段（inner prompt）恒定拼装，不被它替换
 	DepthLimit    int                       // 子代理深度上限
 	DisabledTools []string                  // 按场景禁用的工具名
 	Skills        *tools.SkillCatalog       // 技能目录；nil 自动加载默认目录，非 nil 完全替换（空目录即关闭技能）
+	DefaultSkill  string                    // 默认技能名（目录中存在时全文注入系统提示词）；空 = 不注入，gh CLI 终端形态在 bootApp 显式配 agent.DefaultSkill（grf-usage）
 	VerboseEvents func(kind, detail string) // 全部事件回调（挂到根 agent；RunTask 会覆盖，见其注释）
 	OnToolEvent   func(agent.ToolEvent)     // 结构化工具事件回调（挂到根 agent，子代理事件也回流；见 docs/integration.md §5）
 
@@ -66,7 +67,9 @@ func New(opts Options) (*App, error) {
 	}
 	applyPolicyOverrides(settings, opts)
 	// 提示词优先级：Options.SystemPrompt > 配置文件 system_prompt（gh
-	// config prompt set 落盘）> 内置默认。
+	// config prompt set 落盘）> 内置默认。三者都只决定 custom 段（身份
+	// 定义与工作方式）；内置工具使用说明段（inner prompt）按本会话实际
+	// 可用工具恒定拼装，custom 怎么设都不会替换它。
 	sysPrompt := opts.SystemPrompt
 	if sysPrompt == "" && settings != nil {
 		sysPrompt = settings.SystemPrompt
@@ -81,6 +84,7 @@ func New(opts Options) (*App, error) {
 		DepthLimit:    opts.DepthLimit,
 		DisabledTools: opts.DisabledTools,
 		Skills:        opts.Skills,
+		DefaultSkill:  opts.DefaultSkill,
 		NoPlugins:     opts.NoPlugins,
 	})
 	if err != nil {

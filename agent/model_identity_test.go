@@ -110,7 +110,7 @@ func TestSwitchClientConcurrentWithTurn(t *testing.T) {
 		if _, err := h.Root.Run(context.Background(), "hi"); err != nil {
 			t.Errorf("Run: %v", err)
 		}
-		_ = h.systemPromptFor(true, "s1", "") // newChild 的提示词装配读路径
+		_ = h.systemPromptFor(nil, true, "s1", "") // newChild 的提示词装配读路径
 		_ = h.managedEnv()                    // bash 事实变量读路径
 	}
 	close(stop)

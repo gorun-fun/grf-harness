@@ -79,9 +79,12 @@ err = a.Harness.Root().Run(ctx, "帮我把今天的报表导出")
 ## 3. 注入默认提示词
 
 优先级：`Options.SystemPrompt` > 配置文件 `system_prompt`（`gh config
-prompt set` 落盘的那份）> 内置默认。非最高优先级非空者**替换**内置静态
-提示词，但工作区路径、模型名、技能清单等
-动态事实段仍会自动拼接（见 `agent.BuildSystemPrompt`）。
+prompt set` 落盘的那份）> 内置默认。三者都只决定 **custom 段**——智能体
+的身份定义与工作方式（内置默认含终端 UI 身份、AGENTS.md 约定、`@` 路径
+引用与最终回复产物清单等工作方式）。**内置工具使用说明段（inner
+prompt）恒定追加**：按本会话实际可用的内置工具（未禁用、该角色已注册）
+逐工具拼装，custom 无论怎么设置都替换不掉；工作区路径、模型名、技能
+清单等动态事实段也仍会自动拼接（见 `agent.BuildSystemPrompt`）。
 
 ## 4. 工具：自定义、替换实现与禁用
 
@@ -185,6 +188,19 @@ Skill 就是 `<name>/SKILL.md` 目录，无其他格式要求。在 `app.New` **
 SKILL.md 首行写 `# 标题 + 一句话用途`（system prompt 清单摘要取首行），
 正文写触发条件与操作步骤。技能加载后自动出现在 system prompt 清单中，
 模型按需调用 `skill({"name": "报表导出"})` 取全文执行，宿主无需接线。
+
+**默认技能可配置**（`Options.DefaultSkill`）：名字与该配置相同的技能，
+SKILL.md **全文直接注入系统提示词**（无需模型调 skill 工具，会话一开即
+生效）。**空值不注入任何默认技能**——终端用法技能 `grf-usage` 只服务 gh
+CLI 终端形态（bootApp 显式配置），三方集成的使用方式不同，默认不加载；
+集成方指定自己的默认技能：
+
+```go
+a, _ := app.New(app.Options{ DefaultSkill: "grf-start" }) // 全文注入 grf-start
+```
+
+gh server 接入方经会话配置同义设置：`grf:session` 首次请求带
+`"default_skill": "grf-start"`（落盘 meta.json，懒加载沿用；空 = 不注入）。
 
 **接管技能目录**（`Options.Skills`）：不设时按上述两级目录自动加载；
 传入 `*tools.SkillCatalog` 则**完全替换**默认加载——传空目录即关闭技能
