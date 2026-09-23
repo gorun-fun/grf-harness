@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -366,22 +367,53 @@ func (s *Server) handleAgentModelsDetect(w http.ResponseWriter, r *http.Request)
 		writeError(w, 502, errServer, fmt.Sprintf("供应商返回 %d: %s", resp.StatusCode, truncateRunes(string(rb), 200)), "")
 		return
 	}
-	var parsed struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
+	// 裸数组 [{id}] 也兼容;上下文窗口按社区常见字段名依次尝试
+	// (token-hub 三者同值;OpenRouter/SiliconFlow 用 context_length,
+	// vLLM 用 max_model_len),与 goder 桌面侧 modelconfig.go 同一套字段。
+	var wrapped struct {
+		Data []map[string]any `json:"data"`
 	}
-	if err := json.Unmarshal(rb, &parsed); err != nil {
+	var bare []map[string]any
+	if err := json.Unmarshal(rb, &wrapped); err == nil && len(wrapped.Data) > 0 {
+		bare = wrapped.Data
+	} else if err := json.Unmarshal(rb, &bare); err != nil {
 		writeError(w, 502, errServer, "响应不是 OpenAI 兼容模型列表: "+err.Error(), "")
 		return
 	}
-	models := make([]string, 0, len(parsed.Data))
-	for _, m := range parsed.Data {
-		if m.ID != "" {
-			models = append(models, m.ID)
+	type richModel struct {
+		ID    string `json:"id"`
+		CtxLen int   `json:"ctxLen"`
+	}
+	models := make([]string, 0, len(bare))
+	rich := make([]richModel, 0, len(bare))
+	for _, item := range bare {
+		id, _ := item["id"].(string)
+		if id == "" {
+			continue
+		}
+		models = append(models, id)
+		rich = append(rich, richModel{ID: id, CtxLen: modelCtxLen(item)})
+	}
+	// models 维持纯 id 数组(旧客户端兼容);modelsRich 带 ctxLen 供
+	// goder 网页形态缓存真实上下文窗口(与桌面态 wails 探测同构)。
+	writeJSON(w, 200, map[string]any{"models": models, "modelsRich": rich})
+}
+
+// modelCtxLen 从模型对象里取上下文窗口,数字或数字字符串均可,取首个 >0 的值。
+func modelCtxLen(item map[string]any) int {
+	for _, key := range []string{"context_length", "context_window", "max_model_len"} {
+		switch v := item[key].(type) {
+		case float64:
+			if v > 0 {
+				return int(v)
+			}
+		case string:
+			if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+				return n
+			}
 		}
 	}
-	writeJSON(w, 200, map[string]any{"models": models})
+	return 0
 }
 
 // ---------- 插件 / MCP ----------
