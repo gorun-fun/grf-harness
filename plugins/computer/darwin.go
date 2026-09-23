@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -35,8 +36,12 @@ func mouseButton(name string) (down, up, id int, ok bool) {
 // kCGMouseEventClickState=1；kCGScrollEventUnitPixel=0（正 delta 向上）。
 const jxaHeader = `ObjC.import('CoreGraphics');
 ObjC.import('Foundation');
+// 事件源用 kCGEventSourceStateHIDSystem(1)：合成鼠标事件经 HID 源发出时
+// 更接近真实硬件事件，点击后台窗口能更可靠地带起目标应用（无源事件在
+// 部分系统上只投递不激活，随后 keystroke 会静默落进错误的前台应用）。
+const msrc = $.CGEventSourceCreate(1);
 function postMouse(type, x, y, btn, clicks) {
-  const e = $.CGEventCreateMouseEvent($(), type, $.CGPointMake(x, y), btn);
+  const e = $.CGEventCreateMouseEvent(msrc, type, $.CGPointMake(x, y), btn);
   $.CGEventSetIntegerValueField(e, 1, clicks);
   $.CGEventPost(0, e);
 }
@@ -142,19 +147,29 @@ func (d darwinPlatform) Type(ctx context.Context, text string) error {
 		_, err := run(ctx, "osascript", "-e", script, text)
 		return d.wrap(err)
 	}
-	old, err := d.ClipboardGet(ctx)
+	old, err := pbpasteRaw(ctx)
 	if err != nil {
 		return err
 	}
 	if err := d.ClipboardSet(ctx, text); err != nil {
 		return err
 	}
-	time.Sleep(100 * time.Millisecond) // 等 pbcopy 落盘到粘贴板，避免粘到旧内容
+	// 轮询确认剪贴板已更新（pbcopy 落板是异步的，固定盲等在慢机上会粘到旧内容）
+	for i := 0; i < 20; i++ {
+		cur, err := pbpasteRaw(ctx)
+		if err == nil && cur == text {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 	if err := d.Key(ctx, "cmd+v"); err != nil {
 		_ = d.ClipboardSet(ctx, old)
 		return err
 	}
-	time.Sleep(100 * time.Millisecond) // 等焦点窗口取走粘贴板内容再恢复
+	// 恢复剪贴板前多等一会：焦点应用处理 cmd+v 有快有慢（浏览器/Electron
+	// 常超 100ms），过早恢复会让目标粘到旧内容——那正是"输入不起作用"的
+	// 常见表现
+	time.Sleep(300 * time.Millisecond)
 	return d.ClipboardSet(ctx, old)
 }
 
@@ -293,6 +308,20 @@ func (d darwinPlatform) ClipboardSet(ctx context.Context, text string) error {
 		return d.wrap(err)
 	}
 	return nil
+}
+
+// pbpasteRaw 读取剪贴板原文（不 TrimSpace）：恢复剪贴板时必须逐字节原样
+// 写回，否则被 run() 截掉尾部的换行/空白，用户剪贴板被无声篡改。
+func pbpasteRaw(ctx context.Context) (string, error) {
+	cctx, cancel := context.WithTimeout(ctx, opTimeout)
+	defer cancel()
+	var buf bytes.Buffer
+	cmd := exec.CommandContext(cctx, "pbpaste")
+	cmd.Stdout = &buf
+	if err := cmd.Run(); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
 }
 
 // parseJSONLoose 解析 JSON。
