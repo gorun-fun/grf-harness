@@ -146,4 +146,4 @@ ENABLE_VIRTUAL_TERMINAL_INPUT，方向键等按键由 conhost/Windows Terminal �
 尺寸变化监听平台化（`term/resize_*.go`：unix 走 SIGWINCH，Windows 无等价
 信号改 250ms 轮询，其余平台无通知）。其余平台回退非交互；守护进程脱离
 会话与进程探测在 `daemon_unix.go` / `daemon_other.go`（package main）。
-交叉编译见 `./build.sh`（产物 `dist/`）。
+交叉编译见 `./run.sh`（产物 `dist/`）。

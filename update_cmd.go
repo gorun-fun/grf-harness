@@ -27,7 +27,7 @@ func runUpdateCmd(args []string) {
 
 	cur := config.Version
 	if cur == "dev" {
-		fatal(fmt.Errorf("本地构建（dev）没有版本号，无法比对更新；请用 ./build.sh 构建或从下载页安装正式版"))
+		fatal(fmt.Errorf("本地构建（dev）没有版本号，无法比对更新；请用 ./run.sh 构建或从下载页安装正式版"))
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

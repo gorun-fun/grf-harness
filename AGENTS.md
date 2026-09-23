@@ -14,9 +14,9 @@
 ## 构建与测试
 
 ```sh
-./build.sh                # vet + build（产物 ./gh，跳过测试；macOS 会重做 adhoc 签名）
-./build.sh macos|macos-arm64|linux|linux-arm64|windows|windows-arm64|all   # 交叉编译，产物在 dist/
-./build.sh all            # 6 平台全量；CI（.gitlab-ci.yml，仅 tag 触发、无 test job）用它构建后发布到
+./run.sh                # vet + build（产物 ./gh，跳过测试；macOS 会重做 adhoc 签名）
+./run.sh macos|macos-arm64|linux|linux-arm64|windows|windows-arm64|all   # 交叉编译，产物在 dist/
+./run.sh all            # 6 平台全量；CI（.gitlab-ci.yml，仅 tag 触发、无 test job）用它构建后发布到
                           # 10.8.0.5:/data/download/grf-harness/{平台}/{tag去v}/gh(.exe)；
                           # 版本号经 ldflags 注入 config.Version（CI 取 tag、本地取 git describe，去 v 前缀）；
                           # 交叉编译产物 linux/windows 经 upx 压缩（UPX=0 禁用；darwin 与 windows/arm64

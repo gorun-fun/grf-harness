@@ -1,6 +1,6 @@
 #!/bin/sh
-# build.sh 一键：vet + 编译（跳过测试）
-# 用法：./build.sh [目标]
+# run.sh（原 build.sh）一键：vet + 编译（跳过测试）
+# 用法：./run.sh [目标]
 #   （缺省）       当前系统，产物 ./gh
 #   macos         darwin/amd64   → dist/gh-darwin-amd64
 #   macos-arm64   darwin/arm64   → dist/gh-darwin-arm64

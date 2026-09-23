@@ -42,7 +42,7 @@
 ## 用法
 
 ```sh
-go build -o gh .      # 或 ./build.sh（vet + build；交叉编译见 build.sh macos|linux|linux-arm|windows|all → dist/）
+go build -o gh .      # 或 ./run.sh（vet + build；交叉编译见 run.sh macos|linux|linux-arm|windows|all → dist/）
 
 gh                     # 全屏交互（默认模式）
 gh -resume             # 恢复上一次会话
@@ -227,19 +227,19 @@ server/               Responses API 接入层（ORS 兼容：会话池、SSE 事
 mcp/ + plugin/        MCP 插件接入：零依赖客户端（stdio/HTTP）与插件
                       管理器（配置/自动发现/注册为工具，进程级共享）
 plugins/              插件二进制源码（独立 Go 模块：grf-browser、
-                      grf-computer、internal/mcpserver SDK；独立 build.sh）
+                      grf-computer、internal/mcpserver SDK；独立 plugins/build.sh）
 weixin/               微信 ClawBot 渠道（每用户 agent 池、消息分发、
                       登录与媒体处理）
 docs/                 architecture.md（架构总览）、integration.md（Go 库
                       对接）、server.md（HTTP 接入）、plugins.md（MCP 插件）
-dist/                 交叉编译产物（build.sh，gitignore）
+dist/                 交叉编译产物（run.sh，gitignore）
 ```
 
 ## 开发
 
 ```sh
-./build.sh            # vet + build（产物 ./gh，跳过测试；macOS 重做 adhoc 签名）
-./build.sh all        # 交叉编译 macos/linux/linux-arm/windows → dist/
+./run.sh            # vet + build（产物 ./gh，跳过测试；macOS 重做 adhoc 签名）
+./run.sh all        # 交叉编译 macos/linux/linux-arm/windows → dist/
 go test ./...         # 全部测试（无需网络与 API key，agent 回环用 httptest）
 go test -race ./agent ./tools ./term ./js ./llm ./server
 ```
