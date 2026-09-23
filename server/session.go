@@ -35,6 +35,7 @@ type sessionMeta struct {
 	Archived      bool      `json:"archived,omitempty"`
 	Workspace     string    `json:"workspace"`
 	SystemPrompt  string    `json:"system_prompt,omitempty"`
+	DefaultSkill  string    `json:"default_skill,omitempty"`
 	Policy        string    `json:"policy,omitempty"`
 	AutoApprove   bool      `json:"auto_approve,omitempty"`
 	MaxSteps      int       `json:"max_steps,omitempty"`
@@ -173,6 +174,7 @@ func (s *Server) newSession(cfg *grfSessionConfig) (*session, error) {
 	}
 	if cfg != nil {
 		meta.SystemPrompt = cfg.SystemPrompt
+		meta.DefaultSkill = cfg.DefaultSkill
 		meta.Policy = cfg.Policy
 		meta.MaxSteps = cfg.MaxSteps
 		meta.DisabledTools = cfg.DisabledTools
@@ -215,6 +217,7 @@ func (s *Server) buildSession(meta *sessionMeta) (*session, error) {
 		Settings:      settings,
 		Host:          host,
 		SystemPrompt:  meta.SystemPrompt,
+		DefaultSkill:  meta.DefaultSkill,
 		MaxSteps:      meta.MaxSteps,
 		DisabledTools: meta.DisabledTools,
 		StoreRoot:     s.convDir(meta.ID),

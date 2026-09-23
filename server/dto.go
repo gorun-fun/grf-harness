@@ -96,6 +96,11 @@ type grfSessionConfig struct {
 	Policy        string   `json:"policy,omitempty"`        // write-workspace|read-workspace 组合 | off（默认）
 	AutoApprove   *bool    `json:"auto_approve,omitempty"`
 	SystemPrompt  string   `json:"system_prompt,omitempty"`
+	// DefaultSkill 默认技能名（技能目录中存在该名字时，其 SKILL.md 全文
+	// 注入系统提示词，无需模型调 skill 工具）；空 = 不注入任何默认技能
+	// （grf-usage 终端用法技能不服务集成方）。集成方用它指定自己的默认
+	// 技能（如 grf-play 的 grf-start）。
+	DefaultSkill  string   `json:"default_skill,omitempty"`
 	MaxSteps      int      `json:"max_steps,omitempty"`
 	DisabledTools []string `json:"disabled_tools,omitempty"`
 	// Workspace 指定会话工作区（GUI 等宿主把会话绑到某个项目目录）。
