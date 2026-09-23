@@ -109,9 +109,11 @@ func (m *JobManager) lookup(id string) *job {
 }
 
 // Output 读取作业：流式作业返回自上次读取以来的新输出；final 作业在
-// 结束后返回最终结果。wait 为 true 时最多等待 timeout 毫秒直到终态。
-// 返回 (文本, status, error)。文本末尾附 [status: ...]。
-func (m *JobManager) Output(id string, wait bool, timeout time.Duration) (string, error) {
+// 结束后返回最终结果。wait 为 true 时最多等待 timeout 毫秒直到终态；
+// ctx 取消时立即返回 ctx.Err() —— 回合取消必须能打断阻塞中的
+// job_output 等待，否则 cancel 端点等不到终态、只能谎报已取消，
+// 会话进入"僵尸运行"态（running 恒真），后续请求全部 409。
+func (m *JobManager) Output(ctx context.Context, id string, wait bool, timeout time.Duration) (string, error) {
 	j := m.lookup(id)
 	if j == nil {
 		return "", fmt.Errorf("unknown job %q; use job_list to see your jobs", id)
@@ -120,18 +122,33 @@ func (m *JobManager) Output(id string, wait bool, timeout time.Duration) (string
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if wait {
-		for j.status == JobRunning {
+		// cond 无法直接感知 ctx 取消/超时，统一由后台 goroutine 广播唤醒；
+		// stop 关闭（本函数返回）后唤醒器退出，不泄漏。
+		stop := make(chan struct{})
+		defer close(stop)
+		go func() {
+			var timer <-chan time.Time
 			if timeout > 0 {
-				// 带超时的等待：cond 无法直接超时，用后台唤醒
-				go func() {
-					time.Sleep(time.Until(deadline))
-					j.cond.Broadcast()
-				}()
+				timer = time.After(time.Until(deadline))
 			}
-			j.cond.Wait()
-			if j.status == JobRunning && timeout > 0 && time.Now().After(deadline) {
+			select {
+			case <-ctx.Done():
+			case <-timer:
+			case <-stop:
+				return
+			}
+			j.mu.Lock()
+			j.cond.Broadcast()
+			j.mu.Unlock()
+		}()
+		for j.status == JobRunning {
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
+			if timeout > 0 && time.Now().After(deadline) {
 				break
 			}
+			j.cond.Wait()
 		}
 	}
 	var out string
@@ -257,7 +274,7 @@ func RegisterJobTools(r *Registry, m *JobManager) {
 		if timeout > 10*time.Minute {
 			timeout = 10 * time.Minute
 		}
-		out, err := m.Output(a.JobID, a.Wait, timeout)
+		out, err := m.Output(ctx, a.JobID, a.Wait, timeout)
 		if err != nil {
 			return Result{}, err
 		}

@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"git.gorun.fun/share/grf-harness/llm"
 )
@@ -136,7 +137,7 @@ func TestJobManager(t *testing.T) {
 		emit("part2\n")
 		return nil
 	})
-	out, err := m.Output(id, true, 2e9)
+	out, err := m.Output(context.Background(), id, true, 2e9)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,13 +145,47 @@ func TestJobManager(t *testing.T) {
 		t.Fatalf("output: %s", out)
 	}
 	// 第二次读：增量（无新内容）
-	out2, _ := m.Output(id, false, 0)
+	out2, _ := m.Output(context.Background(), id, false, 0)
 	if strings.Contains(out2, "part1") || !strings.Contains(out2, "[status: done]") {
 		t.Fatalf("second read should be empty delta: %q", out2)
 	}
 	if m.ActiveCount() != 0 {
 		t.Fatal("job should be done")
 	}
+}
+
+// TestJobOutputCtxCancel 回合取消必须能打断阻塞中的 job_output 等待：
+// 旧实现无视 ctx，cancel 端点等不到终态只能谎报已取消，会话进入
+// 僵尸运行态（running 恒真），后续请求全部 409。
+func TestJobOutputCtxCancel(t *testing.T) {
+	m := NewJobManager()
+	started := make(chan struct{})
+	id := m.StartStream("stream", "hang", func(ctx context.Context, emit func(string)) error {
+		close(started)
+		<-ctx.Done() // 模拟长作业：直到被杀才结束
+		return ctx.Err()
+	})
+	<-started
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+	done := make(chan error, 1)
+	go func() {
+		_, err := m.Output(ctx, id, true, time.Minute)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("cancelled ctx should abort the wait with an error")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Output wait ignored ctx cancellation (zombie turn)")
+	}
+	// 收尾：杀掉作业，避免泄漏 goroutine
+	_ = m.Kill(id, "test")
 }
 
 func TestWebSearchParse(t *testing.T) {
