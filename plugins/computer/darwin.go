@@ -161,25 +161,18 @@ func (d darwinPlatform) Type(ctx context.Context, text string) error {
 	if err != nil {
 		return err
 	}
+	// ClipboardSet 自带落板确认（轮询 pbpaste 与目标一致），返回即可粘贴
 	if err := d.ClipboardSet(ctx, text); err != nil {
 		return err
-	}
-	// 轮询确认剪贴板已更新（pbcopy 落板是异步的，固定盲等在慢机上会粘到旧内容）
-	for i := 0; i < 20; i++ {
-		cur, err := pbpasteRaw(ctx)
-		if err == nil && cur == text {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
 	}
 	if err := d.Key(ctx, "cmd+v"); err != nil {
 		_ = d.ClipboardSet(ctx, old)
 		return err
 	}
 	// 恢复剪贴板前多等一会：焦点应用处理 cmd+v 有快有慢（浏览器/Electron
-	// 常超 100ms），过早恢复会让目标粘到旧内容——那正是"输入不起作用"的
+	// 常超 300ms），过早恢复会让目标粘到旧内容——那正是"输入不起作用"的
 	// 常见表现
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
 	return d.ClipboardSet(ctx, old)
 }
 
@@ -317,7 +310,20 @@ func (d darwinPlatform) ClipboardSet(ctx context.Context, text string) error {
 	if err := cmd.Run(); err != nil {
 		return d.wrap(err)
 	}
-	return nil
+	// pbcopy 落板是异步的：立即粘贴/读取可能仍拿到旧内容（"写入不生效"
+	// 的表现）。轮询确认剪贴板真的变成目标文本，超时才报错——失败给明确
+	// 错误而非静默
+	for i := 0; i < 20; i++ {
+		if cur, err := pbpasteRaw(ctx); err == nil && cur == text {
+			return nil
+		}
+		select {
+		case <-time.After(50 * time.Millisecond):
+		case <-cctx.Done():
+			return cctx.Err()
+		}
+	}
+	return fmt.Errorf("剪贴板写入未生效（pbcopy 落板超时；若 gh 跑在无 GUI 会话的守护进程里，pbcopy 无法访问粘贴板服务）")
 }
 
 // pbpasteRaw 读取剪贴板原文（不 TrimSpace）：恢复剪贴板时必须逐字节原样

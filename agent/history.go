@@ -106,6 +106,53 @@ func sanitizeSnapshot(h []llm.Message) []llm.Message {
 	return out
 }
 
+// canonicalizeToolResults 请求前把 tool 消息归位到发起它的 assistant
+// (tool_calls) 紧后，并为缺闭合的调用补占位 tool 消息（只改请求快照，
+// 不动存储历史）。严格校验的供应商（GLM 等）逐条检查 assistant.tool_calls
+// 的紧后消息必须闭合全部 tool_call_id，两类历史损伤会触发其 400：
+//  1. 旧版带图工具结果只落 "[tool result: …]" user 伪消息，tool_call 从未
+//     被 tool 消息闭合（图像伪消息保留原位，模型仍能看到图）；
+//  2. 暂停恢复等路径把闭合 tool 消息追加到队尾，与发起的 assistant 之间
+//     隔了 user 消息（挪回紧后位置）。
+// 归位时丢弃与发起 assistant 对不上的游离 tool 消息（异常历史残留，
+// 留在原位同样会被供应商整单拒绝）。
+func canonicalizeToolResults(h []llm.Message) []llm.Message {
+	out := make([]llm.Message, 0, len(h))
+	for i := 0; i < len(h); i++ {
+		m := h[i]
+		out = append(out, m)
+		if m.Role != "assistant" || len(m.ToolCalls) == 0 {
+			continue
+		}
+		// 扫到下一条 assistant 为止：该范围内的 tool 消息按 id 收拢
+		// （同 id 重复闭合取首条），其余消息保持原序跟在闭合之后。
+		results := map[string]llm.Message{}
+		var rest []llm.Message
+		j := i + 1
+		for ; j < len(h) && h[j].Role != "assistant"; j++ {
+			if h[j].Role == "tool" {
+				if _, dup := results[h[j].ToolCallID]; !dup {
+					results[h[j].ToolCallID] = h[j]
+				}
+				continue
+			}
+			rest = append(rest, h[j])
+		}
+		for _, c := range m.ToolCalls {
+			if r, ok := results[c.ID]; ok {
+				out = append(out, r)
+			} else {
+				out = append(out, llm.Message{
+					Role: "tool", Content: "(tool result omitted)", ToolCallID: c.ID, Name: c.Name(),
+				})
+			}
+		}
+		out = append(out, rest...)
+		i = j - 1
+	}
+	return out
+}
+
 // rollbackOrphanUser 本轮失败（LLM 出错/被取消）时移除尾部未被任何
 // assistant 回复闭合的 user 输入，避免用户重发后出现连续两条重复 user
 // 消息。只在本轮输入仍是最后一条消息时回滚（工具循环已推进则不动）。
@@ -123,8 +170,12 @@ func (a *Agent) rollbackOrphanUser(userMsg llm.Message) {
 	}
 }
 
-// appendToolResult 把工具结果并入历史：纯文本 → tool 消息；带图像 →
-// user 消息（多模态 parts，OpenAI tool 消息不支持图像内容）。
+// appendToolResult 把工具结果并入历史。纯文本 → tool 消息；带图像 →
+// 两条消息：tool 文本消息先闭合 tool_call_id，再追加 user 多模态消息回传
+// 图像。图像只能走 user 消息（OpenAI tool 消息不支持图像内容），但严格
+// 校验的供应商（GLM 等）要求 assistant.tool_calls 紧后即有闭合每个
+// tool_call_id 的 tool 消息——只落 user 伪消息会让会话此后每次请求都被
+// 400 拒绝（"insufficient tool messages following tool_calls message"）。
 func (a *Agent) appendToolResult(call llm.ToolCall, res tools.Result) {
 	if len(res.Images) == 0 {
 		a.mu.Lock()
@@ -134,12 +185,18 @@ func (a *Agent) appendToolResult(call llm.ToolCall, res tools.Result) {
 		a.mu.Unlock()
 		return
 	}
+	text := res.Text
+	if text == "" {
+		text = "(image-only result; the image is attached in the next message)"
+	}
 	parts := []llm.Part{llm.TextPart(fmt.Sprintf("[tool result: %s] %s", call.Name(), res.Text))}
 	for _, img := range res.Images {
 		parts = append(parts, llm.ImagePart(img.Mime, img.B64))
 	}
 	a.mu.Lock()
-	a.history = append(a.history, llm.Message{Role: "user", ContentParts: parts})
+	a.history = append(a.history,
+		llm.Message{Role: "tool", Content: text, ToolCallID: call.ID, Name: call.Name()},
+		llm.Message{Role: "user", ContentParts: parts})
 	a.mu.Unlock()
 }
 

@@ -77,7 +77,7 @@ func (a *Agent) runTurn(ctx context.Context, userMsg *llm.Message, human bool, r
 		}
 
 		a.mu.Lock()
-		snapshot := sanitizeSnapshot(a.history)
+		snapshot := canonicalizeToolResults(sanitizeSnapshot(a.history))
 		a.mu.Unlock()
 		client := a.getClient() // 副本：流式调用不持锁，运行中切换模型不阻塞
 		reply, err := client.ChatStream(turnCtx, snapshot, a.reg.Defs(), hooks)
