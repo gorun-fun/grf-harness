@@ -122,10 +122,6 @@ func (l linuxPlatform) moveMouse(ctx context.Context, x, y int) error {
 	return err
 }
 
-func (l linuxPlatform) Move(ctx context.Context, x, y int) error {
-	return l.moveMouse(ctx, x, y)
-}
-
 func (l linuxPlatform) Click(ctx context.Context, x, y int, button string, clicks int) error {
 	btn, ok := map[string]int{"left": 1, "": 1, "middle": 2, "right": 3}[button]
 	if !ok {

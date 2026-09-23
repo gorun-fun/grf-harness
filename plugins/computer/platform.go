@@ -8,7 +8,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -29,14 +31,37 @@ type Display struct {
 	Scale int
 }
 
+// ElemActionResult 元素动作结果：HasPos=true 表示平台层无法直接执行
+// （如元素无 AXPress 动作、右键无 AX 等价），返回元素中心坐标交由
+// 调用方走 CGEvent/XTest/SendInput 坐标路径兜底。
+type ElemActionResult struct {
+	Text  string // 执行结果描述
+	X, Y  int
+	HasPos bool
+}
+
 // platform 平台操作接口（各 GOOS 文件实现）。坐标均为全局虚拟桌面坐标；
 // display 参数为 computer_list_displays 的显示器编号，nil 表示缺省行为
 // （截图/尺寸=主屏）。
+//
+// 元素系（AX 可达性树）：DumpElements 按窗口→子元素 DFS 先序输出扁平节点
+// （Path 为 1 起子序号路径）；ElementAction 按同一遍历序重走到 path 处
+// 元素，先比对 wantRole/wantTitle（与快照签名不符返回带 errChanged 语义
+// 的错误，拒绝执行），action 取 press/set_value/locate。
 type platform interface {
 	Displays(ctx context.Context) ([]Display, error)
 	Screenshot(ctx context.Context, display *int) ([]byte, error) // PNG 字节
+	// ScreenshotWindow 截单个窗口（winID 为 WinInfo.ID）；平台不支持时
+	// 返回 errUnsupported。
+	ScreenshotWindow(ctx context.Context, winID int64) ([]byte, error)
 	ScreenSize(ctx context.Context, display *int) (w, h int, err error)
-	Move(ctx context.Context, x, y int) error
+	Apps(ctx context.Context) ([]AppInfo, error)
+	// AppWindows 枚举进程的窗口（含平台窗口 ID，供窗口截图）。
+	AppWindows(ctx context.Context, pid int) ([]WinInfo, error)
+	DumpElements(ctx context.Context, pid int, maxDepth int) ([]*Node, error)
+	ElementAction(ctx context.Context, pid int, path, wantRole, wantTitle, action, value string) (ElemActionResult, error)
+	// ActivateApp 按名称启动/聚焦应用（已运行则置前，未运行则拉起）。
+	ActivateApp(ctx context.Context, name string) error
 	Click(ctx context.Context, x, y int, button string, clicks int) error
 	Drag(ctx context.Context, fromX, fromY, toX, toY int) error
 	// Scroll 滚动：hasPos 表示 x/y 是调用方显式给的坐标（含合法的 0），
@@ -126,7 +151,12 @@ func pngSize(data []byte) (int, int, bool) {
 
 // run 执行系统命令（CombinedOutput，超时收敛为 error）。
 func run(ctx context.Context, name string, args ...string) (string, error) {
-	cctx, cancel := context.WithTimeout(ctx, opTimeout)
+	return runT(ctx, opTimeout, name, args...)
+}
+
+// runT 同 run，超时可调（元素树遍历等慢操作用更长超时）。
+func runT(ctx context.Context, timeout time.Duration, name string, args ...string) (string, error) {
+	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(cctx, name, args...)
 	var buf bytes.Buffer
@@ -140,10 +170,28 @@ func run(ctx context.Context, name string, args ...string) (string, error) {
 	return out, nil
 }
 
+// runScript 执行脚本文件（argv 传参，避免把任意文本拼进脚本造成注入）。
+// script 写入临时文件后以 `解释器 文件 参数...` 运行。
+func runScript(ctx context.Context, timeout time.Duration, interp []string, suffix, script string, args ...string) (string, error) {
+	tmp := filepath.Join(os.TempDir(), fmt.Sprintf("grf-computer-%d%s", time.Now().UnixNano(), suffix))
+	if err := os.WriteFile(tmp, []byte(script), 0600); err != nil {
+		return "", err
+	}
+	defer os.Remove(tmp)
+	return runT(ctx, timeout, interp[0], append(append([]string{}, interp[1:]...), append([]string{tmp}, args...)...)...)
+}
+
 // screenScaleHint 各平台给模型的可附加提示（如 macOS 需辅助功能授权）。
 func permissionHint(err error, hint string) error {
 	return fmt.Errorf("%w\n提示: %s", err, hint)
 }
+
+// tempFile/removeFile/readFile 平台实现共用的临时文件小助手。
+func tempFile(ext string) string {
+	return filepath.Join(os.TempDir(), fmt.Sprintf("grf-computer-%d.%s", time.Now().UnixNano(), ext))
+}
+func removeFile(path string) { os.Remove(path) }
+func readFile(path string) ([]byte, error) { return os.ReadFile(path) }
 
 // comboMods 组合键修饰位（平台各自渲染成脚本片段）。
 type comboMods struct {

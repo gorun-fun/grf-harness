@@ -8,7 +8,6 @@ import (
 
 type unsupportedPlatform struct{}
 
-func (unsupportedPlatform) Move(context.Context, int, int) error { return errUnsupported }
 func (unsupportedPlatform) Click(context.Context, int, int, string, int) error {
 	return errUnsupported
 }
@@ -24,9 +23,25 @@ func (unsupportedPlatform) ScreenSize(context.Context, *int) (int, int, error) {
 func (unsupportedPlatform) Screenshot(context.Context, *int) ([]byte, error) {
 	return nil, errUnsupported
 }
+func (unsupportedPlatform) ScreenshotWindow(context.Context, int64) ([]byte, error) {
+	return nil, errUnsupported
+}
 func (unsupportedPlatform) Displays(context.Context) ([]Display, error) {
 	return nil, errUnsupported
 }
+func (unsupportedPlatform) Apps(context.Context) ([]AppInfo, error) {
+	return nil, errUnsupported
+}
+func (unsupportedPlatform) AppWindows(context.Context, int) ([]WinInfo, error) {
+	return nil, errUnsupported
+}
+func (unsupportedPlatform) DumpElements(context.Context, int, int) ([]*Node, error) {
+	return nil, errUnsupported
+}
+func (unsupportedPlatform) ElementAction(context.Context, int, string, string, string, string, string) (ElemActionResult, error) {
+	return ElemActionResult{}, errUnsupported
+}
+func (unsupportedPlatform) ActivateApp(context.Context, string) error { return errUnsupported }
 func (unsupportedPlatform) ClipboardGet(context.Context) (string, error) {
 	return "", errUnsupported
 }

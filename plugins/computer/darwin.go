@@ -65,11 +65,6 @@ func (d darwinPlatform) wrap(err error) error {
 	return err
 }
 
-func (d darwinPlatform) Move(ctx context.Context, x, y int) error {
-	_, err := jxa(ctx, fmt.Sprintf(jxaHeader+"postMouse(5, %d, %d, 0, 1);", x, y))
-	return d.wrap(err)
-}
-
 func (d darwinPlatform) Click(ctx context.Context, x, y int, button string, clicks int) error {
 	down, up, btn, ok := mouseButton(button)
 	if !ok {
@@ -269,9 +264,6 @@ func (d darwinPlatform) Displays(ctx context.Context) ([]Display, error) {
 }
 
 func (d darwinPlatform) Screenshot(ctx context.Context, display *int) ([]byte, error) {
-	tmp := filepath.Join(os.TempDir(), fmt.Sprintf("grf-computer-%d.png", time.Now().UnixNano()))
-	defer os.Remove(tmp)
-	args := []string{"-x", "-t", "png"}
 	// 单屏截图：screencapture 不带 -R 时默认只截主屏，显式给该屏的
 	// bounds，保证截到的内容与该屏的全局坐标系一致（省略编号=主屏）
 	ds, err := d.Displays(ctx)
@@ -282,16 +274,19 @@ func (d darwinPlatform) Screenshot(ctx context.Context, display *int) ([]byte, e
 	if err != nil {
 		return nil, err
 	}
-	args = append(args, fmt.Sprintf("-R%d,%d,%d,%d", disp.X, disp.Y, disp.W, disp.H))
-	args = append(args, tmp)
+	return screenshotToFile(ctx, []string{"-x", "-t", "png",
+		fmt.Sprintf("-R%d,%d,%d,%d", disp.X, disp.Y, disp.W, disp.H)})
+}
+
+// screenshotToFile 以给定 screencapture 参数截图到临时文件并读回。
+func screenshotToFile(ctx context.Context, args []string) ([]byte, error) {
+	tmp := filepath.Join(os.TempDir(), fmt.Sprintf("grf-computer-%d.png", time.Now().UnixNano()))
+	defer os.Remove(tmp)
+	args = append(append([]string{}, args...), tmp)
 	if _, err := run(ctx, "screencapture", args...); err != nil {
-		return nil, d.wrap(err)
-	}
-	data, err := os.ReadFile(tmp)
-	if err != nil {
 		return nil, err
 	}
-	return data, nil
+	return os.ReadFile(tmp)
 }
 
 func (d darwinPlatform) ClipboardGet(ctx context.Context) (string, error) {

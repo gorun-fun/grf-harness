@@ -88,28 +88,36 @@ chromedp（纯 Go CDP 客户端）实现，工具面对齐微软 playwright-mcp 
 原生对话框（alert/confirm/prompt）自动 dismiss 并记入控制台日志，
 避免挂起后续指令；下载自动落到插件工作目录 `downloads/`。
 
-### grf-computer（电脑操作，11 个工具）
+### grf-computer（电脑操作，14 个工具，元素优先 + 坐标兜底）
 
-经操作系统自带命令实现（插件本身零 cgo、零第三方依赖）。坐标一律为全局
-虚拟桌面坐标（原点=主屏左上，多屏时副屏坐标可为负）：
+设计参考 zcode-cua：**可达性（Accessibility）API 为主要路径**——模型先读
+界面元素树（每个元素有索引/角色/名称/值/坐标），再用 `state_id+index`
+精确操作元素（不依赖坐标换算、输入法与窗口前台）；截图坐标点击作为兜底
+路径；元素签名不符时动作被拒绝并提示重新观察，形成"观察→动作→再观察"
+闭环。插件本身零 cgo、零第三方依赖，坐标（坐标模式）一律为全局虚拟桌面
+坐标（原点=主屏左上，多屏时副屏坐标可为负）：
 
-- `computer_screenshot`（PNG 多模态回传，可选 `display` 编号=只截该屏，
-  省略=整桌面）、`computer_screen_size`（可选 `display`，省略=主屏）
-- `computer_list_displays`（多屏枚举：编号/全局边界/主屏标记/Retina
-  缩放；macOS NSScreen、Windows AllScreens、Linux xrandr，无 xrandr
-  退回单屏）
-- `computer_click`（按键/连击）、`computer_move`、`computer_drag`、
-  `computer_scroll`
-- `computer_type`、`computer_key`、`computer_clipboard`（get/set）、
-  `computer_wait`
+- 观察：`computer_get_app_state`（核心：元素树 + `state_id`，省略 app=前台
+  应用）、`computer_list_apps`、`computer_screenshot`（整屏 `display` 或
+  窗口 `window_id`，PNG 多模态回传）、`computer_screen_size`、
+  `computer_list_displays`
+- 动作（双模式：`state_id+index` 元素 / `x,y` 坐标）：`computer_click`
+  （元素经 AXPress 直点，无 press 动作或右键/双击自动回退元素中心坐标）、
+  `computer_type`（元素模式直设值；坐标模式向焦点输入，中文自动经剪贴板
+  粘贴）、`computer_set_value`（文本框/勾选框/滑杆直设）、`computer_scroll`
+- 其他：`computer_key`、`computer_drag`、`computer_activate_app`
+  （启动/聚焦应用）、`computer_clipboard`（get/set）、`computer_wait`
 
-平台要求：
+平台实现：
 
-| 平台 | 依赖 | 授权 |
-|------|------|------|
-| macOS | 内置 osascript / screencapture / pbcopy | 终端 App 需"辅助功能"授权（截屏另需"屏幕录制"） |
-| Linux | xdotool；截屏 scrot / gnome-screenshot / import / grim 任一；剪贴板 xclip/xsel | X11（Wayland 需经 XWayland） |
-| Windows | 内置 PowerShell | 无 |
+| 平台 | 元素树/动作 | 依赖 | 授权 |
+|------|-------------|------|------|
+| macOS | System Events（AppleScript）：`click UI element` 本身即 AXPress 优先语义；窗口截图取窗口边界区域截屏 | 内置 osascript / screencapture / pbcopy | 终端 App 需"辅助功能"授权（截屏另需"屏幕录制"） |
+| Windows | UI Automation（PowerShell 调 .NET 自带，Invoke/Toggle/Value 等模式） | 内置 PowerShell | 无 |
+| Linux | AT-SPI2（尽力路径，经 python3-gobject；缺失时明确提示改用截图+坐标模式） | xdotool；wmctrl（应用/窗口枚举）；截屏 scrot / gnome-screenshot / import / grim 任一；剪贴板 xclip/xsel | X11（Wayland 需经 XWayland） |
+
+本机手动冒烟：`cd plugins && go test ./computer/ -tags smoke -v`（真实
+调用 osascript 验证元素树/设值/定位/窗口截图全链路）。
 
 ## 写一个新插件
 

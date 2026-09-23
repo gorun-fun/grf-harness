@@ -16,11 +16,16 @@ func TestComputerToolsRegistered(t *testing.T) {
 	registerComputerTools(s, newPlatform())
 	names := s.Names()
 	want := map[string]bool{
-		"computer_screenshot": true, "computer_screen_size": true, "computer_click": true,
-		"computer_list_displays": true,
-		"computer_move": true, "computer_drag": true, "computer_scroll": true,
-		"computer_type": true, "computer_key": true, "computer_clipboard": true,
-		"computer_wait": true,
+		// 观察类
+		"computer_list_displays": true, "computer_list_apps": true,
+		"computer_get_app_state": true, "computer_screenshot": true,
+		"computer_screen_size":   true,
+		// 动作类（元素/坐标双模式）
+		"computer_click": true, "computer_type": true, "computer_set_value": true,
+		"computer_key": true, "computer_scroll": true, "computer_drag": true,
+		"computer_activate_app": true,
+		// 辅助
+		"computer_clipboard": true, "computer_wait": true,
 	}
 	if len(names) != len(want) {
 		t.Fatalf("工具数 %d，want %d: %v", len(names), len(want), names)

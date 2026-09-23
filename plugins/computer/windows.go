@@ -35,11 +35,6 @@ func mouseEventPS(flag string) string {
 	return fmt.Sprintf("[GrfU]::mouse_event(%s,0,0,0,[UIntPtr]::Zero);", flag)
 }
 
-func (w windowsPlatform) Move(ctx context.Context, x, y int) error {
-	_, err := ps(ctx, fmt.Sprintf(user32PS+"[GrfU]::SetCursorPos(%d,%d);", x, y))
-	return err
-}
-
 func (w windowsPlatform) Click(ctx context.Context, x, y int, button string, clicks int) error {
 	btn, ok := map[string]struct{ d, u string }{
 		"left": {"2", "4"}, "": {"2", "4"}, "right": {"8", "16"}, "middle": {"32", "64"},
