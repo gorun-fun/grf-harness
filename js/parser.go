@@ -228,27 +228,9 @@ func (p *parser) statement() (Node, error) {
 		switch t.Val {
 		case "const", "let", "var":
 			p.pos++
-			d := &VarDecl{Kind: t.Val}
-			for {
-				name := p.next()
-				if name.Type != TokIdent {
-					return nil, p.errf("expected identifier in declaration, got %q", name.Val)
-				}
-				var val Node
-				if p.isPunct("=") {
-					p.pos++
-					v, err := p.expr(0)
-					if err != nil {
-						return nil, err
-					}
-					val = v
-				}
-				d.Inits = append(d.Inits, InitDecl{Name: name.Val, Val: val})
-				if p.isPunct(",") {
-					p.pos++
-					continue
-				}
-				break
+			d, err := p.varDeclInit(t.Val, "expected identifier in declaration")
+			if err != nil {
+				return nil, err
 			}
 			p.consumeSemi()
 			return d, nil
@@ -368,6 +350,36 @@ func (p *parser) statement() (Node, error) {
 	return &ExprStmt{X: x}, nil
 }
 
+// varDeclInit 解析声明初始化列表："name [= expr] (, name [= expr])*"。
+// const/let/var 语句与 for 初始化共用的形态；关键字与收尾分号由调用方
+// 处理。identErr 为标识符缺失时的错误文案前缀（两处调用点历史文案
+// 不同，保持原样）。
+func (p *parser) varDeclInit(kind, identErr string) (*VarDecl, error) {
+	d := &VarDecl{Kind: kind}
+	for {
+		name := p.next()
+		if name.Type != TokIdent {
+			return nil, p.errf("%s, got %q", identErr, name.Val)
+		}
+		var val Node
+		if p.isPunct("=") {
+			p.pos++
+			v, err := p.expr(0)
+			if err != nil {
+				return nil, err
+			}
+			val = v
+		}
+		d.Inits = append(d.Inits, InitDecl{Name: name.Val, Val: val})
+		if p.isPunct(",") {
+			p.pos++
+			continue
+		}
+		break
+	}
+	return d, nil
+}
+
 func (p *parser) tryStmt() (Node, error) {
 	p.pos++ // try
 	body, err := p.block()
@@ -439,27 +451,10 @@ func (p *parser) forStmt() (Node, error) {
 		// 仅支持声明或赋值表达式
 		if p.isKw("const") || p.isKw("let") || p.isKw("var") {
 			p.pos++
-			d := &VarDecl{Kind: "let"}
-			for {
-				name := p.next()
-				if name.Type != TokIdent {
-					return nil, p.errf("expected identifier, got %q", name.Val)
-				}
-				var val Node
-				if p.isPunct("=") {
-					p.pos++
-					v, err := p.expr(0)
-					if err != nil {
-						return nil, err
-					}
-					val = v
-				}
-				d.Inits = append(d.Inits, InitDecl{Name: name.Val, Val: val})
-				if p.isPunct(",") {
-					p.pos++
-					continue
-				}
-				break
+			// 声明 kind 历史上固定记 "let"（求值不区分 kind），保持原样
+			d, err := p.varDeclInit("let", "expected identifier")
+			if err != nil {
+				return nil, err
 			}
 			init = d
 		} else {
@@ -658,6 +653,17 @@ func (p *parser) tryArrow(save int) (Node, bool, error) {
 	return fn, true, nil
 }
 
+// tryArrowOr 箭头探测统一入口：done 为 true 表示已有结论（解析成功给出
+// 节点，或探测失败给出 err），调用方直接返回 n、err；done 为 false 表示
+// 不是箭头函数（位置已复原到 save），回退普通解析。
+func (p *parser) tryArrowOr(save int) (n Node, done bool, err error) {
+	n, ok, err := p.tryArrow(save)
+	if ok || err != nil {
+		return n, true, err
+	}
+	return nil, false, nil
+}
+
 // isArrowAt 判断 pos 处是否为 =>。
 func (p *parser) isArrowAt(pos int) bool {
 	if pos < len(p.toks) {
@@ -665,6 +671,16 @@ func (p *parser) isArrowAt(pos int) bool {
 		return t.Type == TokPunct && t.Val == "=>"
 	}
 	return false
+}
+
+// incDec 把前缀/后缀 ++/-- 归一为 "+= ±1" 赋值节点（两处语法糖共用，
+// 求值语义等价）。
+func incDec(op, name string) Node {
+	delta := 1.0
+	if op == "--" {
+		delta = -1
+	}
+	return &AssignExpr{Op: "+=", Name: name, X: &NumLit{V: delta}}
 }
 
 func (p *parser) unary() (Node, error) {
@@ -685,11 +701,7 @@ func (p *parser) unary() (Node, error) {
 				return nil, p.errf("++/-- expects an identifier")
 			}
 			name := p.next().Val
-			delta := 1.0
-			if t.Val == "--" {
-				delta = -1
-			}
-			return &AssignExpr{Op: "+=", Name: name, X: &NumLit{V: delta}}, nil
+			return incDec(t.Val, name), nil
 		}
 	}
 	if t.Type == TokKeyword {
@@ -767,11 +779,7 @@ func (p *parser) postfix() (Node, error) {
 			if !ok {
 				return nil, p.errf("%s expects an identifier", op)
 			}
-			delta := 1.0
-			if op == "--" {
-				delta = -1
-			}
-			x = &AssignExpr{Op: "+=", Name: id.Name, X: &NumLit{V: delta}}
+			x = incDec(op, id.Name)
 		default:
 			return x, nil
 		}
@@ -819,11 +827,8 @@ func (p *parser) primary() (Node, error) {
 	case TokIdent:
 		// 可能是箭头函数 ident =>
 		if p.isArrowAt(p.pos + 1) {
-			if n, ok, err := p.tryArrow(p.pos); ok || err != nil {
-				if ok {
-					return n, nil
-				}
-				return nil, err
+			if n, done, err := p.tryArrowOr(p.pos); done {
+				return n, err
 			}
 		}
 		p.pos++
@@ -852,11 +857,8 @@ func (p *parser) primary() (Node, error) {
 			return &ArrowFn{Params: params, Body: body}, nil
 		case "async":
 			// async 箭头函数尝试
-			if n, ok, err := p.tryArrow(p.pos); ok || err != nil {
-				if ok {
-					return n, nil
-				}
-				return nil, err
+			if n, done, err := p.tryArrowOr(p.pos); done {
+				return n, err
 			}
 			return nil, p.errf("unexpected 'async'")
 		}
@@ -865,7 +867,7 @@ func (p *parser) primary() (Node, error) {
 		switch t.Val {
 		case "(":
 			// 可能是 (params) => 箭头函数
-			if n, ok, err := p.tryArrow(p.pos); ok || err != nil {
+			if n, done, err := p.tryArrowOr(p.pos); done {
 				return n, err
 			}
 			p.pos++

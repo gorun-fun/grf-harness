@@ -121,22 +121,14 @@ func (s *Server) runSlashCommand(ctx context.Context, sess *session, text string
 }
 
 // compactInPlace 就地压缩会话：把当前历史交给模型总结，随后以摘要重建
-// 历史基底（与 /v1/responses/compact 端点同一总结提示词；区别是端点返回
-// 新链输入，这里直接原地替换、链尾不变）。
+// 历史基底（与 /v1/responses/compact 端点共用 buildTranscript 与总结
+// 提示词；区别是端点返回新链输入，这里直接原地替换、链尾不变）。
 func (s *Server) compactInPlace(ctx context.Context, sess *session) (int, error) {
 	model := sess.root.Model()
 	if model == "" {
 		return 0, fmt.Errorf("会话尚无模型（先发一条消息或指定 model）")
 	}
-	var transcript strings.Builder
-	n := 0
-	for _, m := range sess.root.History() {
-		if m.Role == "system" {
-			continue
-		}
-		transcript.WriteString(m.Role + ": " + m.String() + "\n")
-		n++
-	}
+	transcript, n := buildTranscript(sess)
 	if n == 0 {
 		return 0, fmt.Errorf("会话尚无可压缩的历史")
 	}
@@ -145,8 +137,8 @@ func (s *Server) compactInPlace(ctx context.Context, sess *session) (int, error)
 		return 0, fmt.Errorf("构建客户端: %w", err)
 	}
 	summary, err := client.Chat(ctx, []llm.Message{
-		{Role: "system", Content: "You compact conversation transcripts. Produce a faithful, information-dense summary in the original language, preserving: task state, decisions made, file paths, commands run and their outcomes, open questions, and the next step. Output only the summary."},
-		{Role: "user", Content: transcript.String()},
+		{Role: "system", Content: compactSystemPrompt},
+		{Role: "user", Content: transcript},
 	}, nil)
 	if err != nil {
 		return 0, fmt.Errorf("总结模型调用: %w", err)

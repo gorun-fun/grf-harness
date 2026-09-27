@@ -8,7 +8,9 @@
 package server
 
 import (
+	"crypto/subtle"
 	"encoding/json"
+	"io"
 	"net/http"
 	"time"
 )
@@ -19,7 +21,6 @@ const (
 	errNotFound = "not_found"
 	errServer   = "server_error"
 	errModel    = "model_error"
-	errRate     = "too_many_requests"
 )
 
 func statusOf(errType string) int {
@@ -28,11 +29,31 @@ func statusOf(errType string) int {
 		return 400
 	case errNotFound:
 		return 404
-	case errRate:
-		return 429
 	default:
 		return 500
 	}
+}
+
+// 请求体字节上限：主端点（input 可携带多模态 base64 图像）64MB，
+// 配置类小端点（settings/技能/policy）1MB。
+const (
+	bodyLimitMain  = 64 << 20
+	bodyLimitSmall = 1 << 20
+)
+
+// decodeJSON 读取请求体并解析为 JSON：读取失败或解析失败时写好 400 错误
+// 响应并返回 false（调用方直接 return）。limit 为请求体字节上限。
+func decodeJSON(w http.ResponseWriter, r *http.Request, v any, limit int64) bool {
+	body, err := io.ReadAll(io.LimitReader(r.Body, limit))
+	if err != nil {
+		writeError(w, 400, errInvalid, "read body: "+err.Error(), "")
+		return false
+	}
+	if err := json.Unmarshal(body, v); err != nil {
+		writeError(w, 400, errInvalid, "invalid JSON body: "+err.Error(), "")
+		return false
+	}
+	return true
 }
 
 // apiError 带 HTTP 语义的内部错误。
@@ -113,11 +134,15 @@ func (s *Server) ListenAndServe(addr string) error {
 	return srv.ListenAndServe()
 }
 
-// guard 鉴权中间件：校验 Bearer 令牌。
+// guard 鉴权中间件：校验 Bearer 令牌。比较用常数时间（subtle.
+// ConstantTimeCompare），防逐字节短路比较的时序侧信道；长度不等先短路
+// ——ConstantTimeCompare 对不等长输入本就恒返 0，长度本身不是秘密，
+// 先比长度只是省一次内容比较，401 行为不变。
 func (s *Server) guard(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		want := "Bearer " + s.token
 		auth := r.Header.Get("Authorization")
-		if auth != "Bearer "+s.token {
+		if len(auth) != len(want) || subtle.ConstantTimeCompare([]byte(auth), []byte(want)) != 1 {
 			writeError(w, 401, errInvalid, "missing or invalid bearer token", "")
 			return
 		}

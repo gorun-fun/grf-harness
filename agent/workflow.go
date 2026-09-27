@@ -1,13 +1,12 @@
 // workflow.go workflow 工具：以文档规定的 JavaScript 脚本编排子代理。
 // 脚本体提供 agent/pipeline/parallel/phase/log 钩子与 args 全局，顶层
-// await 可用，return 值 JSON 序列化后作为工具结果。schema 校验限定
-// type/properties/required/additionalProperties/items/enum/const/oneOf
-// 键集；钩子误用抛错立即终止整个脚本。
+// await 可用，return 值 JSON 序列化后作为工具结果。agent() 的 opts.schema
+// 校验在 schema.go，候选 JSON 提取在 jsonx.go；钩子误用抛错立即终止
+// 整个脚本。
 package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -84,7 +83,7 @@ func RegisterWorkflow(r *tools.Registry, a *Agent, m *Manager) {
 		}
 		out, err := ip.RunEval(p.Script)
 		if err != nil {
-			return tools.Result{}, fmt.Errorf("workflow script failed: %v", err)
+			return tools.Result{}, fmt.Errorf("workflow script failed: %w", err)
 		}
 		if out == nil {
 			return tools.TextResult("null"), nil
@@ -230,88 +229,6 @@ func panicWorkflow(err error) {
 	panic(&js.RuntimeError{Msg: err.Error()})
 }
 
-// extractJSONForSchema 从子代理最终消息提取并校验 JSON 对象。
-func extractJSONForSchema(out string, schema map[string]any) (map[string]any, bool) {
-	candidates := []string{}
-	trimmed := strings.TrimSpace(out)
-	// 1) 整体即 JSON
-	if strings.HasPrefix(trimmed, "{") {
-		candidates = append(candidates, trimmed)
-	}
-	// 2) ```json ... ``` 围栏
-	for _, m := range jsonFenceRe(out) {
-		candidates = append(candidates, m)
-	}
-	// 3) 首个平衡 {...} 块
-	if b := balancedJSON(trimmed); b != "" {
-		candidates = append(candidates, b)
-	}
-	for _, c := range candidates {
-		var v any
-		if json.Unmarshal([]byte(c), &v) != nil {
-			continue
-		}
-		if err := ValidateSchema(v, schema); err == nil {
-			obj, ok := v.(map[string]any)
-			if !ok {
-				continue
-			}
-			return obj, true
-		}
-	}
-	return nil, false
-}
-
-func jsonFenceRe(s string) []string {
-	var out []string
-	for _, chunk := range strings.Split(s, "```") {
-		chunk = strings.TrimSpace(chunk)
-		if strings.HasPrefix(chunk, "json") {
-			chunk = strings.TrimSpace(strings.TrimPrefix(chunk, "json"))
-		}
-		if strings.HasPrefix(chunk, "{") && strings.HasSuffix(chunk, "}") {
-			out = append(out, chunk)
-		}
-	}
-	return out
-}
-
-// balancedJSON 找到字符串中第一个配平的 {...} 段。
-func balancedJSON(s string) string {
-	start := strings.IndexByte(s, '{')
-	if start < 0 {
-		return ""
-	}
-	depth := 0
-	inStr := false
-	esc := false
-	for i := start; i < len(s); i++ {
-		c := s[i]
-		if inStr {
-			if esc {
-				esc = false
-			} else if c == '\\' {
-				esc = true
-			} else if c == '"' {
-				inStr = false
-			}
-			continue
-		}
-		switch c {
-		case '"':
-			inStr = true
-		case '{':
-			depth++
-		case '}':
-			depth--
-			if depth == 0 {
-				return s[start : i+1]
-			}
-		}
-	}
-	return ""
-}
-
 // ---- js 宿主钩子 ----
 
 func (w *workflowCtx) hookAgent(ip *js.Interp, args []js.Value) (js.Value, error) {
@@ -358,26 +275,18 @@ func (w *workflowCtx) hookPipeline(ip *js.Interp, args []js.Value) (js.Value, er
 		stages = append(stages, f)
 	}
 	return js.NewFuture(func() (js.Value, error) {
-		results := make([]any, len(items))
-		var wg sync.WaitGroup
-		for idx, it := range items {
-			idx, it := idx, it
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				prev := it
-				for _, st := range stages {
-					v, err := ip.CallValue(st, prev, it, float64(idx))
-					if err != nil {
-						prev = nil // 普通阶段抛错 → 该 item 置 null
-						break
-					}
-					prev = v
+		results := w.runConcurrently(len(items), func(idx int) any {
+			it := items[idx]
+			prev := it
+			for _, st := range stages {
+				v, err := ip.CallValue(st, prev, it, float64(idx))
+				if err != nil {
+					return nil // 普通阶段抛错 → 该 item 置 null
 				}
-				results[idx] = prev
-			}()
-		}
-		wg.Wait()
+				prev = v
+			}
+			return prev
+		})
 		if err := w.takeFail(); err != nil {
 			return nil, err
 		}
@@ -396,22 +305,13 @@ func (w *workflowCtx) hookParallel(ip *js.Interp, args []js.Value) (js.Value, er
 		}
 	}
 	return js.NewFuture(func() (js.Value, error) {
-		results := make([]any, len(thunks))
-		var wg sync.WaitGroup
-		for idx, th := range thunks {
-			idx, th := idx, th
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				v, err := ip.CallValue(th)
-				if err != nil {
-					results[idx] = nil
-					return
-				}
-				results[idx] = v
-			}()
-		}
-		wg.Wait()
+		results := w.runConcurrently(len(thunks), func(idx int) any {
+			v, err := ip.CallValue(thunks[idx])
+			if err != nil {
+				return nil // thunk 抛错 → 该槽位置 null
+			}
+			return v
+		})
 		if err := w.takeFail(); err != nil {
 			return nil, err
 		}
@@ -419,162 +319,28 @@ func (w *workflowCtx) hookParallel(ip *js.Interp, args []js.Value) (js.Value, er
 	}), nil
 }
 
+// runConcurrently hookPipeline/hookParallel 的公共并发骨架：为 n 个工作
+// 项各起一个 goroutine，fn(i) 的返回值按序落入结果数组——失败项由 fn
+// 自己归为 nil（"阶段抛错置 null"语义保持不变），全部落定后返回。
+// 钩子误用（panicWorkflow）不在此层：agent() 的 Future 已把它记入
+// w.failErr，调用方在 Wait 后经 takeFail 终止整个脚本。
+func (w *workflowCtx) runConcurrently(n int, fn func(i int) any) []any {
+	results := make([]any, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[i] = fn(i)
+		}()
+	}
+	wg.Wait()
+	return results
+}
+
 // takeFail 取出钩子误用错误（一旦发生终止脚本）。
 func (w *workflowCtx) takeFail() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.failErr
-}
-
-// ---- schema 校验（仅允许文档规定的 JSON Schema 键集） ----
-
-// ValidateSchema 用受限键集校验值：type/properties/required/
-// additionalProperties/items/enum/const/oneOf。
-func ValidateSchema(v any, schema map[string]any) error {
-	if len(schema) == 0 {
-		return nil
-	}
-	for k := range schema {
-		switch k {
-		case "type", "properties", "required", "additionalProperties", "items", "enum", "const", "oneOf", "description":
-		default:
-			return fmt.Errorf("schema key %q is not allowed (only type/properties/required/additionalProperties/items/enum/const/oneOf)", k)
-		}
-	}
-	if c, ok := schema["const"]; ok {
-		if !jsonEqual(v, c) {
-			return fmt.Errorf("value does not equal const")
-		}
-	}
-	if e, ok := schema["enum"].([]any); ok {
-		found := false
-		for _, item := range e {
-			if jsonEqual(v, item) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return fmt.Errorf("value not in enum")
-		}
-	}
-	if t, ok := schema["type"].(string); ok {
-		if err := checkType(v, t); err != nil {
-			return err
-		}
-	}
-	if oneOf, ok := schema["oneOf"].([]any); ok {
-		matched := 0
-		for _, sub := range oneOf {
-			if sm, ok := sub.(map[string]any); ok {
-				if ValidateSchema(v, sm) == nil {
-					matched++
-				}
-			}
-		}
-		if matched != 1 {
-			return fmt.Errorf("value matches %d oneOf branches (need exactly 1)", matched)
-		}
-	}
-	if props, ok := schema["properties"].(map[string]any); ok {
-		obj, ok := v.(map[string]any)
-		if !ok {
-			return fmt.Errorf("properties requires an object value")
-		}
-		for key, sub := range props {
-			if sm, ok := sub.(map[string]any); ok {
-				if err := ValidateSchema(obj[key], sm); err != nil {
-					return fmt.Errorf("property %q: %w", key, err)
-				}
-			}
-		}
-	}
-	if req, ok := schema["required"].([]any); ok {
-		obj, ok := v.(map[string]any)
-		if !ok {
-			return fmt.Errorf("required requires an object value")
-		}
-		for _, key := range req {
-			ks, _ := key.(string)
-			if _, ok := obj[ks]; !ok {
-				return fmt.Errorf("missing required property %q", ks)
-			}
-		}
-	}
-	if ap, ok := schema["additionalProperties"]; ok {
-		if apBool, isBool := ap.(bool); isBool && !apBool {
-			obj, ok := v.(map[string]any)
-			if !ok {
-				return fmt.Errorf("additionalProperties requires an object value")
-			}
-			props := map[string]bool{}
-			if p, ok := schema["properties"].(map[string]any); ok {
-				for k := range p {
-					props[k] = true
-				}
-			}
-			for k := range obj {
-				if !props[k] {
-					return fmt.Errorf("additional property %q is not allowed", k)
-				}
-			}
-		}
-	}
-	if items, ok := schema["items"].(map[string]any); ok {
-		arr, ok := v.([]any)
-		if !ok {
-			return fmt.Errorf("items requires an array value")
-		}
-		for i, e := range arr {
-			if err := ValidateSchema(e, items); err != nil {
-				return fmt.Errorf("item %d: %w", i, err)
-			}
-		}
-	}
-	return nil
-}
-
-func checkType(v any, t string) error {
-	switch t {
-	case "object":
-		if _, ok := v.(map[string]any); !ok {
-			return fmt.Errorf("expected object, got %T", v)
-		}
-	case "array":
-		if _, ok := v.([]any); !ok {
-			return fmt.Errorf("expected array, got %T", v)
-		}
-	case "string":
-		if _, ok := v.(string); !ok {
-			return fmt.Errorf("expected string, got %T", v)
-		}
-	case "number":
-		n, ok := v.(float64)
-		if !ok {
-			return fmt.Errorf("expected number, got %T", v)
-		}
-		_ = n
-	case "integer":
-		n, ok := v.(float64)
-		if !ok || n != float64(int64(n)) {
-			return fmt.Errorf("expected integer, got %T", v)
-		}
-	case "boolean":
-		if _, ok := v.(bool); !ok {
-			return fmt.Errorf("expected boolean, got %T", v)
-		}
-	case "null":
-		if v != nil {
-			return fmt.Errorf("expected null, got %T", v)
-		}
-	default:
-		return fmt.Errorf("unsupported schema type %q", t)
-	}
-	return nil
-}
-
-func jsonEqual(a, b any) bool {
-	ab, _ := json.Marshal(a)
-	bb, _ := json.Marshal(b)
-	return string(ab) == string(bb)
 }

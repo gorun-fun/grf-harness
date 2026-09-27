@@ -10,13 +10,17 @@ import (
 	"strings"
 )
 
+// askUserArgs ask_user_question 工具参数（具名类型供 spec 交叉校验测试
+// 反射 json tag）。
+type askUserArgs struct {
+	Questions []Question `json:"questions"`
+}
+
 // RegisterAskUser 注册 ask_user_question。host 为宿主 getter（TUI 会在
 // agent 构建后才接管交互，运行期取当前宿主而非注册时的快照）。
 func RegisterAskUser(r *Registry, host func() Host) {
 	r.Register("ask_user_question", func(ctx context.Context, args string) (Result, error) {
-		var a struct {
-			Questions []Question `json:"questions"`
-		}
+		var a askUserArgs
 		if err := decodeArgs(args, &a); err != nil {
 			return Result{}, err
 		}

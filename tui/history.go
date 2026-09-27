@@ -16,13 +16,23 @@ type lineHistory struct {
 
 const historyLimit = 500
 
+// historyPath 输入历史落点（home 下名为 history 的文件，GRF_HOME 覆盖；
+// home 取不到时返回空串表示持久化不可用）。
+func historyPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	if v := os.Getenv("GRF_HOME"); v != "" {
+		home = v
+	}
+	return filepath.Join(home, "history")
+}
+
 func loadHistory() *lineHistory {
 	h := &lineHistory{}
-	if home, err := os.UserHomeDir(); err == nil {
-		if v := os.Getenv("GRF_HOME"); v != "" {
-			home = v
-		}
-		if data, err := os.ReadFile(filepath.Join(home, "history")); err == nil {
+	if path := historyPath(); path != "" {
+		if data, err := os.ReadFile(path); err == nil {
 			for _, ln := range strings.Split(string(data), "\n") {
 				if ln != "" {
 					h.items = append(h.items, ln)
@@ -48,11 +58,7 @@ func (h *lineHistory) add(line string) {
 		if len(h.items) > historyLimit {
 			h.items = h.items[len(h.items)-historyLimit:]
 		}
-		if home, err := os.UserHomeDir(); err == nil {
-			if v := os.Getenv("GRF_HOME"); v != "" {
-				home = v
-			}
-			path := filepath.Join(home, "history")
+		if path := historyPath(); path != "" {
 			if os.MkdirAll(filepath.Dir(path), 0o755) == nil {
 				if f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
 					fmt.Fprintln(f, line)

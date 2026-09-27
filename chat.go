@@ -17,11 +17,7 @@ func runChat(resume, plan bool) {
 	a := bootApp()
 	defer a.Close()
 	if resume {
-		if sess, err := a.LatestSession(); err == nil && len(sess.Messages) > 0 {
-			a.Restore(sess)
-		} else {
-			fmt.Println("没有可恢复的历史会话")
-		}
+		tryResume(a, true)
 	}
 	if plan {
 		a.Root().SetPlanMode(true)
@@ -41,14 +37,28 @@ func runPlain(resume bool) {
 	a := bootApp()
 	defer a.Close()
 	if resume {
-		if sess, err := a.LatestSession(); err == nil && len(sess.Messages) > 0 {
-			a.Restore(sess)
-			fmt.Println("已恢复上一次会话的上下文")
-		}
+		tryResume(a, false)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	a.PlainREPL(ctx)
+}
+
+// tryResume -resume 启动共用：恢复上一次会话。quiet=true 为全屏形态——
+// 成功时不打印（历史由 TUI 重放展示）、无可恢复时提示；行模式成功时
+// 打印恢复说明、失败时静默（与两形态既有行为一致）。
+func tryResume(a *app.App, quiet bool) {
+	sess, err := a.LatestSession()
+	if err == nil && len(sess.Messages) > 0 {
+		a.Restore(sess)
+		if !quiet {
+			fmt.Println("已恢复上一次会话的上下文")
+		}
+		return
+	}
+	if quiet {
+		fmt.Println("没有可恢复的历史会话")
+	}
 }
 
 // runTaskCmd 单任务模式。
@@ -59,11 +69,11 @@ func runTaskCmd(args []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	if strings.HasPrefix(task, "!") {
-		res := a.ExecBang(ctx, strings.TrimSpace(strings.TrimPrefix(task, "!")))
-		if res.Err != "" {
-			fatal(fmt.Errorf("%s", res.Err))
+		out, err := a.RunBang(ctx, strings.TrimSpace(strings.TrimPrefix(task, "!")))
+		if err != nil {
+			fatal(err)
 		}
-		if out := app.BangOutput(res.Text); out != "" {
+		if out != "" {
 			fmt.Println(out)
 		}
 		return

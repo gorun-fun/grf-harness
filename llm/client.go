@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,47 @@ import (
 	"strings"
 	"time"
 )
+
+// apiError 服务端错误哨兵：非 200 状态码（status 记状态码、body 记截断
+// 后的响应体）或响应体 JSON 的 error 字段（status=0、body 记 message）。
+// ChatStream 用 errors.As 识别它并停止盲重试——服务端明确拒绝（如图片
+// 输入不支持）属请求本身的问题，重试会掩盖 agent 的自愈路径。
+// Error() 文案与历史 fmt.Errorf 版本逐字一致。
+type apiError struct {
+	status int
+	body   string
+}
+
+func (e *apiError) Error() string {
+	if e.status == 0 {
+		return "api error: " + e.body
+	}
+	return fmt.Sprintf("api error %d: %s", e.status, e.body)
+}
+
+// readCheckedBody 读响应体（上限 limit）并做状态检查：非 200 统一返回
+// *apiError（正文截断 2000 字符）。postJSON 与流式非 SSE 回退共用。
+func readCheckedBody(resp *http.Response, limit int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(resp.Body, limit))
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, &apiError{status: resp.StatusCode, body: truncate(string(data), 2000)}
+	}
+	return data, nil
+}
+
+// postJSON 发起请求并整包读取响应（do → 读体 → 状态检查），Chat 与
+// Models 共用；请求由调用方经 buildRequest 构造（已携带 ctx）。
+func (c *Client) postJSON(req *http.Request, limit int64) ([]byte, error) {
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("call api: %w", err)
+	}
+	defer resp.Body.Close()
+	return readCheckedBody(resp, limit)
+}
 
 // Config 客户端配置。
 type Config struct {
@@ -149,7 +191,7 @@ func (c *Client) doStream(ctx context.Context, req chatRequest) (*http.Response,
 			}
 			return resp, nil
 		}
-		return nil, fmt.Errorf("api error %d: %s", resp.StatusCode, truncate(string(data), 2000))
+		return nil, &apiError{status: resp.StatusCode, body: truncate(string(data), 2000)}
 	}
 	return resp, nil
 }
@@ -161,7 +203,7 @@ func parseWhole(data []byte) (Message, error) {
 		return Message{}, fmt.Errorf("decode response: %w", err)
 	}
 	if out.Error != nil {
-		return Message{}, fmt.Errorf("api error: %s", out.Error.Message)
+		return Message{}, &apiError{body: out.Error.Message}
 	}
 	if len(out.Choices) == 0 {
 		return Message{}, fmt.Errorf("api returned no choices")
@@ -181,18 +223,9 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []Tool) (Me
 	if err != nil {
 		return Message{}, err
 	}
-	resp, err := c.http.Do(httpReq)
+	data, err := c.postJSON(httpReq, 32<<20)
 	if err != nil {
-		return Message{}, fmt.Errorf("call api: %w", err)
-	}
-	defer resp.Body.Close()
-
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
-	if err != nil {
-		return Message{}, fmt.Errorf("read response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return Message{}, fmt.Errorf("api error %d: %s", resp.StatusCode, truncate(string(data), 2000))
+		return Message{}, err
 	}
 	msg, err := parseWhole(data)
 	if err != nil {
@@ -247,7 +280,8 @@ func (c *Client) ChatStream(ctx context.Context, messages []Message, tools []Too
 		if err == nil {
 			return msg, nil
 		}
-		if ctx.Err() != nil || emitted || attempt >= maxRetry || strings.HasPrefix(err.Error(), "api error") {
+		var apiErr *apiError
+		if ctx.Err() != nil || emitted || attempt >= maxRetry || errors.As(err, &apiErr) {
 			return Message{}, err
 		}
 		time.Sleep(time.Duration(attempt+1) * 500 * time.Millisecond)
@@ -293,9 +327,9 @@ func (c *Client) chatStreamOnce(ctx context.Context, messages []Message, tools [
 
 	if !strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
 		first = time.Since(start)
-		data, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+		data, err := readCheckedBody(resp, 32<<20)
 		if err != nil {
-			return Message{}, false, fmt.Errorf("read response: %w", err)
+			return Message{}, false, err
 		}
 		var whole chatResponse
 		if json.Unmarshal(data, &whole) == nil && whole.Usage != nil {
@@ -420,17 +454,9 @@ func (c *Client) Models(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
-	resp, err := c.http.Do(req)
+	data, err := c.postJSON(req, 4<<20)
 	if err != nil {
-		return nil, fmt.Errorf("call api: %w", err)
-	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("api error %d: %s", resp.StatusCode, truncate(string(data), 2000))
+		return nil, err
 	}
 	var out struct {
 		Data []struct {

@@ -25,13 +25,16 @@ func RegisterFs(r *Registry, workspace string, fs *FsPolicy, artifacts *Artifact
 
 // ---- read ----
 
+// readArgs read 工具参数（具名类型供 spec 交叉校验测试反射 json tag）。
+type readArgs struct {
+	FilePath string `json:"file_path"`
+	Offset   int    `json:"offset"`
+	Limit    int    `json:"limit"`
+}
+
 func registerRead(r *Registry, fs *FsPolicy) {
 	r.Register("read", func(ctx context.Context, args string) (Result, error) {
-		var a struct {
-			FilePath string `json:"file_path"`
-			Offset   int    `json:"offset"`
-			Limit    int    `json:"limit"`
-		}
+		var a readArgs
 		if err := decodeArgs(args, &a); err != nil {
 			return Result{}, err
 		}
@@ -84,8 +87,7 @@ func registerRead(r *Registry, fs *FsPolicy) {
 		fmt.Fprintf(&b, "%s (%d lines total, showing %d-%d):\n", a.FilePath, total, start+1, end)
 		for i := start; i < end; i++ {
 			line := lines[i]
-			if len([]rune(line)) > 2000 {
-				r := []rune(line)
+			if r := []rune(line); len(r) > 2000 {
 				line = string(r[:2000]) + "…"
 			}
 			fmt.Fprintf(&b, "%d\t%s\n", i+1, line)
@@ -100,36 +102,28 @@ func registerRead(r *Registry, fs *FsPolicy) {
 
 // ---- write ----
 
+// writeArgs write 工具参数（具名类型供 spec 交叉校验测试反射 json tag）。
+type writeArgs struct {
+	FilePath           string `json:"file_path"`
+	Content            string `json:"content"`
+	SandboxPermissions string `json:"sandbox_permissions"`
+	Justification      string `json:"justification"`
+}
+
 func registerWrite(r *Registry, fs *FsPolicy) {
 	r.Register("write", func(ctx context.Context, args string) (Result, error) {
-		var a struct {
-			FilePath           string `json:"file_path"`
-			Content            string `json:"content"`
-			SandboxPermissions string `json:"sandbox_permissions"`
-			Justification      string `json:"justification"`
-		}
+		var a writeArgs
 		if err := decodeArgs(args, &a); err != nil {
 			return Result{}, err
 		}
 		if a.FilePath == "" {
 			return Result{}, fmt.Errorf("file_path is required")
 		}
-		abs := fs.resolve(a.FilePath)
-		if a.SandboxPermissions != "" {
-			ok, err := fs.Escalate("write", abs, a.SandboxPermissions, a.Justification)
-			if err != nil || !ok {
-				if err != nil {
-					return Result{}, err
-				}
-				return Result{}, fmt.Errorf("escalation did not grant access")
-			}
-			// 升级通过：跳过边界与观察策略
-		} else if _, werr := fs.CheckWrite(a.FilePath, true); werr != nil {
-			// 越权即问：写边界拒绝时挂起征求宿主批准（仅边界拒绝，
-			// 观察策略的"先读后写"不问），批准则当次放行
-			if !fs.AskAndEscalate("write", abs, "danger-full-access", "写入工作区外: "+a.FilePath) {
-				return Result{}, werr
-			}
+		// 授权前奏：sandbox_permissions 一次性升级 / 边界校验 + 越权即问
+		// （见 FsPolicy.AuthorizeWrite），细节策略语义集中在其实现处
+		abs, err := fs.AuthorizeWrite("write", a.FilePath, a.SandboxPermissions, a.Justification)
+		if err != nil {
+			return Result{}, err
 		}
 		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 			return Result{}, err
@@ -144,16 +138,19 @@ func registerWrite(r *Registry, fs *FsPolicy) {
 
 // ---- edit ----
 
+// editArgs edit 工具参数（具名类型供 spec 交叉校验测试反射 json tag）。
+type editArgs struct {
+	FilePath           string `json:"file_path"`
+	OldString          string `json:"old_string"`
+	NewString          string `json:"new_string"`
+	ReplaceAll         bool   `json:"replace_all"`
+	SandboxPermissions string `json:"sandbox_permissions"`
+	Justification      string `json:"justification"`
+}
+
 func registerEdit(r *Registry, fs *FsPolicy) {
 	r.Register("edit", func(ctx context.Context, args string) (Result, error) {
-		var a struct {
-			FilePath           string `json:"file_path"`
-			OldString          string `json:"old_string"`
-			NewString          string `json:"new_string"`
-			ReplaceAll         bool   `json:"replace_all"`
-			SandboxPermissions string `json:"sandbox_permissions"`
-			Justification      string `json:"justification"`
-		}
+		var a editArgs
 		if err := decodeArgs(args, &a); err != nil {
 			return Result{}, err
 		}
@@ -163,21 +160,10 @@ func registerEdit(r *Registry, fs *FsPolicy) {
 		if a.OldString == "" {
 			return Result{}, fmt.Errorf("old_string is required (use new_string=\"\" deletion with a non-empty old_string)")
 		}
-		abs := fs.resolve(a.FilePath)
-		if a.SandboxPermissions != "" {
-			ok, err := fs.Escalate("edit", abs, a.SandboxPermissions, a.Justification)
-			if err != nil || !ok {
-				if err != nil {
-					return Result{}, err
-				}
-				return Result{}, fmt.Errorf("escalation did not grant access")
-			}
-		} else {
-			if _, werr := fs.CheckWrite(a.FilePath, true); werr != nil {
-				if !fs.AskAndEscalate("edit", abs, "danger-full-access", "修改工作区外: "+a.FilePath) {
-					return Result{}, werr
-				}
-			}
+		// 授权前奏：同 write（升级/边界/越权即问三态封装在 AuthorizeWrite）
+		abs, err := fs.AuthorizeWrite("edit", a.FilePath, a.SandboxPermissions, a.Justification)
+		if err != nil {
+			return Result{}, err
 		}
 		data, err := os.ReadFile(abs)
 		if err != nil {

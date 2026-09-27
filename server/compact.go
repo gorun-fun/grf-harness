@@ -9,12 +9,32 @@ package server
 import (
 	"encoding/base64"
 	"encoding/json"
-	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"git.gorun.fun/share/grf-harness/llm"
 )
+
+// compactSystemPrompt 总结提示词（/v1/responses/compact 端点与 /compact
+// 斜杠指令就地压缩共用同一份）。
+const compactSystemPrompt = "You compact conversation transcripts. Produce a faithful, information-dense summary in the original language, preserving: task state, decisions made, file paths, commands run and their outcomes, open questions, and the next step. Output only the summary."
+
+// buildTranscript 会话历史 → 压缩用 transcript：跳过 system 首条，逐条
+// "role: 内容" 拼接。返回文本与非 system 消息条数（供 /compact 回显与
+// 空历史判定）。
+func buildTranscript(sess *session) (string, int) {
+	var sb strings.Builder
+	n := 0
+	for _, m := range sess.root.History() {
+		if m.Role == "system" {
+			continue
+		}
+		sb.WriteString(m.Role + ": " + m.String() + "\n")
+		n++
+	}
+	return sb.String(), n
+}
 
 // compactRequest compact 端点请求体（model 必填，缺失即 400——ORS 合规）。
 type compactRequest struct {
@@ -26,14 +46,8 @@ type compactRequest struct {
 }
 
 func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, 64<<20))
-	if err != nil {
-		writeError(w, 400, errInvalid, "read body: "+err.Error(), "")
-		return
-	}
 	var req compactRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		writeError(w, 400, errInvalid, "invalid JSON body: "+err.Error(), "")
+	if !decodeJSON(w, r, &req, bodyLimitMain) {
 		return
 	}
 	if req.Model == "" {
@@ -54,12 +68,7 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, err)
 			return
 		}
-		for _, m := range sess.root.History() {
-			if m.Role == "system" {
-				continue
-			}
-			transcript += m.Role + ": " + m.String() + "\n"
-		}
+		transcript, _ = buildTranscript(sess)
 	} else if len(req.Input) > 0 {
 		transcript = string(req.Input)
 	} else {
@@ -74,7 +83,7 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 	}
 	pre := client.Stats()
 	summary, err := client.Chat(r.Context(), []llm.Message{
-		{Role: "system", Content: "You compact conversation transcripts. Produce a faithful, information-dense summary in the original language, preserving: task state, decisions made, file paths, commands run and their outcomes, open questions, and the next step. Output only the summary."},
+		{Role: "system", Content: compactSystemPrompt},
 		{Role: "user", Content: transcript},
 	}, nil)
 	post := client.Stats()

@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"strings"
 	"sync/atomic"
-	"time"
 )
 
 type httpTransport struct {
@@ -32,17 +31,18 @@ func DialHTTP(ctx context.Context, endpoint, token string) (*Client, error) {
 	t := &httpTransport{
 		endpoint: endpoint,
 		token:    token,
-		hc:       &http.Client{Timeout: 60 * time.Second},
+		// 不设整体 Timeout：工具调用超时由 plugin 层经请求级 ctx 控制
+		// （DefaultToolTimeout 120s、可配置），整体超时会先掐断长超时
+		// 请求并架空配置；SSE 流式应答也依赖长连接（与 llm/client.go
+		// 同一取舍）。
+		hc: &http.Client{},
 	}
 	return dial(ctx, t)
 }
 
-func (t *httpTransport) Call(ctx context.Context, method string, params any) (json.RawMessage, error) {
-	id := atomic.AddInt64(&t.nextID, 1)
-	body, err := json.Marshal(rpcRequest{JSONRPC: "2.0", ID: id, Method: method, Params: params})
-	if err != nil {
-		return nil, err
-	}
+// newPost 构造发往端点的 JSON POST 请求：统一设置 Content-Type/Accept/
+// MCP-Protocol-Version 头，token 非空时附 Authorization（Call/Notify 共用）。
+func (t *httpTransport) newPost(ctx context.Context, body []byte) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -52,6 +52,19 @@ func (t *httpTransport) Call(ctx context.Context, method string, params any) (js
 	req.Header.Set("MCP-Protocol-Version", ProtocolVersion)
 	if t.token != "" {
 		req.Header.Set("Authorization", "Bearer "+t.token)
+	}
+	return req, nil
+}
+
+func (t *httpTransport) Call(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	id := atomic.AddInt64(&t.nextID, 1)
+	body, err := json.Marshal(rpcRequest{JSONRPC: "2.0", ID: id, Method: method, Params: params})
+	if err != nil {
+		return nil, err
+	}
+	req, err := t.newPost(ctx, body)
+	if err != nil {
+		return nil, err
 	}
 	resp, err := t.hc.Do(req)
 	if err != nil {
@@ -128,13 +141,9 @@ func (t *httpTransport) Notify(ctx context.Context, method string, params any) e
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.endpoint, bytes.NewReader(body))
+	req, err := t.newPost(ctx, body)
 	if err != nil {
 		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if t.token != "" {
-		req.Header.Set("Authorization", "Bearer "+t.token)
 	}
 	resp, err := t.hc.Do(req)
 	if err != nil {

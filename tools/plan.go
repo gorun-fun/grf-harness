@@ -32,8 +32,10 @@ type PlanModeEnterer interface {
 	RequestEnterPlanMode(ctx context.Context, reason string) (bool, string)
 }
 
-// RegisterExitPlanMode 注册 exit_plan_mode。
-func RegisterExitPlanMode(r *Registry, pc PlanController, host Host) {
+// RegisterExitPlanMode 注册 exit_plan_mode。host 懒取（注册后 SetHost
+// 替换的宿主同样生效，与 RegisterBash/RegisterAskUser 的注入模式一致）；
+// 交互决策本体在 PlanController（SubmitPlan）。
+func RegisterExitPlanMode(r *Registry, pc PlanController, host func() Host) {
 	r.Register("exit_plan_mode", func(ctx context.Context, args string) (Result, error) {
 		var a struct {
 			Plan string `json:"plan"`
@@ -50,7 +52,7 @@ func RegisterExitPlanMode(r *Registry, pc PlanController, host Host) {
 		if !pc.InPlanMode() {
 			return Result{}, fmt.Errorf("not in plan mode; exit_plan_mode is only usable in plan mode")
 		}
-		if host == nil {
+		if host == nil || host() == nil {
 			return Result{}, fmt.Errorf("no host available to review the plan")
 		}
 		approved, feedback := pc.SubmitPlan(ctx, a.Plan)

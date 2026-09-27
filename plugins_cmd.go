@@ -34,7 +34,7 @@ func runPluginsCmd(args []string) {
 	if err != nil {
 		fatal(err)
 	}
-	cfgPath, _ := config.Path()
+	cfgPath := config.Path()
 	m := plugin.New()
 	defer m.Close()
 	m.Load(st)
@@ -102,14 +102,7 @@ func runPluginsDownloadCmd(args []string) {
 	}
 	fmt.Printf("插件版本 %s：%s\n", rel.Version, strings.Join(rel.Files, "、"))
 
-	saved, err := rel.Download(context.Background(), fs.Args(), func(file string, done, total int64) {
-		switch {
-		case total > 0:
-			fmt.Printf("\r%s 下载中 %.1f/%.1f MB   ", file, float64(done)/(1<<20), float64(total)/(1<<20))
-		default:
-			fmt.Printf("\r%s 下载中 %.1f MB   ", file, float64(done)/(1<<20))
-		}
-	})
+	saved, err := rel.Download(context.Background(), fs.Args(), downloadProgress)
 	fmt.Println()
 	if err != nil {
 		fatal(err)

@@ -88,12 +88,17 @@ func (f *FsPolicy) loadGrants() {
 	}
 }
 
-// saveGrants 落盘授权目录。
-func (f *FsPolicy) saveGrants() {
+// grantDir 授权一个目录（升级审批"批准并授权目录"）并落盘。快照在锁内
+// 取、序列化与写盘在锁外做——无锁遍历 f.grants 会与并发 grantDir 的
+// 锁内写构成 map 竞态。
+func (f *FsPolicy) grantDir(dir string) {
+	f.mu.Lock()
+	f.grants[filepath.Clean(absOr(dir))] = true
 	dirs := make([]string, 0, len(f.grants))
 	for d := range f.grants {
 		dirs = append(dirs, d)
 	}
+	f.mu.Unlock()
 	sort.Strings(dirs)
 	data, err := json.MarshalIndent(dirs, "", "  ")
 	if err != nil {
@@ -101,14 +106,6 @@ func (f *FsPolicy) saveGrants() {
 	}
 	_ = os.MkdirAll(filepath.Dir(f.grantsPath()), 0o755)
 	_ = os.WriteFile(f.grantsPath(), data, 0o644)
-}
-
-// grantDir 授权一个目录（升级审批"批准并授权目录"）。
-func (f *FsPolicy) grantDir(dir string) {
-	f.mu.Lock()
-	f.grants[filepath.Clean(absOr(dir))] = true
-	f.mu.Unlock()
-	f.saveGrants()
 }
 
 // dirGranted 路径所在目录是否已被授权（授权目录内的写操作越过写边界，
@@ -183,6 +180,16 @@ func (f *FsPolicy) InWorkspace(p string) bool {
 	return false
 }
 
+// deniedKey 拒绝记录键归一：edit 与 write 共享写边界，记录侧（CheckWrite）
+// 统一以 "write:" 前缀落表，查询侧（Escalate/AskAndEscalate）按同一规则
+// 归一后查表，避免各处重复 edit 特判。
+func deniedKey(tool, key string) string {
+	if tool == "edit" {
+		tool = "write"
+	}
+	return tool + ":" + key
+}
+
 // CheckWrite 写前校验：工作区边界 + 观察策略（覆写已存在文件前要求本会话
 // read 过；新建文件不受限）。返回 (abs, error)。
 func (f *FsPolicy) CheckWrite(path string, readBeforeEdit bool) (string, error) {
@@ -193,7 +200,7 @@ func (f *FsPolicy) CheckWrite(path string, readBeforeEdit bool) (string, error) 
 
 	if !f.InWorkspace(abs) && !f.dirGranted(abs) {
 		f.mu.Lock()
-		f.denied["write:"+abs] = "write-workspace"
+		f.denied[deniedKey("write", abs)] = "write-workspace"
 		f.mu.Unlock()
 		return abs, fmt.Errorf("[sandbox: file access denied under write-workspace mode] path %q is outside the workspace %q; to write it, user approval is required and was not granted (or no host is available) — this is final for this file", path, f.Workspace)
 	}
@@ -225,10 +232,7 @@ func (f *FsPolicy) AskAndEscalate(tool, key, mode, detail string) bool {
 		return false
 	}
 	f.mu.Lock()
-	_, ok := f.denied[tool+":"+key]
-	if !ok && tool == "edit" { // edit 的拒绝记录统一为 "write:" 前缀
-		_, ok = f.denied["write:"+key]
-	}
+	_, ok := f.denied[deniedKey(tool, key)]
 	f.mu.Unlock()
 	if !ok {
 		return false
@@ -238,10 +242,10 @@ func (f *FsPolicy) AskAndEscalate(tool, key, mode, detail string) bool {
 		f.grantDir(decision.GrantDir)
 	}
 	f.mu.Lock()
+	// 双删：字面键（write 时即记录键）与归一键（edit 的记录为 "write:"
+	// 前缀）一并消费，delete 对不存在的键是 no-op
 	delete(f.denied, tool+":"+key)
-	if tool == "edit" {
-		delete(f.denied, "write:"+key)
-	}
+	delete(f.denied, deniedKey(tool, key))
 	f.mu.Unlock()
 	return decision.Approved
 }
@@ -254,11 +258,7 @@ func (f *FsPolicy) Escalate(tool, key, mode, justification string) (bool, error)
 		return false, fmt.Errorf("sandbox_permissions requires a one-sentence justification")
 	}
 	f.mu.Lock()
-	deniedMode, ok := f.denied[tool+":"+key]
-	if !ok && tool == "edit" {
-		// edit 的拒绝记录由 CheckWrite 统一记为 "write:" 前缀
-		deniedMode, ok = f.denied["write:"+key]
-	}
+	_, ok := f.denied[deniedKey(tool, key)]
 	f.mu.Unlock()
 	if !ok {
 		return false, fmt.Errorf("sandbox_permissions is only valid as a one-shot retry of an operation the sandbox just denied; there is no recorded denial for this exact %s call — run it normally first and read the denial marker", tool)
@@ -269,10 +269,40 @@ func (f *FsPolicy) Escalate(tool, key, mode, justification string) (bool, error)
 	if !f.Host.ApproveEscalation(context.Background(), tool, key, mode, justification).Approved {
 		return false, fmt.Errorf("the user rejected the escalation for this %s call — stop and explain, never work around it (attempting or escalating other calls later is still allowed)", tool)
 	}
-	// 一次性：消费掉拒绝记录
+	// 一次性：消费掉拒绝记录（edit 记录为 "write:" 前缀键，"edit:" 字面
+	// 键本就不存在；跨工具残留由 AskAndEscalate 的双删兜底）
 	f.mu.Lock()
 	delete(f.denied, tool+":"+key)
 	f.mu.Unlock()
-	_ = deniedMode
 	return true, nil
+}
+
+// AuthorizeWrite write/edit 工具共用的授权前奏（tool 为 "write"/"edit"）：
+// 带 sandbox_permissions 时走一次性升级 Escalate（无此前拒绝记录/宿主
+// 拒绝/缺说明即终局错误），升级通过即跳过边界与观察策略；不带时做
+// CheckWrite 边界校验，被写边界拒绝则越权即问 AskAndEscalate（仅边界
+// 拒绝，观察策略的"先读后写"不问），批准则当次放行。displayPath 为
+// 工具入参原样路径（越权询问理由文案用），返回 (abs, error)。
+func (f *FsPolicy) AuthorizeWrite(tool, displayPath, perms, justification string) (string, error) {
+	abs := f.resolve(displayPath)
+	if perms != "" {
+		ok, err := f.Escalate(tool, abs, perms, justification)
+		if err != nil {
+			return abs, err
+		}
+		if !ok {
+			return abs, fmt.Errorf("escalation did not grant access")
+		}
+		return abs, nil // 升级通过：跳过边界与观察策略
+	}
+	if _, werr := f.CheckWrite(displayPath, true); werr != nil {
+		detail := "写入工作区外: " + displayPath
+		if tool == "edit" {
+			detail = "修改工作区外: " + displayPath
+		}
+		if !f.AskAndEscalate(tool, abs, "danger-full-access", detail) {
+			return abs, werr
+		}
+	}
+	return abs, nil
 }

@@ -1,5 +1,5 @@
 // render.go 整帧渲染：内容块模型（block）与单块文本、frameLines 组帧
-//（内容区 + 弹窗 + todo 面板 + 状态分隔线 + 输入区）、统计底栏、斜杠
+// （内容区 + 弹窗 + todo 面板 + 状态分隔线 + 输入区）、统计底栏、斜杠
 // 指令提示、ANSI 样式与 OSC52 剪贴板。块模型由 chat.go 的事件循环维护。
 package tui
 
@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"git.gorun.fun/share/grf-harness/app"
 	"git.gorun.fun/share/grf-harness/term"
 )
 
@@ -72,17 +73,50 @@ func renderBlock(b block) string {
 	return b.text
 }
 
-// frameLines 组装整帧：返回（帧行、光标行、光标列、行→块映射）。
-func (c *Chat) frameLines() (lines []string, curRow, curCol int, lineBlock map[int]int) {
+// segLines 一个 live 分段的渲染文本（未 wrap）：思考段为摘要/进度行、
+// 正文段为增量文本。frameLines 组帧与鼠标行号换算必须共用同一实现——
+// 两处各写一份会在细节（live 提示行、TrimRight）上漂移，wrap 出的行数
+// 不同即行号错位，点击展开/拖选复制命中错行。
+func segLines(sv segView, w int) []string {
+	if !sv.think {
+		return term.Wrap(strings.TrimRight(sv.text, "\n"), w)
+	}
+	line := fmt.Sprintf("💭 思考 %ds，%d 字", sv.secs, sv.chars)
+	if sv.live {
+		line = fmt.Sprintf("💭 思考中… %ds", sv.secs)
+		if tail := term.LastLine(sv.text); tail != "" {
+			if space := w - term.StringWidth(line) - 3; space > 4 {
+				line += " · " + clipRunesT(tail, space)
+			}
+		}
+	}
+	return term.Wrap(dim(line), w)
+}
+
+// frame 一帧组帧结果：渲染（paint）与鼠标（absLine/clickExpand/拖选
+// 复制）共用的单一事实源——历史上三处平行实现，live 段文案与视口预算
+// 漂移会让换算出的行号与屏幕实际显示错位。
+type frame struct {
+	lines   []string    // 整帧行（内容窗口 + bottom + 状态/输入区）
+	show    []string    // 内容可见窗口行（拖选复制的取行来源）
+	base    int         // show[0] 的绝对行号（屏幕行 → 绝对行的换算基）
+	lineBlk map[int]int // 内容绝对行 → 块下标（-1 = live 段）
+	curRow  int         // 光标行（输入行，Paint 用）
+	curCol  int
+}
+
+// frame 组装整帧。所有行号都在"内容区绝对行号"空间（= 全部内容块 +
+// live 段按当前宽度 wrap 后的总行序），show/base 描述当前滚动窗口。
+func (c *Chat) frame() frame {
 	w := c.width - 2
 	if w < 4 {
 		w = 4
 	}
-	lineBlock = map[int]int{}
-
+	lineBlk := map[int]int{}
+	var lines []string
 	add := func(text string, blkIdx int) {
 		for _, ln := range term.Wrap(text, w) {
-			lineBlock[len(lines)] = blkIdx
+			lineBlk[len(lines)] = blkIdx
 			lines = append(lines, ln)
 		}
 	}
@@ -93,20 +127,10 @@ func (c *Chat) frameLines() (lines []string, curRow, curCol int, lineBlock map[i
 	// live 回复分段：按模型输出顺序展示（思考段摘要/进度 + 正文增量）
 	if c.running {
 		for _, sv := range c.hub.segViews() {
-			if !sv.think {
-				add(strings.TrimRight(sv.text, "\n"), -1)
-				continue
+			for _, ln := range segLines(sv, w) {
+				lineBlk[len(lines)] = -1
+				lines = append(lines, ln)
 			}
-			line := fmt.Sprintf("💭 思考 %ds，%d 字", sv.secs, sv.chars)
-			if sv.live {
-				line = fmt.Sprintf("💭 思考中… %ds", sv.secs)
-				if tail := term.LastLine(sv.text); tail != "" {
-					if space := w - term.StringWidth(line) - 3; space > 4 {
-						line += " · " + clipRunesT(tail, space)
-					}
-				}
-			}
-			add(dim(line), -1)
 		}
 	}
 
@@ -186,7 +210,8 @@ func (c *Chat) frameLines() (lines []string, curRow, curCol int, lineBlock map[i
 
 	inputText, inputCol := c.ed.Render(c.width - 2)
 
-	// viewport 高度预算：总高 - 输入区(3) - bottom
+	// viewport 高度预算：总高 - 输入区(3) - bottom（ask/pop/todo 面板
+	// 存在时占行——鼠标换算必须用同一预算，否则面板期间取错行）
 	vpAvail := c.height - 3 - len(bottom)
 	if vpAvail < 1 {
 		vpAvail = 1
@@ -228,8 +253,16 @@ func (c *Chat) frameLines() (lines []string, curRow, curCol int, lineBlock map[i
 	out = append(out, bottom...)
 	out = append(out, top, inputText, c.statsSep(sepW))
 	// 光标在输入行
-	curRow = len(out) - 2
-	return out, curRow, inputCol, lineBlock
+	return frame{
+		lines: out, show: show, base: base, lineBlk: lineBlk,
+		curRow: len(out) - 2, curCol: inputCol,
+	}
+}
+
+// frameLines 组帧的兼容包装（paint 与测试用）；鼠标路径请用 frame()。
+func (c *Chat) frameLines() ([]string, int, int, map[int]int) {
+	f := c.frame()
+	return f.lines, f.curRow, f.curCol, f.lineBlk
 }
 
 // statsSep 底部横线：嵌入本轮会话统计（轮/步 · LLM/工具耗时 · 首 token
@@ -304,11 +337,12 @@ func (c *Chat) paint(force bool) {
 		return
 	}
 	c.lastPaint = time.Now()
-	lines, curRow, curCol, _ := c.frameLines()
+	f := c.frame()
+	lines := f.lines
 	if len(lines) > c.height {
 		lines = lines[:c.height]
 	}
-	c.scr.Paint(lines, curRow, curCol)
+	c.scr.Paint(lines, f.curRow, f.curCol)
 }
 
 // todoPanel todo 面板：默认压缩（完成数 + 进行中项，最多 3 行），
@@ -350,19 +384,9 @@ func (c *Chat) todoPanel(w int) []string {
 	return lines
 }
 
-// slashCmds 前缀匹配指令表；alias 为同效别名（提示列表合并成一行展示，
-// 前缀匹配别名也会命中主指令）。
-var slashCmds = []struct{ name, alias, desc string }{
-	{"/help", "", "显示本帮助"},
-	{"/init", "", "分析代码库并生成/更新 AGENTS.md"},
-	{"/model", "", "选择/切换模型"},
-	{"/resume", "", "恢复历史会话"},
-	{"/plan", "", "进入/退出计划模式"},
-	{"/goal", "", "查看当前 goal"},
-	{"/new", "/clear", "保存当前会话并开新会话"},
-	{"/exit", "/quit", "退出"},
-}
-
+// slashHints 前缀匹配指令提示；指令表是两表面共用的 app.SlashCmds
+// （行模式 REPL 的 /help 也从它生成），alias 为同效别名（提示列表合并成
+// 一行展示，前缀匹配别名也会命中主指令）。
 func (c *Chat) slashHints() []string {
 	if c.bang {
 		return nil
@@ -372,18 +396,13 @@ func (c *Chat) slashHints() []string {
 		return nil
 	}
 	var out []string
-	for _, cmd := range slashCmds {
-		matched := strings.HasPrefix(cmd.name, v) ||
-			(cmd.alias != "" && strings.HasPrefix(cmd.alias, v))
+	for _, cmd := range app.SlashCmds {
+		matched := strings.HasPrefix(cmd.Name, v) ||
+			(cmd.Alias != "" && strings.HasPrefix(cmd.Alias, v))
 		if !matched {
 			continue
 		}
-		// 别名与主指令同行展示（空格分隔，保证 Tab 补全取 fields[0] 为主指令）
-		line := cmd.name
-		if cmd.alias != "" {
-			line += " " + cmd.alias
-		}
-		out = append(out, line+"  "+cmd.desc)
+		out = append(out, app.SlashHintLine(cmd.Name, cmd.Alias, cmd.Desc))
 	}
 	return out
 }

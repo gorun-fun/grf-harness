@@ -188,6 +188,68 @@ func TestJobOutputCtxCancel(t *testing.T) {
 	_ = m.Kill(id, "test")
 }
 
+// TestJobKillCancelsExecutor job_kill 必须把取消传导给执行器 ctx：
+// 旧实现传 context.Background()，Kill 后执行器永不结束（僵尸作业）。
+func TestJobKillCancelsExecutor(t *testing.T) {
+	m := NewJobManager()
+	finished := make(chan struct{})
+	id := m.StartStream("stream", "hang", func(ctx context.Context, emit func(string)) error {
+		<-ctx.Done()
+		close(finished)
+		return ctx.Err()
+	})
+	if err := m.Kill(id, "test"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-finished:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Kill did not cancel the executor ctx (zombie job)")
+	}
+	out, err := m.Output(context.Background(), id, false, 0)
+	if err != nil || !strings.Contains(out, "[status: killed]") {
+		t.Fatalf("job should settle as killed, got %q err=%v", out, err)
+	}
+}
+
+// TestJobKillStopsProcess 端到端：bash 后台作业被 job_kill 后进程必须
+// 真实退出（执行 goroutine 落定），而不是只改状态、sleep 继续跑。
+func TestJobKillStopsProcess(t *testing.T) {
+	ws := t.TempDir()
+	jobs := NewJobManager()
+	r := NewRegistry()
+	RegisterBash(r, BashDeps{Workspace: ws, Jobs: jobs})
+	res := r.Execute(context.Background(), "bash", mustJSON(t, map[string]any{
+		"command": "sleep 60", "run_in_background": true}))
+	var id string
+	for _, f := range strings.Fields(res.Text) {
+		if strings.HasPrefix(f, "job_") {
+			id = f
+			break
+		}
+	}
+	if id == "" {
+		t.Fatalf("no job id in %q", res.Text)
+	}
+	j := jobs.lookup(id)
+	if err := jobs.Kill(id, "test"); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		j.mu.Lock()
+		settled := j.status != JobRunning && j.err != nil
+		j.mu.Unlock()
+		if settled {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("background process still running 10s after job_kill (cancel chain broken)")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 func TestWebSearchParse(t *testing.T) {
 	if testing.Short() {
 		t.Skip("network")

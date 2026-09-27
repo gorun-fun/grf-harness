@@ -33,6 +33,9 @@ type job struct {
 	read   int    // 上次 job_output 读到的位置
 	descr  string // 描述（UI 展示）
 	start  time.Time
+	// cancel 取消执行器 ctx（创建时写定、之后只读，随 job.mu 之外发布）。
+	// final 类型作业无执行器，为 nil。
+	cancel context.CancelFunc
 }
 
 // JobManager 后台作业表。
@@ -52,13 +55,15 @@ func (m *JobManager) StartStream(kind, descr string, run func(ctx context.Contex
 	m.mu.Lock()
 	m.seq++
 	id := fmt.Sprintf("job_%d", m.seq)
-	j := &job{id: id, kind: kind, status: JobRunning, descr: descr, start: time.Now()}
+	ctx, cancel := context.WithCancel(context.Background())
+	j := &job{id: id, kind: kind, status: JobRunning, descr: descr, start: time.Now(), cancel: cancel}
 	j.cond = sync.NewCond(&j.mu)
 	m.jobs[id] = j
 	m.mu.Unlock()
 
 	go func() {
-		err := run(context.Background(), func(s string) {
+		defer cancel() // 作业结束后释放 ctx 资源（对已完成的 ctx 重复 cancel 无害）
+		err := run(ctx, func(s string) {
 			j.mu.Lock()
 			j.buf.WriteString(s)
 			j.cond.Broadcast()
@@ -81,7 +86,10 @@ func (m *JobManager) StartStream(kind, descr string, run func(ctx context.Contex
 
 func ctxErr(j *job) bool { return strings.Contains(fmt.Sprint(j.err), "context canceled") }
 
-// Kill 请求取消：把作业标记为 killed 并广播（实际停止由执行器监听 ctx）。
+// Kill 请求取消：先取消执行器 ctx 触发真实停止（bash 侧 SIGINT，
+// WaitDelay 后 SIGKILL 兜底），再把作业标记为 killed 并广播。标记先行
+// 返回只是让 job_output 的等待立即解除，进程停止由执行器在 cancel 后
+// 自行完成并落定终态。
 func (m *JobManager) Kill(id, reason string) error {
 	j := m.lookup(id)
 	if j == nil {
@@ -89,6 +97,9 @@ func (m *JobManager) Kill(id, reason string) error {
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	if j.cancel != nil {
+		j.cancel()
+	}
 	if j.status == JobRunning {
 		j.status = JobKilled
 		if reason != "" && j.buf.Len() > 0 {
@@ -247,7 +258,12 @@ func (m *JobManager) NeedsAttention() bool {
 	defer m.mu.Unlock()
 	for _, j := range m.jobs {
 		j.mu.Lock()
-		unread := j.status == JobDone && j.buf.Len() > j.read
+		// final 类型作业结果收在 result（buf 恒空），done 且从未被
+		// job_output 读过即待收割；stream 作业按增量未读判定。
+		// final 是嵌入方扩展点（NewFinal/FinishFinal），内置仅 bash
+		// 用 stream。
+		unread := j.status == JobDone &&
+			((j.kind != "stream" && j.read == 0) || j.buf.Len() > j.read)
 		j.mu.Unlock()
 		if unread {
 			return true
@@ -256,14 +272,23 @@ func (m *JobManager) NeedsAttention() bool {
 	return false
 }
 
+// jobOutputArgs / jobKillArgs job 工具参数（具名类型供 spec 交叉校验
+// 测试反射 json tag）。job_list 无参数。
+type jobOutputArgs struct {
+	JobID     string `json:"job_id"`
+	Wait      bool   `json:"wait"`
+	TimeoutMS int    `json:"timeout_ms"`
+}
+
+type jobKillArgs struct {
+	JobID  string `json:"job_id"`
+	Reason string `json:"reason"`
+}
+
 // RegisterJobTools 注册 job_output / job_kill / job_list。
 func RegisterJobTools(r *Registry, m *JobManager) {
 	r.Register("job_output", func(ctx context.Context, args string) (Result, error) {
-		var a struct {
-			JobID     string `json:"job_id"`
-			Wait      bool   `json:"wait"`
-			TimeoutMS int    `json:"timeout_ms"`
-		}
+		var a jobOutputArgs
 		if err := decodeArgs(args, &a); err != nil {
 			return Result{}, err
 		}
@@ -282,10 +307,7 @@ func RegisterJobTools(r *Registry, m *JobManager) {
 	})
 
 	r.Register("job_kill", func(ctx context.Context, args string) (Result, error) {
-		var a struct {
-			JobID  string `json:"job_id"`
-			Reason string `json:"reason"`
-		}
+		var a jobKillArgs
 		if err := decodeArgs(args, &a); err != nil {
 			return Result{}, err
 		}

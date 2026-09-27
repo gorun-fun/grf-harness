@@ -26,7 +26,11 @@ type inboundPiece struct {
 	contextToken string
 	text         string
 	images       []tools.Image
-	hasMedia     bool
+	// mediaMsg 含图片/文件 item 的原始消息：CDN 下载解密（60s 超时、
+	// 100MB 上限）不跑在长轮询主循环上——那会令一个用户的大文件停摆
+	// 所有用户的消息分发。主循环只做引用探测，下载延迟到用户 goroutine
+	// 的 resolveMedia。
+	mediaMsg map[string]any
 }
 
 // userMux 按用户分发消息:每用户一个 goroutine,先攒一个静默窗口内的
@@ -36,33 +40,36 @@ type inboundPiece struct {
 type userMux struct {
 	ctx  context.Context
 	bot  *Client
-	st   *State
 	pool *agentPool
 	mu   sync.Mutex
 	chs  map[string]chan *inboundPiece
 	asks map[string]chan *inboundPiece
 }
 
-func newUserMux(ctx context.Context, bot *Client, st *State, pool *agentPool) *userMux {
+func newUserMux(ctx context.Context, bot *Client, pool *agentPool) *userMux {
 	return &userMux{
 		ctx:  ctx,
 		bot:  bot,
-		st:   st,
 		pool: pool,
 		chs:  map[string]chan *inboundPiece{},
 		asks: map[string]chan *inboundPiece{},
 	}
 }
 
-// push 投递一条消息(无缓冲,用户 goroutine 忙于跑 agent 时由主循环兜着)。
+// push 投递一条消息：永不阻塞——主循环（长轮询 + 全体用户分发）若在
+// 此等待单个用户的通道，一个忙于跑 agent 的慢用户会停摆所有用户
+// （agent 回合最长 30 分钟）。通道满即丢弃并记日志：runTurn 端有合并
+// 逻辑，溢出消息的语义损失可接受。
 func (m *userMux) push(p *inboundPiece) {
 	m.mu.Lock()
 	if ask, ok := m.asks[p.fromID]; ok {
-		// 提问等待中:该消息是对 ask_user 的回复
+		// 提问等待中:该消息是对 ask_user 的回复（缓冲 1，前一条
+		// 未被取走即满）
 		m.mu.Unlock()
 		select {
 		case ask <- p:
-		case <-m.ctx.Done():
+		default:
+			fmt.Printf("⚠️ %s 的应答通道满,已丢弃消息\n", p.fromID)
 		}
 		return
 	}
@@ -75,7 +82,8 @@ func (m *userMux) push(p *inboundPiece) {
 	m.mu.Unlock()
 	select {
 	case ch <- p:
-	case <-m.ctx.Done():
+	default:
+		fmt.Printf("⚠️ %s 的消息队列满(上一轮还在处理),已丢弃\n", p.fromID)
 	}
 }
 
@@ -105,10 +113,12 @@ func (m *userMux) userLoop(ch chan *inboundPiece) {
 		case <-m.ctx.Done():
 			return
 		}
-		// 静默合并:窗口内每来一条就续期,直到安静满 mergeWindow
+		// 静默合并:窗口内每来一条就续期,直到安静满 mergeWindow。
+		// timer 不能 defer Stop——defer 挂在 for 循环体内，只有
+		// userLoop 退出（ctx 取消）才统一执行，守护进程长生命周期下
+		// 每批消息泄漏一条 defer 记录。
 		batch := []*inboundPiece{first}
 		timer := time.NewTimer(mergeWindow)
-		defer timer.Stop()
 	collect:
 		for {
 			select {
@@ -124,15 +134,17 @@ func (m *userMux) userLoop(ch chan *inboundPiece) {
 			case <-timer.C:
 				break collect
 			case <-m.ctx.Done():
+				timer.Stop()
 				return
 			}
 		}
-		runTurn(m.ctx, m.bot, m.st, m.pool, batch)
+		runTurn(m.ctx, m.bot, m.pool, batch)
 	}
 }
 
-// extractPiece 从原始消息提取文本/图片/文件;非用户消息或空载荷返回 nil。
-func extractPiece(ctx context.Context, pool *agentPool, msg map[string]any) *inboundPiece {
+// extractPiece 从原始消息提取文本与媒体引用（纯内存操作）；非用户消息
+// 或空载荷返回 nil。媒体下载解密见 resolveMedia。
+func extractPiece(msg map[string]any) *inboundPiece {
 	// message_type=1 为用户发来的消息;2 为 bot 发出
 	if mt := i64p(msg["message_type"]); mt == nil || *mt != 1 {
 		return nil
@@ -143,31 +155,12 @@ func extractPiece(ctx context.Context, pool *agentPool, msg map[string]any) *inb
 		return nil
 	}
 	text := extractMessageText(msg)
-	media := extractMedia(ctx, msg)
 	p := &inboundPiece{fromID: fromID, contextToken: contextToken, text: text}
-	if media != nil {
-		p.hasMedia = true
-		for _, img := range media.images {
-			p.images = append(p.images, tools.Image{Mime: img.mime, B64: img.b64})
-		}
-		// 文件落盘到工作区下的 weixin_files/，把路径告诉模型，
-		// 模型可用 read/bash 等工具按需处理
-		if media.fileData != nil {
-			path, err := saveInboundFile(pool.opts.Workspace, media.fileName, media.fileData)
-			if err != nil {
-				fmt.Printf("⚠️ 入站文件落盘失败(忽略): %v\n", err)
-			} else {
-				note := "用户发送了文件 " + path + "，已保存到工作区，可用文件工具读取"
-				if p.text == "" {
-					p.text = note
-				} else {
-					p.text += "\n" + note
-				}
-			}
-		}
+	if hasMediaItems(msg) {
+		p.mediaMsg = msg
 	}
 	// 既无文本也无媒体:可能是载荷结构变化导致漏识别,dump 原始 JSON 便于排查
-	if p.text == "" && media == nil {
+	if p.text == "" && p.mediaMsg == nil {
 		if bs, jerr := json.Marshal(msg); jerr == nil {
 			preview := bs
 			if len(preview) > 800 {
@@ -180,9 +173,74 @@ func extractPiece(ctx context.Context, pool *agentPool, msg map[string]any) *inb
 	return p
 }
 
-// runTurn 把一批 piece 合并成一轮:文本拼接、图片汇总,跑一次 agent,
-// 用最后一条消息的 context_token 回复。
-func runTurn(ctx context.Context, bot *Client, st *State, pool *agentPool, batch []*inboundPiece) {
+// hasMediaItems 快速探测 item_list 是否含图片（type 2）/文件（type 4）
+// item，不做网络 IO。
+func hasMediaItems(msg map[string]any) bool {
+	items, ok := msg["item_list"].([]any)
+	if !ok {
+		return false
+	}
+	for _, it := range items {
+		item, ok := it.(map[string]any)
+		if !ok {
+			continue
+		}
+		if v := i64p(item["type"]); v != nil && (*v == 2 || *v == 4) {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveMedia 下载解密媒体、文件落盘（用户 goroutine 执行）。下载失败
+// 仅记日志，文本部分照常处理；解析完成后置空 mediaMsg（幂等）。
+func (p *inboundPiece) resolveMedia(ctx context.Context, workspace string) {
+	if p.mediaMsg == nil {
+		return
+	}
+	media := extractMedia(ctx, p.mediaMsg)
+	p.mediaMsg = nil
+	if media == nil {
+		return
+	}
+	for _, img := range media.images {
+		p.images = append(p.images, tools.Image{Mime: img.mime, B64: img.b64})
+	}
+	// 文件落盘到工作区下的 weixin_files/，把路径告诉模型，
+	// 模型可用 read/bash 等工具按需处理
+	if media.fileData != nil {
+		path, err := saveInboundFile(workspace, media.fileName, media.fileData)
+		if err != nil {
+			fmt.Printf("⚠️ 入站文件落盘失败(忽略): %v\n", err)
+		} else {
+			note := "用户发送了文件 " + path + "，已保存到工作区，可用文件工具读取"
+			if p.text == "" {
+				p.text = note
+			} else {
+				p.text += "\n" + note
+			}
+		}
+	}
+}
+
+// runTurn 把一批 piece 合并成一轮:媒体下载解密、文本拼接、图片汇总,
+// 跑一次 agent，用最后一条消息的 context_token 回复。
+func runTurn(ctx context.Context, bot *Client, pool *agentPool, batch []*inboundPiece) {
+	// 媒体解析（CDN 下载 + 解密 + 落盘）在此执行：这里已是用户
+	// goroutine，一个慢下载不再阻塞其他用户。全部失败且无文本的 piece
+	// 整条丢弃（与旧 extractPiece"无有效载荷返回 nil"语义一致）。
+	live := batch[:0]
+	for _, p := range batch {
+		p.resolveMedia(ctx, pool.opts.Workspace)
+		if p.text == "" && len(p.images) == 0 {
+			continue
+		}
+		live = append(live, p)
+	}
+	if len(live) == 0 {
+		return
+	}
+	batch = live
 	var texts []string
 	var images []tools.Image
 	fromID := batch[0].fromID
@@ -208,10 +266,6 @@ func runTurn(ctx context.Context, bot *Client, st *State, pool *agentPool, batch
 		_ = bot.SendMessage(ctx, fromID, contextToken, "🆕 已开启新会话")
 		return
 	}
-
-	st.LastFromID = fromID
-	st.LastContextTok = contextToken
-	_ = SaveState(st)
 
 	a, host, err := pool.get(fromID)
 	if err != nil {
@@ -265,7 +319,9 @@ func saveInboundFile(workspace, name string, data []byte) (string, error) {
 		return "", err
 	}
 	name = filepath.Base(strings.TrimSpace(name))
-	if name == "" || name == "." || strings.ContainsAny(name, "/\\") {
+	// Base 之后名字不会再含路径分隔符；仅剩全分隔符输入（Base 返回 "/"）
+	// 与空/当前目录等退化结果需要回退到临时名
+	if name == "" || name == "." || name == "/" {
 		name = fmt.Sprintf("file_%d.bin", time.Now().UnixMilli())
 	} else {
 		name = fmt.Sprintf("%d_%s", time.Now().UnixMilli(), name)

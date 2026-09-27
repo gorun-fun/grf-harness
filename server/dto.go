@@ -19,12 +19,11 @@ const (
 
 // item 类型。
 const (
-	itemMessage            = "message"
-	itemFunctionCall       = "function_call"
-	itemFunctionCallOutput = "function_call_output"
-	itemReasoning          = "reasoning"
-	itemCompaction         = "compaction"
-	itemGrfToolCall        = "grf:tool_call"
+	itemMessage      = "message"
+	itemFunctionCall = "function_call"
+	itemReasoning    = "reasoning"
+	itemCompaction   = "compaction"
+	itemGrfToolCall  = "grf:tool_call"
 )
 
 // 请求 input 的 item 类型。
@@ -36,10 +35,9 @@ const (
 	inItemGrfInputResult = "grf:input_result"
 )
 
-// 暂停类别（与 agent.PauseKind 对应的 wire 值）。
+// 暂停类别（与 agent.PauseKind 对应的 wire 值；function/tool_approval 两值
+// 由 bridge 直接透传 agent 侧常量，server 包无需本地别名）。
 const (
-	kindFunction  = "function"
-	kindApproval  = "tool_approval"
 	kindQuestion  = "question"
 	inputRequired = "grf:input_required"
 )
@@ -93,9 +91,9 @@ type toolParam struct {
 
 // grfSessionConfig 会话级 gh 配置（首次请求生效，落盘 meta.json）。
 type grfSessionConfig struct {
-	Policy        string   `json:"policy,omitempty"`        // write-workspace|read-workspace 组合 | off（默认）
-	AutoApprove   *bool    `json:"auto_approve,omitempty"`
-	SystemPrompt  string   `json:"system_prompt,omitempty"`
+	Policy       string `json:"policy,omitempty"` // write-workspace|read-workspace 组合 | off（默认）
+	AutoApprove  *bool  `json:"auto_approve,omitempty"`
+	SystemPrompt string `json:"system_prompt,omitempty"`
 	// DefaultSkill 默认技能名（技能目录中存在该名字时，其 SKILL.md 全文
 	// 注入系统提示词，无需模型调 skill 工具）；空 = 不注入任何默认技能
 	// （grf-usage 终端用法技能不服务集成方）。集成方用它指定自己的默认

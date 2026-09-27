@@ -13,9 +13,32 @@ import (
 
 	"git.gorun.fun/share/grf-harness/agent"
 	"git.gorun.fun/share/grf-harness/config"
-	"git.gorun.fun/share/grf-harness/store"
-	"git.gorun.fun/share/grf-harness/term"
 )
+
+// SlashCmds 斜杠指令表：两交互表面共用的事实来源（行模式 REPL 的 /help
+// 与 TUI 的前缀提示/Tab 补全都从它生成）。alias 为同效别名（提示列表
+// 合并成一行展示，前缀匹配别名也会命中主指令）。新增/改名指令时同步
+// tui/input.go 的 /help 文案（那里保留 TUI 特有的详细描述）。
+var SlashCmds = []struct{ Name, Alias, Desc string }{
+	{Name: "/help", Desc: "显示本帮助"},
+	{Name: "/init", Desc: "分析代码库并生成/更新 AGENTS.md"},
+	{Name: "/model", Desc: "选择/切换模型"},
+	{Name: "/resume", Desc: "恢复历史会话"},
+	{Name: "/plan", Desc: "进入/退出计划模式"},
+	{Name: "/goal", Desc: "查看当前 goal"},
+	{Name: "/new", Alias: "/clear", Desc: "保存当前会话并开新会话"},
+	{Name: "/exit", Alias: "/quit", Desc: "退出"},
+}
+
+// SlashHintLine 单条指令的提示行："name alias  desc"（别名与主指令同行
+// 展示，空格分隔，保证 Tab 补全取 fields[0] 为主指令）。
+func SlashHintLine(name, alias, desc string) string {
+	line := name
+	if alias != "" {
+		line += " " + alias
+	}
+	return line + "  " + desc
+}
 
 // PlainREPL 行模式 REPL（stdin/stdout 非 TTY 时使用）。
 func (a *App) PlainREPL(ctx context.Context) {
@@ -39,14 +62,18 @@ func (a *App) PlainREPL(ctx context.Context) {
 			fmt.Println("再见！")
 			return
 		case "/help":
-			fmt.Println(`/help   显示本帮助
-!cmd    行首感叹号直接执行 shell 命令（如 !git status，不经模型）
-/plan   进入计划模式（exit_plan_mode 呈计划）；再输一次退出
-/model  查看已配置模型；/model 提供商/模型 切换
-/resume 列出历史会话；/resume N 恢复第 N 条
-/goal   查看当前 goal 状态
-/new    保存当前会话并开新会话（/clear 同效）
-/exit   退出（/quit 同效；会话在每轮回复后自动保存）`)
+			// 指令行从 SlashCmds 表生成（表为两表面共用的事实来源），
+			// 行模式特有的行（!cmd、自动保存说明）随后追加
+			var b strings.Builder
+			for _, cmd := range SlashCmds {
+				if cmd.Name == "/init" {
+					continue // 行模式没有 /init 的专属处理
+				}
+				fmt.Fprintln(&b, SlashHintLine(cmd.Name, cmd.Alias, cmd.Desc))
+			}
+			b.WriteString("!cmd    行首感叹号直接执行 shell 命令（如 !git status，不经模型）\n")
+			b.WriteString("（会话在每轮回复后自动保存）")
+			fmt.Println(b.String())
 			continue
 		case "/new", "/clear":
 			a.NewSession()
@@ -91,18 +118,12 @@ func (a *App) PlainREPL(ctx context.Context) {
 				fmt.Fprintln(os.Stderr, "用法: /resume N")
 				continue
 			}
-			sessions := a.Harness.Store.ListSessions(0)
-			if n > len(sessions) {
-				fmt.Fprintf(os.Stderr, "序号超出范围（共 %d 条会话）\n", len(sessions))
+			title, rerr := a.ResumeByIndex(n)
+			if rerr != nil {
+				fmt.Fprintf(os.Stderr, "错误: %v\n", rerr)
 				continue
 			}
-			sess, err := store.LoadSessionFull(sessions[n-1].Path)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "错误: %v\n", err)
-				continue
-			}
-			a.Restore(sess)
-			fmt.Println("已恢复会话: " + sessions[n-1].Title)
+			fmt.Println("已恢复会话: " + title)
 			continue
 		}
 		if strings.HasPrefix(input, "!") {
@@ -111,10 +132,10 @@ func (a *App) PlainREPL(ctx context.Context) {
 				fmt.Fprintln(os.Stderr, "用法: !<命令>")
 				continue
 			}
-			res := a.ExecBang(ctx, cmd)
-			if res.Err != "" {
-				fmt.Fprintf(os.Stderr, "错误: %s\n", res.Err)
-			} else if out := BangOutput(res.Text); out != "" {
+			out, berr := a.RunBang(ctx, cmd)
+			if berr != nil {
+				fmt.Fprintf(os.Stderr, "错误: %s\n", berr)
+			} else if out != "" {
 				fmt.Println(out)
 			}
 			continue
@@ -138,12 +159,9 @@ func (a *App) runInput(ctx context.Context, input string) error {
 		}
 		return err
 	}
-	if notices := a.Root().RunAndWaitBackground(3 * time.Second); len(notices) > 0 {
-		for _, n := range notices {
-			fmt.Printf("[info] %s\n", term.FirstLine(n, 0))
-		}
-		_, err = a.Root().RunAutoGoal(ctx, "Collect the settled background results above and give the user your final consolidated answer now.")
-	}
+	err = a.collectBackground(ctx, 3*time.Second, func(s string) {
+		fmt.Printf("[info] %s\n", s)
+	}, nil)
 	a.AutoSave()
 	return err
 }

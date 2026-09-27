@@ -42,9 +42,23 @@ type tuiHost struct{ c *Chat }
 
 func newTUIHost(c *Chat) *tuiHost { return &tuiHost{c: c} }
 
+// sendHostRequest 请求经 events 通道送入事件循环。发送也要带 ctx 兜底：
+// events 缓冲占满（事件循环被阻塞）时裸发送会永久卡死且不响应取消；
+// 返回 false 表示 ctx 已取消，调用方直接返回各自的零值。
+func sendHostRequest[T any](ctx context.Context, events chan any, req T) bool {
+	select {
+	case events <- req:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 func (h *tuiHost) AskUser(ctx context.Context, qs []tools.Question) (map[string]any, error) {
 	req := &askRequest{qs: qs, resp: make(chan map[string]any, 1), errc: make(chan error, 1)}
-	h.c.events <- req
+	if !sendHostRequest(ctx, h.c.events, req) {
+		return nil, ctx.Err()
+	}
 	select {
 	case a := <-req.resp:
 		return a, nil
@@ -58,9 +72,7 @@ func (h *tuiHost) AskUser(ctx context.Context, qs []tools.Question) (map[string]
 func (h *tuiHost) ApproveEscalation(ctx context.Context, tool, key, mode, justification string) tools.EscalationDecision {
 	req := &escRequest{tool: tool, key: key, mode: mode, justification: justification,
 		resp: make(chan tools.EscalationDecision, 1)}
-	select {
-	case h.c.events <- req:
-	case <-ctx.Done():
+	if !sendHostRequest(ctx, h.c.events, req) {
 		return tools.EscalationDecision{}
 	}
 	select {
@@ -73,9 +85,7 @@ func (h *tuiHost) ApproveEscalation(ctx context.Context, tool, key, mode, justif
 
 func (h *tuiHost) ApprovePlan(ctx context.Context, plan string) (bool, string) {
 	req := &planRequest{plan: plan, approve: make(chan bool, 1), feedback: make(chan string, 1)}
-	select {
-	case h.c.events <- req:
-	case <-ctx.Done():
+	if !sendHostRequest(ctx, h.c.events, req) {
 		return false, ""
 	}
 	select {
@@ -88,9 +98,7 @@ func (h *tuiHost) ApprovePlan(ctx context.Context, plan string) (bool, string) {
 
 func (h *tuiHost) ApproveTool(ctx context.Context, name, args string) tools.ApproveDecision {
 	req := &toolApproveRequest{name: name, args: args, resp: make(chan tools.ApproveDecision, 1)}
-	select {
-	case h.c.events <- req:
-	case <-ctx.Done():
+	if !sendHostRequest(ctx, h.c.events, req) {
 		return tools.ApproveDecision{}
 	}
 	select {
@@ -109,7 +117,7 @@ func (h *tuiHost) NotifyEvent(kind, detail string) {
 func (c *Chat) hostRequest(m any) {
 	switch req := m.(type) {
 	case *askRequest:
-		c.ask = newAskForm(req.qs, func(answers map[string]any, err error) {
+		c.ask = newAskForm(req.qs, func(answers map[string]any, _ map[string]int, err error) {
 			c.ask = nil
 			if err != nil {
 				req.errc <- err
@@ -118,15 +126,17 @@ func (c *Chat) hostRequest(m any) {
 			}
 		})
 	case *planRequest:
-		// 计划审批复用 ask 选择框：批准 / 继续计划，✎ 自定义输入作反馈
+		// 计划审批复用 ask 选择框：批准 / 继续计划，✎ 自定义输入作反馈。
+		// 决定按选项下标判定（picked），不受选项文案改动或自定义输入
+		// 恰与文案相同的影响
 		q := tools.Question{ID: "approve_plan",
 			Header:   "计划审批",
 			Question: req.plan,
 			Options: []tools.Option{
-				{Label: "批准，按计划执行", Description: "退出计划模式并开始执行"},
-				{Label: "继续计划", Description: "不批准；用 ✎ 行输入反馈后重新提交"},
+				{Label: "批准，按计划执行", Description: "退出计划模式并开始执行"},    // picked = 0
+				{Label: "继续计划", Description: "不批准；用 ✎ 行输入反馈后重新提交"}, // picked = 1
 			}}
-		c.ask = newAskForm([]tools.Question{q}, func(answers map[string]any, err error) {
+		c.ask = newAskForm([]tools.Question{q}, func(answers map[string]any, picked map[string]int, err error) {
 			c.ask = nil
 			switch {
 			case err != nil:
@@ -134,16 +144,16 @@ func (c *Chat) hostRequest(m any) {
 				req.feedback <- "（用户关闭了计划审批，未给反馈；请继续规划或询问）"
 			default:
 				v, _ := answers["approve_plan"].(string)
-				switch {
-				case v == "批准，按计划执行":
+				switch picked["approve_plan"] {
+				case 0: // 批准，按计划执行
 					req.approve <- true
 					req.feedback <- ""
-				case v == "" || v == "继续计划":
+				case 1: // 继续计划
 					req.approve <- false
 					req.feedback <- ""
-				default:
+				default: // ✎ 自定义输入：视为拒绝并附反馈（空输入即无反馈）
 					req.approve <- false
-					req.feedback <- v // ✎ 自定义输入视为拒绝并附反馈
+					req.feedback <- v
 				}
 			}
 		})
@@ -161,28 +171,31 @@ func (c *Chat) hostRequest(m any) {
 			b.WriteString("\n理由: " + req.justification)
 		}
 		opts := []tools.Option{
-			{Label: "批准，仅此一次", Description: "放行这一次越权操作"},
+			{Label: "批准，仅此一次", Description: "放行这一次越权操作"}, // picked = 0
 		}
 		dir := ""
 		if req.tool == "write" || req.tool == "edit" {
 			dir = filepath.Dir(req.key)
 			opts = append(opts, tools.Option{
-				Label:       "批准，并授权目录 " + dir,
+				Label:       "批准，并授权目录 " + dir, // picked = 1（仅 write/edit 存在）
 				Description: "保存到工作区 .grf，仅本工作区生效，之后该目录下写操作不再询问"})
 		}
 		opts = append(opts, tools.Option{Label: "拒绝", Description: "本次操作不放行（其他操作不受影响）"})
 		q := tools.Question{ID: "approve_escalation", Question: b.String(), Options: opts}
-		c.ask = newAskForm([]tools.Question{q}, func(answers map[string]any, err error) {
+		// 决定按选项下标判定（picked），不受选项文案改动或自定义输入
+		// 恰与文案相同的影响
+		c.ask = newAskForm([]tools.Question{q}, func(_ map[string]any, picked map[string]int, err error) {
 			c.ask = nil
 			d := tools.EscalationDecision{}
 			if err == nil {
-				v, _ := answers["approve_escalation"].(string)
-				switch {
-				case v == "批准，仅此一次":
+				switch picked["approve_escalation"] {
+				case 0: // 批准，仅此一次
 					d.Approved = true
-				case strings.HasPrefix(v, "批准，并授权目录 ") && dir != "":
-					d.Approved = true
-					d.GrantDir = dir
+				case 1: // write/edit 时为"批准，并授权目录"；其余工具此下标是"拒绝"
+					if dir != "" {
+						d.Approved = true
+						d.GrantDir = dir
+					}
 				}
 			}
 			req.resp <- d
@@ -192,21 +205,22 @@ func (c *Chat) hostRequest(m any) {
 		q := tools.Question{ID: "approve",
 			Question: "工具 " + req.name + " · 参数:\n" + clipRunesT(req.args, 2000),
 			Options: []tools.Option{
-				{Label: "批准执行"},
-				{Label: "拒绝"},
+				{Label: "批准执行"}, // picked = 0
+				{Label: "拒绝"},   // picked = 1
 			}}
-		c.ask = newAskForm([]tools.Question{q}, func(answers map[string]any, err error) {
+		c.ask = newAskForm([]tools.Question{q}, func(answers map[string]any, picked map[string]int, err error) {
 			c.ask = nil
 			d := tools.ApproveDecision{}
 			switch {
 			case err != nil:
 				d.Feedback = "（用户关闭了工具审批，未给反馈）"
 			default:
-				v, _ := answers["approve"].(string)
-				if v == "批准执行" {
+				switch picked["approve"] {
+				case 0: // 批准执行
 					d.Approved = true
-				} else if v != "" && v != "拒绝" {
-					d.Feedback = v // ✎ 自定义输入视为拒绝并附反馈
+				case 1: // 拒绝：不带反馈
+				default: // ✎ 自定义输入视为拒绝并附反馈
+					d.Feedback, _ = answers["approve"].(string)
 				}
 			}
 			req.resp <- d
@@ -228,7 +242,7 @@ func (c *Chat) askKey(k termKey) bool {
 			f.custom = false
 			return false
 		}
-		f.done(nil, fmt.Errorf("the user dismissed the questions"))
+		f.done(nil, nil, fmt.Errorf("the user dismissed the questions"))
 		c.ask = nil
 	case "up":
 		if n > 0 && !f.custom && f.sel > 0 {
@@ -275,12 +289,10 @@ func (c *Chat) popKey(k termKey) bool {
 		}
 	case "enter":
 		idx := p.sel
-		kind := p.kind
 		c.pop = nil
 		if p.onDone != nil {
 			p.onDone(idx)
 		}
-		_ = kind
 	case "esc":
 		c.pop = nil
 	}
@@ -298,7 +310,7 @@ func (c *Chat) openModelPopup() {
 		c.emitBlock(block{kind: blkDim, text: "（尚未配置任何提供商，先运行 gh model 添加）"})
 		return
 	}
-	c.pop = &popup{title: "选择模型", items: items, mark: cur, kind: "model",
+	c.pop = &popup{title: "选择模型", items: items, mark: cur,
 		onDone: func(idx int) {
 			spec := items[idx]
 			parts := strings.SplitN(spec, "/", 2)
@@ -338,7 +350,7 @@ func (c *Chat) openResumePopup() {
 		}
 		items = append(items, when+" · "+s.Title)
 	}
-	c.pop = &popup{title: "恢复会话", items: items, kind: "resume",
+	c.pop = &popup{title: "恢复会话", items: items,
 		onDone: func(idx int) { c.doRestoreByInfo(sessions[idx]) }}
 }
 

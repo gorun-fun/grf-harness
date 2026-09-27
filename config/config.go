@@ -23,10 +23,12 @@ type Provider struct {
 
 // Settings 配置文件结构。Default 形如 "provider/model"（按第一个 / 拆分）。
 // Policy: 统一规则串（竖线组合，sandbox 与文件策略共用一套 token）；
-//   write-workspace  仅写工作区：bash OS 级沙箱（macOS）+ 写前先读
-//                    （文件工具的写边界本就无条件生效，不受此控制）
-//   read-workspace   仅读工作区：read/glob/grep/read_image 的读边界
-//   off              不禁止（写边界除外，架构性保留）
+//
+//	write-workspace  仅写工作区：bash OS 级沙箱（macOS）+ 写前先读
+//	                 （文件工具的写边界本就无条件生效，不受此控制）
+//	read-workspace   仅读工作区：read/glob/grep/read_image 的读边界
+//	off              不禁止（写边界除外，架构性保留）
+//
 // 空 = 默认 "off"（全关）；解析不正确回退 write-workspace（保写侧）。
 // 解析见 ParsePolicy / NormalizePolicy。
 type Settings struct {
@@ -120,14 +122,14 @@ func Home() string {
 }
 
 // Path 配置文件路径。
-func Path() (string, error) {
-	return filepath.Join(Home(), "settings.json"), nil
+func Path() string {
+	return filepath.Join(Home(), "settings.json")
 }
 
 // LoadFileForUpdate 读取纯文件内容（不做 env 合并）；不存在返回空配置。
 func LoadFileForUpdate() (*Settings, error) {
 	s := &Settings{Providers: map[string]*Provider{}}
-	path, _ := Path()
+	path := Path()
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return s, nil
@@ -239,10 +241,7 @@ func (p *Provider) AddModel(model string) bool {
 
 // Save 写入配置文件（含 api_key，权限 0600）。
 func (s *Settings) Save() error {
-	path, err := Path()
-	if err != nil {
-		return err
-	}
+	path := Path()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create config dir: %w", err)
 	}
@@ -250,5 +249,5 @@ func (s *Settings) Save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(data, '\n'), 0o600)
+	return WriteFileAtomic(path, append(data, '\n'), 0o600)
 }

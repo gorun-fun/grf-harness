@@ -117,14 +117,6 @@ func methodOf(obj Value, prop string) (func(ip *Interp, this Value, args []Value
 	return nil, false
 }
 
-// arg 取第 i 个参数（越界 nil）。
-func arg(args []Value, i int) Value {
-	if i < len(args) {
-		return args[i]
-	}
-	return nil
-}
-
 func argStr(args []Value, i int, def string) string {
 	if i < len(args) && args[i] != nil {
 		return ToString(args[i])
@@ -139,6 +131,16 @@ func argNum(args []Value, i int, def float64) float64 {
 		}
 	}
 	return def
+}
+
+// wantFn 取数组方法的回调参数（第 0 参须为函数）；name 为方法名（错误
+// 文案用，如 ".map"）。
+func wantFn(args []Value, name string) (*Fn, error) {
+	fn, ok := Arg(args, 0).(*Fn)
+	if !ok {
+		return nil, rtErr("%s expects a function", name)
+	}
+	return fn, nil
 }
 
 // ---- string 方法 ----
@@ -171,7 +173,7 @@ func stringMethod(prop string) (func(s string, args []Value) (Value, error), boo
 		return func(s string, args []Value) (Value, error) {
 			r := []rune(s)
 			start, end := clampIdx(int(argNum(args, 0, 0)), len(r)), len(r)
-			if a := arg(args, 1); a != nil {
+			if a := Arg(args, 1); a != nil {
 				end = clampIdx(int(ToNumber(a)), len(r))
 			}
 			if start > end {
@@ -242,9 +244,9 @@ func arrayMethod(prop string) (func(ip *Interp, arr []any, args []Value) (Value,
 	switch prop {
 	case "map":
 		return func(ip *Interp, arr []any, args []Value) (Value, error) {
-			fn, ok := arg(args, 0).(*Fn)
-			if !ok {
-				return nil, rtErr(".map expects a function")
+			fn, err := wantFn(args, ".map")
+			if err != nil {
+				return nil, err
 			}
 			out := make([]any, 0, len(arr))
 			for i, e := range arr {
@@ -258,9 +260,9 @@ func arrayMethod(prop string) (func(ip *Interp, arr []any, args []Value) (Value,
 		}, true
 	case "filter":
 		return func(ip *Interp, arr []any, args []Value) (Value, error) {
-			fn, ok := arg(args, 0).(*Fn)
-			if !ok {
-				return nil, rtErr(".filter expects a function")
+			fn, err := wantFn(args, ".filter")
+			if err != nil {
+				return nil, err
 			}
 			var out []any
 			for i, e := range arr {
@@ -276,9 +278,9 @@ func arrayMethod(prop string) (func(ip *Interp, arr []any, args []Value) (Value,
 		}, true
 	case "forEach":
 		return func(ip *Interp, arr []any, args []Value) (Value, error) {
-			fn, ok := arg(args, 0).(*Fn)
-			if !ok {
-				return nil, rtErr(".forEach expects a function")
+			fn, err := wantFn(args, ".forEach")
+			if err != nil {
+				return nil, err
 			}
 			for i, e := range arr {
 				if _, err := ip.CallValue(fn, e, float64(i), arr); err != nil {
@@ -303,7 +305,7 @@ func arrayMethod(prop string) (func(ip *Interp, arr []any, args []Value) (Value,
 	case "slice":
 		return func(ip *Interp, arr []any, args []Value) (Value, error) {
 			start, end := clampIdx(int(argNum(args, 0, 0)), len(arr)), len(arr)
-			if a := arg(args, 1); a != nil {
+			if a := Arg(args, 1); a != nil {
 				end = clampIdx(int(ToNumber(a)), len(arr))
 			}
 			if start > end {
@@ -316,7 +318,7 @@ func arrayMethod(prop string) (func(ip *Interp, arr []any, args []Value) (Value,
 	case "indexOf":
 		return func(ip *Interp, arr []any, args []Value) (Value, error) {
 			for i, e := range arr {
-				if strictEq(e, arg(args, 0)) {
+				if strictEq(e, Arg(args, 0)) {
 					return float64(i), nil
 				}
 			}
@@ -325,7 +327,7 @@ func arrayMethod(prop string) (func(ip *Interp, arr []any, args []Value) (Value,
 	case "includes":
 		return func(ip *Interp, arr []any, args []Value) (Value, error) {
 			for _, e := range arr {
-				if strictEq(e, arg(args, 0)) {
+				if strictEq(e, Arg(args, 0)) {
 					return true, nil
 				}
 			}
@@ -355,9 +357,9 @@ func arrayMethod(prop string) (func(ip *Interp, arr []any, args []Value) (Value,
 		}, true
 	case "some":
 		return func(ip *Interp, arr []any, args []Value) (Value, error) {
-			fn, ok := arg(args, 0).(*Fn)
-			if !ok {
-				return nil, rtErr(".some expects a function")
+			fn, err := wantFn(args, ".some")
+			if err != nil {
+				return nil, err
 			}
 			for i, e := range arr {
 				v, err := ip.CallValue(fn, e, float64(i), arr)
@@ -372,9 +374,9 @@ func arrayMethod(prop string) (func(ip *Interp, arr []any, args []Value) (Value,
 		}, true
 	case "every":
 		return func(ip *Interp, arr []any, args []Value) (Value, error) {
-			fn, ok := arg(args, 0).(*Fn)
-			if !ok {
-				return nil, rtErr(".every expects a function")
+			fn, err := wantFn(args, ".every")
+			if err != nil {
+				return nil, err
 			}
 			for i, e := range arr {
 				v, err := ip.CallValue(fn, e, float64(i), arr)
@@ -389,9 +391,9 @@ func arrayMethod(prop string) (func(ip *Interp, arr []any, args []Value) (Value,
 		}, true
 	case "find":
 		return func(ip *Interp, arr []any, args []Value) (Value, error) {
-			fn, ok := arg(args, 0).(*Fn)
-			if !ok {
-				return nil, rtErr(".find expects a function")
+			fn, err := wantFn(args, ".find")
+			if err != nil {
+				return nil, err
 			}
 			for i, e := range arr {
 				v, err := ip.CallValue(fn, e, float64(i), arr)
@@ -417,36 +419,14 @@ func (ip *Interp) RunEval(src string) (Value, error) {
 	return ip.Run(prog)
 }
 
-// JSONParse 把 JSON 文本解析为 Value。
+// JSONParse 把 JSON 文本解析为 Value。encoding/json 解码出的类型集合
+// （bool/float64/string/nil/[]any/map[string]any）本就是 Value 的合法
+// 子集，直接返回。
 func JSONParse(s string) (Value, error) {
 	var out any
 	dec := json.NewDecoder(strings.NewReader(s))
 	if err := dec.Decode(&out); err != nil {
 		return nil, fmt.Errorf("invalid JSON: %v", err)
 	}
-	return normalizeJSON(out), nil
-}
-
-func normalizeJSON(v any) Value {
-	switch t := v.(type) {
-	case float64:
-		return t
-	case string:
-		return t
-	case bool:
-		return t
-	case []any:
-		out := make([]any, 0, len(t))
-		for _, e := range t {
-			out = append(out, normalizeJSON(e))
-		}
-		return out
-	case map[string]any:
-		out := make(map[string]any, len(t))
-		for k, e := range t {
-			out[k] = normalizeJSON(e)
-		}
-		return out
-	}
-	return nil
+	return out, nil
 }

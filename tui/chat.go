@@ -27,7 +27,8 @@ type termKey = term.KeyEv
 
 type runDoneMsg struct{ err error }
 
-// bangDoneMsg "!cmd" 直执行落定（后台 goroutine → 事件循环）。
+// bangDoneMsg "!cmd" 直执行落定（后台 goroutine → 事件循环）；out 为
+// 已清理的展示文本（BangOutput 已在 RunBang 内完成），err 为错误文本。
 type bangDoneMsg struct {
 	out, err string
 }
@@ -74,7 +75,6 @@ type Chat struct {
 
 	width, height int
 	lastPaint     time.Time
-	painting      bool
 }
 
 // NewChat 创建聊天界面（尚未启动）。
@@ -201,11 +201,13 @@ type eventMsg struct {
 }
 
 // onEvent agent 过程事件投递（可能在后台 goroutine 被调用，绝不直接改状态）。
-// 阻塞等待事件循环（带超时兜底），todos/goal 等状态事件不允许被丢弃。
+// todos/goal 等状态事件不允许被丢弃——等待到 Chat 生命周期结束（c.ctx）
+// 而非超时放弃：事件循环被慢操作卡住超过旧实现的 5 秒兜底时，状态事件
+// 会无痕丢失。
 func (c *Chat) onEvent(kind, detail string) {
 	select {
 	case c.events <- eventMsg{kind: kind, detail: detail}:
-	case <-time.After(5 * time.Second):
+	case <-c.ctx.Done():
 	}
 }
 
@@ -345,8 +347,6 @@ func (c *Chat) handleMsg(msg any) bool {
 		c.paint(true)
 	case *askRequest, *planRequest, *escRequest, *toolApproveRequest:
 		c.hostRequest(m)
-	case struct{}:
-		c.paint(false)
 	}
 	return false
 }
@@ -364,7 +364,10 @@ func (c *Chat) startRun(input string) {
 	root := c.app.Root()
 	go func() {
 		_, err := root.RunAutoGoal(runCtx, input)
-		c.events <- runDoneMsg{err: err}
+		select { // 事件循环退出后不再投递，避免 goroutine 泄漏
+		case c.events <- runDoneMsg{err: err}:
+		case <-runCtx.Done():
+		}
 	}()
 	c.paint(true)
 }
@@ -385,8 +388,15 @@ func (c *Chat) execBang(cmd string) {
 	runCtx, cancel := context.WithCancel(c.ctx)
 	c.cancel = cancel
 	go func() {
-		res := c.app.ExecBang(runCtx, cmd)
-		c.events <- bangDoneMsg{out: res.Text, err: res.Err}
+		out, err := c.app.RunBang(runCtx, cmd)
+		es := ""
+		if err != nil {
+			es = err.Error()
+		}
+		select { // 事件循环退出后不再投递，避免 goroutine 泄漏
+		case c.events <- bangDoneMsg{out: out, err: es}:
+		case <-runCtx.Done():
+		}
 	}()
 	c.paint(true)
 }
@@ -411,8 +421,8 @@ func (c *Chat) finishBang(m bangDoneMsg) {
 		c.paint(true)
 		return
 	}
-	if out := app.BangOutput(m.out); out != "" {
-		c.emitBlock(block{kind: blkText, text: out})
+	if m.out != "" {
+		c.emitBlock(block{kind: blkText, text: m.out})
 	} else {
 		c.emitBlock(block{kind: blkDim, text: "（无输出）"})
 	}

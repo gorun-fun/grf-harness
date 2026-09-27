@@ -21,6 +21,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"git.gorun.fun/share/grf-harness/config"
 )
 
 // MemoryFile 两级作用域共用的记忆文件名（JSON 条目数组）。
@@ -305,7 +307,7 @@ func saveMemory(path, scope string, entries []memoryEntry) (int, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return 0, fmt.Errorf("create memory dir: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := config.WriteFileAtomic(path, data, 0o644); err != nil {
 		return 0, fmt.Errorf("write %s memory: %w", scope, err)
 	}
 	return len(data), nil

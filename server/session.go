@@ -56,14 +56,22 @@ type toolDef struct {
 type session struct {
 	srv *Server
 	mu  sync.Mutex
-	// 以下字段由 srv.mu 或 sess.mu 保护：meta/harness 构建后只读；
-	// cancel/curSeq/turnDone 为回合簿记。
-	meta   *sessionMeta
-	h      *agent.Harness
-	root   *agent.Agent
-	cancel context.CancelFunc // 当前回合取消（nil = 空闲）
-	curSeq int                // 最新已分配的 response 序号
-	seq    atomic.Int64       // 会话级 sequence_number 发号器（ORS 事件排序契约）
+	// 以下字段由 srv.mu 或 sess.mu 保护：meta/harness 构建后只读
+	// （applyTools 写 ClientTools、归档写 Archived，由单 turn 串行保护）；
+	// busy/cancel/curSeq/turnDone 为回合簿记。
+	meta *sessionMeta
+	h    *agent.Harness
+	root *agent.Agent
+	// busy 回合槽占用位 + claimGen 占用代号：handleCreate 的 IsRunning
+	// 预检与 beginTurn 登记之间隔着请求级配置、input 解析与斜杠指令
+	// （/compact 可达秒级），tryClaim 原子完成"检查+占用"消除 TOCTOU——
+	// 漏网时 409 退化为 200+failed 且推进链尾。释放按代号匹配，防止
+	// 误清下一个请求刚拿到的占用（本请求 endTurn 之后、兜底 defer 之前）。
+	busy     bool
+	claimGen uint64
+	cancel   context.CancelFunc // 当前回合取消（nil = 空闲）
+	curSeq   int                // 最新已分配的 response 序号
+	seq      atomic.Int64       // 会话级 sequence_number 发号器（ORS 事件排序契约）
 	// clientTools 本会话已注册的客户端函数工具（每请求重置前先清理）。
 	clientTools []string
 	turnDone    chan struct{} // 当前回合结束信号（close 于回合收尾）
@@ -79,6 +87,11 @@ type Server struct {
 
 	mu       sync.Mutex
 	sessions map[string]*session // sid → 已加载会话
+	// loadLocks sid → 懒加载锁：同一会话的并发首触达在此串行（防
+	// double-load），跨会话互不阻塞。常驻不清理——与会话数同量级、且
+	// 删除后并发重建会导致双重加载。s.mu 只护 sessions/loadLocks 命中
+	// 查询，不做磁盘 IO。
+	loadLocks map[string]*sync.Mutex
 
 	// clientFactory 构建每会话的 LLM 客户端（默认读 ~/.grf 配置；测试注入
 	// fakeLLM）。
@@ -101,6 +114,7 @@ func New(dataDir, token string) (*Server, error) {
 		dataDir:       dataDir,
 		token:         token,
 		sessions:      map[string]*session{},
+		loadLocks:     map[string]*sync.Mutex{},
 		clientFactory: defaultClient,
 	}, nil
 }
@@ -245,6 +259,9 @@ func (s *Server) buildSession(meta *sessionMeta) (*session, error) {
 }
 
 // getSession 取会话：内存命中或从磁盘懒加载；不存在/已归档返回错误。
+// 加载串行化按会话粒度（loadLocks）——buildSession 含磁盘 IO 与插件建连，
+// 若在 s.mu 内做，一个大历史会话的首次触达会阻塞所有其他会话的内存
+// 命中查询。
 func (s *Server) getSession(sid string) (*session, error) {
 	s.mu.Lock()
 	if sess, ok := s.sessions[sid]; ok {
@@ -254,14 +271,26 @@ func (s *Server) getSession(sid string) (*session, error) {
 		}
 		return sess, nil
 	}
+	ll := s.loadLocks[sid]
+	if ll == nil {
+		ll = &sync.Mutex{}
+		s.loadLocks[sid] = ll
+	}
 	s.mu.Unlock()
-	// 磁盘为准：目录存在即会话存在（并发首触达由会话级锁兜底）
+	// 磁盘为准：目录存在即会话存在
 	if _, err := os.Stat(s.convDir(sid)); err != nil {
 		return nil, apiErr(errNotFound, "unknown session "+sid)
 	}
+	ll.Lock()
+	defer ll.Unlock()
+	// 拿到加载锁后复查：同会话的首个加载者可能刚刚完成
 	s.mu.Lock()
-	defer s.mu.Unlock() // 持锁完成加载，防 double-load
-	if sess, ok := s.sessions[sid]; ok {
+	sess, ok := s.sessions[sid]
+	s.mu.Unlock()
+	if ok {
+		if sess.meta.Archived {
+			return nil, apiErr(errNotFound, "session is archived")
+		}
 		return sess, nil
 	}
 	meta, err := readMeta(s.convDir(sid))
@@ -271,11 +300,13 @@ func (s *Server) getSession(sid string) (*session, error) {
 	if meta.Archived {
 		return nil, apiErr(errNotFound, "session is archived")
 	}
-	sess, err := s.buildSession(meta)
+	sess, err = s.buildSession(meta)
 	if err != nil {
 		return nil, apiErr(errServer, "load session: "+err.Error())
 	}
+	s.mu.Lock()
 	s.sessions[sid] = sess
+	s.mu.Unlock()
 	return sess, nil
 }
 
@@ -287,6 +318,24 @@ func (s *Server) dropSession(sid string) {
 	s.mu.Unlock()
 	if sess != nil {
 		sess.h.Close()
+	}
+}
+
+// WaitSettled 等待所有已加载会话的在跑回合落定：gh server 优雅退出时在
+// 停止接收新请求后调用（调用方接线在根目录 server_cmd.go），避免进程
+// 退出截断在跑回合的终态快照/存档写。d 为单个会话的等待期限（逐会话
+// 串行等待，总耗时上界 n*d）；无在跑回合的会话立即跳过。先在 s.mu 内
+// 取会话快照、锁外逐个等待——持锁等待会阻塞 getSession 等内存命中查询，
+// 而等待中的回合可能正需要它们（如 cancel）推进。
+func (s *Server) WaitSettled(d time.Duration) {
+	s.mu.Lock()
+	sessions := make([]*session, 0, len(s.sessions))
+	for _, sess := range s.sessions {
+		sessions = append(sessions, sess)
+	}
+	s.mu.Unlock()
+	for _, sess := range sessions {
+		sess.waitTurn(d)
 	}
 }
 
@@ -352,19 +401,10 @@ func (sess *session) rollbackResp(id string) {
 	}
 }
 
-// maxSnapSeq 扫描快照目录求最大序号（懒加载时恢复链尾）。
+// maxSnapSeq 扫描快照目录求最大序号（懒加载时恢复链尾）；与列表端点的
+// scanMaxSeq 同一实现，只是以会话自身目录为参。
 func (sess *session) maxSnapSeq() int {
-	entries, err := os.ReadDir(filepath.Join(sess.srv.convDir(sess.meta.ID), "responses"))
-	if err != nil {
-		return 0
-	}
-	max := 0
-	for _, e := range entries {
-		if n, err := strconv.Atoi(strings.TrimSuffix(e.Name(), ".json")); err == nil && n > max {
-			max = n
-		}
-	}
-	return max
+	return scanMaxSeq(sess.srv.convDir(sess.meta.ID))
 }
 
 // snapPath 快照文件路径。
@@ -502,7 +542,29 @@ func (sess *session) autoApproveSetting() bool { return sess.meta.AutoApprove }
 
 // ---- 回合簿记（cancel 端点与 busy 检查用）----
 
-// beginTurn 登记回合取消句柄与结束信号。
+// tryClaim 原子占用回合槽（每会话单 turn 的真保证），返回占用代号。
+func (sess *session) tryClaim() (uint64, bool) {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if sess.busy {
+		return 0, false
+	}
+	sess.busy = true
+	sess.claimGen++
+	return sess.claimGen, true
+}
+
+// releaseClaim 按代号释放回合槽：代号不匹配（槽已被后续回合重新占用）
+// 则不动作。execute 的各出口与 handleCreate 的兜底 defer 都调用它。
+func (sess *session) releaseClaim(gen uint64) {
+	sess.mu.Lock()
+	if sess.busy && sess.claimGen == gen {
+		sess.busy = false
+	}
+	sess.mu.Unlock()
+}
+
+// beginTurn 登记回合取消句柄与结束信号（调用前须已 tryClaim 占用）。
 func (sess *session) beginTurn(cancel context.CancelFunc) {
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
@@ -510,11 +572,14 @@ func (sess *session) beginTurn(cancel context.CancelFunc) {
 	sess.turnDone = make(chan struct{})
 }
 
-// endTurn 回合收尾：清取消句柄并广播结束。
-func (sess *session) endTurn() {
+// endTurn 回合收尾：清取消句柄、释放回合槽并广播结束。
+func (sess *session) endTurn(gen uint64) {
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
 	sess.cancel = nil
+	if sess.busy && sess.claimGen == gen {
+		sess.busy = false
+	}
 	if sess.turnDone != nil {
 		close(sess.turnDone)
 		sess.turnDone = nil

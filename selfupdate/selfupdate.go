@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -105,7 +106,7 @@ func Check(ctx context.Context, base string) (*Release, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !contains(root, dir) {
+	if !slices.Contains(root, dir) {
 		return nil, nil
 	}
 	versions, err := ListDir(ctx, base+"/"+dir+"/")
@@ -124,7 +125,7 @@ func Check(ctx context.Context, base string) (*Release, error) {
 		if err != nil {
 			continue // 单个版本目录异常不挡后续版本
 		}
-		if contains(files, binary) {
+		if slices.Contains(files, binary) {
 			return &Release{
 				Version: v,
 				URL:     base + "/" + dir + "/" + v + "/" + binary,
@@ -165,15 +166,6 @@ func ListDir(ctx context.Context, url string) ([]string, error) {
 		entries = append(entries, e)
 	}
 	return entries, nil
-}
-
-func contains(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
-	}
-	return false
 }
 
 // CompareVersions semver 风格比较：a>b 返回 1、相等 0、否则 -1。

@@ -2,18 +2,18 @@
 // 完成轮次的分叉）默认后台执行并立即返回持久 id，send_message 续聊，
 // interrupt_agent 取消当前回合，list_agents 列 direct children 或整棵
 // 后代树。子代理落定时向父会话注入通知（父空闲则触发自动续跑）。
+// 五个工具的注册在 manager_tools.go。
 package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	"git.gorun.fun/share/grf-harness/llm"
-	"git.gorun.fun/share/grf-harness/tools"
 )
 
 // Handle 子代理注册项。
@@ -78,27 +78,24 @@ func (m *Manager) register(parent *Agent, label string, seed []llm.Message) (*Ha
 
 // Subagent 启动一个子代理。bg=true 后台（返回 id 即刻），否则前台等结果。
 func (m *Manager) Subagent(parent *Agent, label, prompt string, bg bool) (string, string, error) {
-	h, err := m.register(parent, label, nil)
-	if err != nil {
-		return "", "", err
-	}
-	if bg {
-		go m.runTurn(h, prompt)
-		return h.ID, "", nil
-	}
-	out, rerr := m.runOne(h.Ag, prompt)
-	return h.ID, out, rerr
+	return m.start(parent, label, prompt, bg, nil)
 }
 
 // Fork 启动一个继承父会话已完成轮次的子代理（不含父当前进行中的回合）。
 func (m *Manager) Fork(parent *Agent, label, prompt string, bg bool) (string, string, error) {
-	seed := m.completedTurns(parent)
+	return m.start(parent, label, prompt, bg, m.completedTurns(parent))
+}
+
+// start 注册并启动子代理的公共路径（Subagent/Fork 的差异只在 seed：
+// 前者空历史，后者父已完成轮次副本）。bg=true 后台执行（返回 id 即刻，
+// 落定后经 settle 通知父会话），否则前台等结果。
+func (m *Manager) start(parent *Agent, label, prompt string, bg bool, seed []llm.Message) (string, string, error) {
 	h, err := m.register(parent, label, seed)
 	if err != nil {
 		return "", "", err
 	}
 	if bg {
-		go m.runTurn(h, prompt)
+		go m.runAndSettle(h, prompt)
 		return h.ID, "", nil
 	}
 	out, rerr := m.runOne(h.Ag, prompt)
@@ -124,8 +121,10 @@ func (m *Manager) completedTurns(parent *Agent) []llm.Message {
 	return seed
 }
 
-// runTurn 子代理回合：结束（含错误/取消）后落定并通知父会话。
-func (m *Manager) runTurn(h *Handle, prompt string) {
+// runAndSettle 子代理回合：结束（含错误/取消）后落定并通知父会话。
+// （与 Agent.runTurn 刻意不同名——那是回合循环本体，这里是"跑完并
+// 落定"的后台包装，仅包内使用。）
+func (m *Manager) runAndSettle(h *Handle, prompt string) {
 	out, err := m.runOne(h.Ag, prompt)
 	m.settle(h, out, err)
 }
@@ -158,7 +157,7 @@ func (m *Manager) settle(h *Handle, out string, err error) {
 }
 
 func isCanceled(err error) bool {
-	return err != nil && (err == context.Canceled || strings.Contains(err.Error(), "context canceled"))
+	return errors.Is(err, context.Canceled)
 }
 
 // Find 按 id 查 agent。
@@ -182,6 +181,23 @@ func (m *Manager) HandleOf(id string) (*Handle, bool) {
 	return h, ok
 }
 
+// isDescendant h 是否为 caller 的后代（含深层；调用方须持 m.mu）。
+// 沿 Parent 链上溯：链条单向生长（注册只发生在已注册父上），终于根
+// （Parent 为空串，根不在 agents 表里）——环不可能，无需深度兜底。
+func (m *Manager) isDescendant(caller *Agent, h *Handle) bool {
+	for cur := h; cur != nil; {
+		if cur.Parent == caller.ID {
+			return true
+		}
+		next, ok := m.agents[cur.Parent]
+		if !ok {
+			return false
+		}
+		cur = next
+	}
+	return false
+}
+
 // Interrupt 取消某 agent 当前回合（排队消息保留）。
 func (m *Manager) Interrupt(caller *Agent, targetID string) error {
 	m.mu.Lock()
@@ -190,27 +206,13 @@ func (m *Manager) Interrupt(caller *Agent, targetID string) error {
 		m.mu.Unlock()
 		return fmt.Errorf("unknown agent id %q", targetID)
 	}
-	// 必须是 caller 的后代
-	depth := 0
-	cur := h
-	for cur != nil && cur.Parent != caller.ID && cur.Parent != "" {
-		nh := m.agents[cur.Parent]
-		if nh == nil {
-			break
-		}
-		cur = nh
-		depth++
-		if depth > 16 {
-			break
-		}
-	}
-	isDesc := ok && cur != nil && cur.Parent == caller.ID
-	rootSelf := targetID == caller.ID
-	m.mu.Unlock()
-	if !isDesc && !rootSelf {
+	// 只能打断 caller 自身或其后代
+	if targetID != caller.ID && !m.isDescendant(caller, h) {
+		m.mu.Unlock()
 		return fmt.Errorf("agent %q is not your descendant; you may only interrupt your direct child or deeper agents under you", targetID)
 	}
-	ag := m.Find(targetID)
+	ag := h.Ag // 锁内直接取 Agent 引用，解锁后不再经 Find 二次查找
+	m.mu.Unlock()
 	if ag == nil {
 		return fmt.Errorf("agent %q not found", targetID)
 	}
@@ -229,11 +231,14 @@ func (m *Manager) SendMessage(caller *Agent, targetID, message string) error {
 	m.mu.Lock()
 	h, ok := m.agents[targetID]
 	isChild := ok && h.Parent == caller.ID
+	var ag *Agent
+	if isChild {
+		ag = h.Ag // 锁内直接取 Agent 引用，解锁后不再经 Find 二次查找
+	}
 	m.mu.Unlock()
 	if !isChild {
 		return fmt.Errorf("subagent %q is not your direct child (send_message works on depth-1 children only; use list_agents to recall them)", targetID)
 	}
-	ag := m.Find(targetID)
 	if ag == nil {
 		return fmt.Errorf("subagent %q not found", targetID)
 	}
@@ -241,7 +246,7 @@ func (m *Manager) SendMessage(caller *Agent, targetID, message string) error {
 		ag.EnqueueNotice("deferred user instruction (deliver after the current turn finishes): " + message)
 		return nil
 	}
-	go m.runTurn(h, message)
+	go m.runAndSettle(h, message)
 	return nil
 }
 
@@ -303,120 +308,9 @@ func (m *Manager) hasRunningDescendants(caller *Agent) bool {
 		if h.Ag == nil || !h.Ag.IsRunning() {
 			continue
 		}
-		// 向上找根是否经过 caller
-		cur := h
-		for cur != nil {
-			if cur.Parent == caller.ID {
-				return true
-			}
-			nh := m.agents[cur.Parent]
-			if nh == nil {
-				break
-			}
-			cur = nh
+		if m.isDescendant(caller, h) {
+			return true
 		}
 	}
 	return false
-}
-
-// WaitForSettled 等待 caller 的全部子代理落定（最多 wait）。
-func (m *Manager) WaitForSettled(caller *Agent, wait time.Duration) {
-	deadline := time.Now().Add(wait)
-	for time.Now().Before(deadline) {
-		if !m.hasRunningDescendants(caller) {
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-}
-
-// RegisterAgentTools 注册 subagent / subagent_fork / send_message /
-// interrupt_agent / list_agents 五个工具。
-func RegisterAgentTools(r *tools.Registry, a *Agent, m *Manager) {
-	sub := func(fork bool) tools.Handler {
-		return func(ctx context.Context, args string) (tools.Result, error) {
-			var p struct {
-				Description     string `json:"description"`
-				Prompt          string `json:"prompt"`
-				RunInBackground *bool  `json:"run_in_background"`
-			}
-			if err := tools.DecodeJSON(args, &p); err != nil {
-				return tools.Result{}, err
-			}
-			if strings.TrimSpace(p.Prompt) == "" {
-				return tools.Result{}, fmt.Errorf("prompt is required (complete and self-contained — the subagent does not see this conversation)")
-			}
-			if strings.TrimSpace(p.Description) == "" {
-				return tools.Result{}, fmt.Errorf("description is required (3-5 words, for display)")
-			}
-			bg := true
-			if p.RunInBackground != nil {
-				bg = *p.RunInBackground
-			}
-			var (
-				id, out string
-				err     error
-			)
-			if fork {
-				id, out, err = m.Fork(a, oneLine(p.Description, 60), p.Prompt, bg)
-			} else {
-				id, out, err = m.Subagent(a, oneLine(p.Description, 60), p.Prompt, bg)
-			}
-			if err != nil {
-				return tools.Result{}, err
-			}
-			if bg {
-				return tools.TextResult(fmt.Sprintf("subagent started in the background: id=%s label=%q\nYou will be notified when it settles; recall continuable subagents with list_agents and give follow-up work via send_message.", id, p.Description)), nil
-			}
-			return tools.TextResult(fmt.Sprintf("subagent %s (%s) result:\n\n%s", id, p.Description, out)), nil
-		}
-	}
-	r.Register("subagent", sub(false))
-	r.Register("subagent_fork", sub(true))
-
-	r.Register("send_message", func(ctx context.Context, args string) (tools.Result, error) {
-		var p struct {
-			SubagentID string `json:"subagent_id"`
-			Message    string `json:"message"`
-		}
-		if err := tools.DecodeJSON(args, &p); err != nil {
-			return tools.Result{}, err
-		}
-		if strings.TrimSpace(p.Message) == "" {
-			return tools.Result{}, fmt.Errorf("message is required")
-		}
-		if err := m.SendMessage(a, p.SubagentID, p.Message); err != nil {
-			return tools.Result{}, fmt.Errorf("message NOT delivered: %v", err)
-		}
-		return tools.TextResult(fmt.Sprintf("message delivered to %s; it becomes the subagent's next turn (queued if it is still working). No answer comes back through this call — the settle notice will carry its outcome.", p.SubagentID)), nil
-	})
-
-	r.Register("interrupt_agent", func(ctx context.Context, args string) (tools.Result, error) {
-		var p struct {
-			AgentID string `json:"agent_id"`
-		}
-		if err := tools.DecodeJSON(args, &p); err != nil {
-			return tools.Result{}, err
-		}
-		if err := m.Interrupt(a, p.AgentID); err != nil {
-			return tools.Result{}, err
-		}
-		return tools.TextResult(fmt.Sprintf("stop request accepted for %s; only its current turn stops — queued messages stay parked and the agent stays available", p.AgentID)), nil
-	})
-
-	r.Register("list_agents", func(ctx context.Context, args string) (tools.Result, error) {
-		var p struct {
-			Scope string `json:"scope"`
-		}
-		if err := tools.DecodeJSON(args, &p); err != nil {
-			return tools.Result{}, err
-		}
-		if p.Scope == "" {
-			p.Scope = "children"
-		}
-		if p.Scope != "children" && p.Scope != "descendants" {
-			return tools.Result{}, fmt.Errorf("scope must be children or descendants")
-		}
-		return tools.TextResult(m.ListAgents(a, p.Scope)), nil
-	})
 }

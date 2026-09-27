@@ -3,6 +3,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -11,13 +12,16 @@ import (
 	"strings"
 )
 
+// grepArgs grep 工具参数（具名类型供 spec 交叉校验测试反射 json tag）。
+type grepArgs struct {
+	Pattern string `json:"pattern"`
+	Path    string `json:"path"`
+	Include string `json:"include"`
+}
+
 func registerGrep(r *Registry, workspace string, fs *FsPolicy, artifacts *Artifacts) {
 	r.Register("grep", func(ctx context.Context, args string) (Result, error) {
-		var a struct {
-			Pattern string `json:"pattern"`
-			Path    string `json:"path"`
-			Include string `json:"include"`
-		}
+		var a grepArgs
 		if err := decodeArgs(args, &a); err != nil {
 			return Result{}, err
 		}
@@ -44,7 +48,9 @@ func registerGrep(r *Registry, workspace string, fs *FsPolicy, artifacts *Artifa
 				return Result{}, fmt.Errorf("invalid include glob: %v", err)
 			}
 		}
-		matches, err := GrepFiles(re, base, includeRe, 251)
+		// 单趟收集全部匹配（匹配行很小，内存无虞），超 250 条时
+		// 内存中截断展示 + 全量落盘，避免超限时重扫一遍文件树
+		matches, err := GrepFiles(re, base, includeRe, -1)
 		if err != nil {
 			return Result{}, err
 		}
@@ -54,8 +60,7 @@ func registerGrep(r *Registry, workspace string, fs *FsPolicy, artifacts *Artifa
 		if len(matches) <= 250 {
 			return TextResult(strings.Join(matches, "\n")), nil
 		}
-		all, _ := GrepFiles(re, base, includeRe, -1)
-		path, err := artifacts.Save("grep", strings.Join(all, "\n")+"\n")
+		path, err := artifacts.Save("grep", strings.Join(matches, "\n")+"\n")
 		if err != nil {
 			return Result{}, err
 		}
@@ -65,49 +70,28 @@ func registerGrep(r *Registry, workspace string, fs *FsPolicy, artifacts *Artifa
 }
 
 // GrepFiles 逐文件搜正则：输出 "文件" 标题 + "行号:内容" 行。cap>0 时
-// 最多返回 cap 条（文件标题不计入）。
+// 最多返回 cap 条（文件标题不计入）。遍历骨架与 glob 共用（walkFiles），
+// 这里贡献 include 过滤、8MB/非常规文件与二进制跳过。
 func GrepFiles(re *regexp.Regexp, base string, include *regexp.Regexp, capLimit int) ([]string, error) {
-	baseAbs := absOr(base)
 	var out []string
 	count := 0
-	err := filepath.WalkDir(baseAbs, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() {
-			name := d.Name()
-			if p != baseAbs && (name == ".git" || name == ".hg" || name == ".svn") {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if include != nil && !include.MatchString(d.Name()) {
-			return nil
+	walkFiles(base, func(p, rel string, info os.FileInfo) bool {
+		if include != nil && !include.MatchString(filepath.Base(p)) {
+			return true
 		}
 		if capLimit > 0 && count >= capLimit {
-			return filepath.SkipAll
+			return false // 截断：结束整趟遍历
 		}
-		info, ierr := d.Info()
-		if ierr != nil || !info.Mode().IsRegular() || info.Size() > 8<<20 {
-			return nil
+		if !info.Mode().IsRegular() || info.Size() > 8<<20 {
+			return true
 		}
 		data, rerr := os.ReadFile(p)
 		if rerr != nil {
-			return nil
+			return true
 		}
-		// 跳过二进制文件
-		for i, b := range data {
-			if b == 0 {
-				_ = i
-				return nil
-			}
-			if i > 1<<20 {
-				break
-			}
-		}
-		rel, rerr := filepath.Rel(baseAbs, p)
-		if rerr != nil {
-			return nil
+		// 跳过二进制文件：开头 1MB 内含 NUL 即视为二进制
+		if bytes.IndexByte(data[:min(len(data), 1<<20)], 0) >= 0 {
+			return true
 		}
 		var fileLines []string
 		for i, line := range strings.Split(string(data), "\n") {
@@ -123,9 +107,8 @@ func GrepFiles(re *regexp.Regexp, base string, include *regexp.Regexp, capLimit 
 			out = append(out, rel)
 			out = append(out, fileLines...)
 		}
-		return nil
+		return true
 	})
-	_ = err // SkipAll 截断或个别不可读项均按正常结束处理
 	return out, nil
 }
 

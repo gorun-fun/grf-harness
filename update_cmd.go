@@ -72,12 +72,20 @@ func confirmUpdate() bool {
 	return false
 }
 
-// printProgress 单行覆盖式下载进度（total 未知时只显示已下载量）。
-func printProgress(done, total int64) {
+// printProgress 单行覆盖式下载进度（自更新，无文件名前缀）。
+func printProgress(done, total int64) { downloadProgress("", done, total) }
+
+// downloadProgress 单行覆盖式下载进度（file 非空时作前缀；total 未知时
+// 只显示已下载量）。gh update 与 gh plugins download 共用。
+func downloadProgress(file string, done, total int64) {
+	pre := ""
+	if file != "" {
+		pre = file + " "
+	}
 	switch {
 	case total > 0:
-		fmt.Printf("\r下载中 %.1f/%.1f MB   ", float64(done)/(1<<20), float64(total)/(1<<20))
+		fmt.Printf("\r%s下载中 %.1f/%.1f MB   ", pre, float64(done)/(1<<20), float64(total)/(1<<20))
 	default:
-		fmt.Printf("\r下载中 %.1f MB   ", float64(done)/(1<<20))
+		fmt.Printf("\r%s下载中 %.1f MB   ", pre, float64(done)/(1<<20))
 	}
 }

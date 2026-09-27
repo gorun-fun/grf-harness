@@ -5,8 +5,6 @@
 package server
 
 import (
-	"encoding/json"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -36,6 +34,11 @@ func (s *Server) handleRetrieve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if sess.root.IsRunning() && sess.curRespID() == id {
+		// 手拼 map 而非构造 *ResponseResource：struct 的回显字段仅
+		// grf:session_id 有 omitempty，其余（completed_at/error/model/
+		// tools/usage/... 二十余个）无条件序列化——直接构造会往进行中
+		// 响应塞进大量 null/空字段，改变现有 wire 形状。此处保持最小
+		// 字段集（wire 形状优先，TestBackgroundAndRetrieve 依赖此形状）。
 		writeJSON(w, 200, map[string]any{
 			"id": id, "object": "response", "created_at": time.Now().Unix(),
 			"status": statusInProgress, "output": []Item{}, "grf:session_id": sid,
@@ -132,11 +135,10 @@ func (s *Server) handleGetConversation(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, err)
 		return
 	}
-	dto := toConversationDTO(sess.meta, sess.curRespID())
 	calls, dur := sess.root.ToolStats()
 	writeJSON(w, 200, map[string]any{
-		"id": dto.ID, "object": "conversation", "created_at": dto.CreatedAt,
-		"workspace": dto.Workspace, "last_response_id": dto.LastResponseID,
+		"id": sess.meta.ID, "object": "conversation", "created_at": sess.meta.CreatedAt,
+		"workspace": sess.meta.Workspace, "last_response_id": sess.curRespID(),
 		"paused":  sess.root.HasPausedCalls(),
 		"running": sess.root.IsRunning(),
 		"policy":  sess.h.Policy(),
@@ -157,16 +159,10 @@ func (s *Server) handleSetPolicy(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, err)
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-	if err != nil {
-		writeError(w, 400, errInvalid, "read body: "+err.Error(), "")
-		return
-	}
 	var req struct {
 		Policy string `json:"policy"`
 	}
-	if err := json.Unmarshal(body, &req); err != nil {
-		writeError(w, 400, errInvalid, "invalid JSON body: "+err.Error(), "")
+	if !decodeJSON(w, r, &req, bodyLimitSmall) {
 		return
 	}
 	// 只收预制两值（与 set_policy 用户可选值一致）；组合串仍可经
@@ -181,6 +177,10 @@ func (s *Server) handleSetPolicy(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"policy": applied})
 }
 
+// archiveSettleTimeout 归档前等待在跑回合落定的期限（包级变量供测试缩短，
+// 避免回归测试真等 5 秒）。
+var archiveSettleTimeout = 5 * time.Second
+
 // handleArchiveConversation DELETE /v1/conversations/{id}：归档（终止在跑
 // 回合 → 存档 → 标记；目录与 workspace 保留，agent 写过的文件不删）。
 func (s *Server) handleArchiveConversation(w http.ResponseWriter, r *http.Request) {
@@ -192,7 +192,15 @@ func (s *Server) handleArchiveConversation(w http.ResponseWriter, r *http.Reques
 	}
 	if sess.root.IsRunning() {
 		sess.cancelTurn()
-		sess.waitTurn(5 * time.Second)
+		// 超时未落定必须拒绝归档：此时照常 dropSession（h.Close 清理产物
+		// 目录）会让脱离缓存的回合 goroutine 继续写快照/存档、在跑工具
+		// 继续写 workspace，与归档存档和 Close 互相踩踏——返回 409 让
+		// 客户端稍后重试（回合通常随即落定）。
+		if !sess.waitTurn(archiveSettleTimeout) {
+			writeError(w, 409, errInvalid,
+				"turn did not settle in time; cancel it and retry archive shortly", "")
+			return
+		}
 	}
 	sess.h.Store.SetCacheKey(sess.h.CacheKey())
 	_, _ = sess.h.Store.SaveSession(sess.root.History())

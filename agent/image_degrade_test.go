@@ -43,10 +43,10 @@ func TestImageRejectDegradesAndRecovers(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 预置带图片的历史（模拟截图工具结果已并入）
-	h.Root.Restore([]llm.Message{
+	h.Root.RestoreFull([]llm.Message{
 		{Role: "user", Content: "看图"},
 		{Role: "user", ContentParts: []llm.Part{llm.TextPart("[tool result: read_image] ok"), llm.ImagePart("image/png", "aGk=")}},
-	})
+	}, "")
 
 	out, err := h.Root.Run(t.Context(), "继续")
 	if err != nil {

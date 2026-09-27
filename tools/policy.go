@@ -29,13 +29,17 @@ var SetPolicyOptions = []SetPolicyOption{
 // setPolicyKeepOpt "保持现状"选项文案（默认拒绝）。
 const setPolicyKeepOpt = "保持当前 policy"
 
+// setPolicyArgs set_policy 工具参数（具名类型供 spec 交叉校验测试反射
+// json tag）。
+type setPolicyArgs struct {
+	Reason string `json:"reason"`
+}
+
 // RegisterSetPolicy 注册 set_policy。host 为宿主 getter（懒取，SetHost 后
 // 生效）；apply 收到用户选定的 policy（预制值之一）由调用方落地。
 func RegisterSetPolicy(r *Registry, host func() Host, apply func(policy string)) {
 	r.Register("set_policy", func(ctx context.Context, args string) (Result, error) {
-		var a struct {
-			Reason string `json:"reason"`
-		}
+		var a setPolicyArgs
 		if err := decodeArgs(args, &a); err != nil {
 			return Result{}, err
 		}
@@ -52,10 +56,10 @@ func RegisterSetPolicy(r *Registry, host func() Host, apply func(policy string))
 			opts = append(opts, Option{Label: o.Label, Description: o.Description})
 		}
 		answers, err := h.AskUser(ctx, []Question{{
-			ID: "set_policy",
-			Header: "策略变更",
+			ID:       "set_policy",
+			Header:   "策略变更",
 			Question: "模型请求变更本会话的 policy 规则，请选择要采用的规则（仅本会话生效，重启后恢复原配置）。\n模型理由：" + a.Reason,
-			Options: opts,
+			Options:  opts,
 		}})
 		if err != nil {
 			return Result{}, fmt.Errorf("the user could not answer: %v", err)

@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"git.gorun.fun/share/grf-harness/store"
 	"git.gorun.fun/share/grf-harness/term"
 )
 
@@ -53,7 +52,8 @@ func (c *Chat) modalInsert(text string) bool {
 	return false
 }
 
-// handleKey 按键分发。
+// handleKey 按键分发：模态（ask/弹窗）优先捕获；其次控制键层
+// （中断/退出、折叠、模式切换、提交、导航、翻页）；未消费的键交行编辑。
 func (c *Chat) handleKey(k term.KeyEv) bool {
 	// 模态优先
 	if c.ask != nil {
@@ -62,125 +62,146 @@ func (c *Chat) handleKey(k term.KeyEv) bool {
 	if c.pop != nil {
 		return c.popKey(k)
 	}
+	if quit, handled := c.controlKey(k); handled {
+		return quit
+	}
+	return c.lineEditKey(k)
+}
 
+// controlKey 控制键层。返回 handled=false 表示该键不属于本层，交行编辑。
+func (c *Chat) controlKey(k term.KeyEv) (quit, handled bool) {
 	switch k.Name {
 	case "ctrl+c":
-		if c.running {
-			if c.cancel != nil {
-				c.cancel()
-			}
-			c.paint(true)
-			return false
-		}
-		// 空闲时按 Ctrl+C：顶栏提示后需在时限内再按一次才退出
-		if time.Since(c.quitAt) < 3*time.Second {
-			return true
-		}
-		c.quitAt = time.Now()
-		c.status = "再按一次 Ctrl+C 退出"
-		c.statusAt = c.quitAt.Add(3 * time.Second)
-		return false
+		return c.interruptKey(), true
 	case "ctrl+d":
 		if c.bang {
-			return false
+			return false, true
 		}
 		if c.ed.Len() == 0 && !c.running {
-			return true
+			return true, true
 		}
+		return false, false // 交行编辑层（无对应键，即忽略）
 	case "ctrl+o":
 		c.toggleLastFold()
-		return false
+		return false, true
 	case "f2":
 		c.app.Root().SetPlanMode(!c.app.Root().InPlanMode())
-		return false
+		return false, true
 	case "enter":
-		if !c.running {
-			if c.bang {
-				// 命令模式：输入整体作为命令直执行；执行后留在模式内
-				// 便于连发命令，仅空输入框再按 ! 退出
-				if c.submit("!" + c.ed.Value()) {
-					return true
-				}
-				return false
-			}
-			// 指令提示可见时：先把选中的完整指令同步到输入框再执行
-			if hints := c.slashHints(); len(hints) > 0 {
-				fields := strings.Fields(hints[c.hintIdx])
-				c.ed.SetValue(fields[0])
-				c.hintIdx = 0
-			}
-			if c.submit(c.ed.Value()) {
-				return true
-			}
-		}
-		return false
+		return c.enterKey(), true
 	case "tab":
 		if hints := c.slashHints(); len(hints) > 0 {
 			fields := strings.Fields(hints[c.hintIdx])
 			c.ed.SetValue(fields[0])
 			c.hintIdx = 0
-			return false
+			return false, true
 		}
 		c.cycleMode()
-		return false
+		return false, true
 	case "shift+tab":
-		c.mouseOn = !c.mouseOn
-		c.scr.SetMouse(c.mouseOn)
-		c.saveMousePref(c.mouseOn)
-		if c.mouseOn {
-			c.status = "鼠标交互已开启：滚轮滚动、单击展开、拖选复制（Shift+Tab 关闭）"
-		} else {
-			c.status = "鼠标交互已关闭：用终端原生选择/复制（Shift+Tab 重新开启）"
-		}
-		c.statusAt = timeNow().Add(3 * time.Second)
-		return false
+		c.toggleMouse()
+		return false, true
 	case "up":
-		if hints := c.slashHints(); len(hints) > 0 {
-			c.hintIdx = (c.hintIdx - 1 + len(hints)) % len(hints)
-			return false
-		}
-		base := c.ed.Value()
-		if c.bang {
-			base = "!" + base
-		}
-		v := c.hist.up(base)
-		if c.bang {
-			v = strings.TrimPrefix(v, "!")
-		}
-		c.ed.SetValue(v)
-		c.ed.CursorEnd()
-		return false
+		c.navHintOrHist(-1)
+		return false, true
 	case "down":
-		if hints := c.slashHints(); len(hints) > 0 {
-			c.hintIdx = (c.hintIdx + 1) % len(hints)
-			return false
-		}
-		base := c.ed.Value()
-		if c.bang {
-			base = "!" + base
-		}
-		v := c.hist.down(base)
-		if c.bang {
-			v = strings.TrimPrefix(v, "!")
-		}
-		c.ed.SetValue(v)
-		c.ed.CursorEnd()
-		return false
+		c.navHintOrHist(1)
+		return false, true
 	case "pgup":
 		c.scrollUp += c.pageStep()
-		return false
+		return false, true
 	case "pgdn":
 		c.scrollUp -= c.pageStep()
 		if c.scrollUp < 0 {
 			c.scrollUp = 0
 		}
-		return false
+		return false, true
 	case "esc":
 		c.scrollUp = 0
+		return false, true
+	}
+	return false, false
+}
+
+// interruptKey Ctrl+C：执行中中断当前回合；空闲时顶栏提示后需在时限内
+// 再按一次才退出。
+func (c *Chat) interruptKey() bool {
+	if c.running {
+		if c.cancel != nil {
+			c.cancel()
+		}
+		c.paint(true)
 		return false
 	}
+	if time.Since(c.quitAt) < 3*time.Second {
+		return true
+	}
+	c.quitAt = time.Now()
+	c.status = "再按一次 Ctrl+C 退出"
+	c.statusAt = c.quitAt.Add(3 * time.Second)
+	return false
+}
 
-	// 行编辑键
+// enterKey 回车提交：命令模式下输入整体作为命令直执行；普通模式在指令
+// 提示可见时先把选中的完整指令同步到输入框再执行。
+func (c *Chat) enterKey() bool {
+	if c.running {
+		return false
+	}
+	if c.bang {
+		// 命令模式：输入整体作为命令直执行；执行后留在模式内
+		// 便于连发命令，仅空输入框再按 ! 退出
+		return c.submit("!" + c.ed.Value())
+	}
+	// 指令提示可见时：先把选中的完整指令同步到输入框再执行
+	if hints := c.slashHints(); len(hints) > 0 {
+		fields := strings.Fields(hints[c.hintIdx])
+		c.ed.SetValue(fields[0])
+		c.hintIdx = 0
+	}
+	return c.submit(c.ed.Value())
+}
+
+// toggleMouse Shift+Tab 开关鼠标交互并记忆偏好。
+func (c *Chat) toggleMouse() {
+	c.mouseOn = !c.mouseOn
+	c.scr.SetMouse(c.mouseOn)
+	c.saveMousePref(c.mouseOn)
+	if c.mouseOn {
+		c.status = "鼠标交互已开启：滚轮滚动、单击展开、拖选复制（Shift+Tab 关闭）"
+	} else {
+		c.status = "鼠标交互已关闭：用终端原生选择/复制（Shift+Tab 重新开启）"
+	}
+	c.statusAt = timeNow().Add(3 * time.Second)
+}
+
+// navHintOrHist 上/下方向键（dir=-1/+1）：指令提示可见时轮选提示，
+// 否则走输入历史（命令模式下进出带 "!" 前缀，取值后光标落行尾）。
+func (c *Chat) navHintOrHist(dir int) {
+	if hints := c.slashHints(); len(hints) > 0 {
+		c.hintIdx = (c.hintIdx + dir + len(hints)) % len(hints)
+		return
+	}
+	base := c.ed.Value()
+	if c.bang {
+		base = "!" + base
+	}
+	var v string
+	if dir < 0 {
+		v = c.hist.up(base)
+	} else {
+		v = c.hist.down(base)
+	}
+	if c.bang {
+		v = strings.TrimPrefix(v, "!")
+	}
+	c.ed.SetValue(v)
+	c.ed.CursorEnd()
+}
+
+// lineEditKey 行编辑键：删除/光标移动/词跳转与字符插入（空输入框按
+// "!" 切换命令模式）；其余键忽略。
+func (c *Chat) lineEditKey(k term.KeyEv) bool {
 	switch k.Name {
 	case "backspace":
 		c.ed.Backspace()
@@ -311,25 +332,18 @@ func (c *Chat) handleMouse(m term.MouseEv) {
 			c.clickExpand(c.dragA)
 			return
 		}
-		// 拖选：复制覆盖的内容行
+		// 拖选：复制覆盖的内容行（与渲染共用同一份组帧结果，行号换算
+		// 才不会因 live 段文案/视口预算的漂移取错行）
 		lo, hi := c.dragA, c.dragB
 		if lo > hi {
 			lo, hi = hi, lo
 		}
-		lines, _, _, _ := c.frameLines()
+		f := c.frame()
 		var picked []string
-		vp := c.height - 3
-		if len(lines) < vp {
-			vp = len(lines)
-		}
-		base := len(c.visibleContentLines()) - vp
-		if base < 0 {
-			base = 0
-		}
 		for abs := lo; abs <= hi; abs++ {
-			row := abs - base
-			if row >= 0 && row < len(lines)-3 && row < vp {
-				picked = append(picked, term.StripANSI(lines[row]))
+			row := abs - f.base
+			if row >= 0 && row < len(f.show) {
+				picked = append(picked, term.StripANSI(f.show[row]))
 			}
 		}
 		if len(picked) > 0 {
@@ -340,58 +354,20 @@ func (c *Chat) handleMouse(m term.MouseEv) {
 	}
 }
 
-// visibleContentLines 内容区总行数（按当前宽度；用于绝对行号换算）。
-func (c *Chat) visibleContentLines() []string {
-	w := c.width - 2
-	if w < 4 {
-		w = 4
-	}
-	var lines []string
-	for _, b := range c.blocks {
-		lines = append(lines, term.Wrap(renderBlock(b), w)...)
-	}
-	if c.running {
-		for _, sv := range c.hub.segViews() {
-			text := sv.text
-			if sv.think {
-				text = fmt.Sprintf("💭 思考 %ds，%d 字", sv.secs, sv.chars)
-			}
-			lines = append(lines, term.Wrap(text, w)...)
-		}
-	}
-	return lines
-}
-
-// absLine 显示行 Y → 内容绝对行号。
+// absLine 显示行 Y → 内容绝对行号（与 frame 的滚动窗口共用同一预算）。
 func (c *Chat) absLine(y int) int {
-	lines := c.visibleContentLines()
-	vp := c.height - 3
-	if len(lines) > vp {
-		from := len(lines) - vp - c.scrollUp
-		if from < 0 {
-			from = 0
-		}
-		return from + y
-	}
-	return y
+	return c.frame().base + y
 }
 
-// clickExpand 单击内容行：命中思考/工具块则展开/折叠。
-func (c *Chat) clickExpand(absLine int) {
-	w := c.width - 2
-	if w < 4 {
-		w = 4
+// clickExpand 单击内容行：命中思考/工具块则展开/折叠（行→块映射来自
+// 组帧结果，不重复 wrap）。
+func (c *Chat) clickExpand(abs int) {
+	idx, ok := c.frame().lineBlk[abs]
+	if !ok || idx < 0 {
+		return
 	}
-	pos := 0
-	for i, b := range c.blocks {
-		h := len(term.Wrap(renderBlock(b), w))
-		if absLine >= pos && absLine < pos+h {
-			if b.kind == blkThink || b.kind == blkTools {
-				c.blocks[i].expanded = !c.blocks[i].expanded
-			}
-			return
-		}
-		pos += h
+	if c.blocks[idx].kind == blkThink || c.blocks[idx].kind == blkTools {
+		c.blocks[idx].expanded = !c.blocks[idx].expanded
 	}
 }
 
@@ -411,57 +387,8 @@ func (c *Chat) submit(raw string) bool {
 		c.execBang(strings.TrimSpace(strings.TrimPrefix(input, "!")))
 		return false
 	}
-
-	switch input {
-	case "/exit", "/quit":
-		return true
-	case "/new", "/clear":
-		if c.running {
-			c.emitBlock(block{kind: blkErr, text: "当前有任务在执行，等空闲后再开新会话"})
-			return false
-		}
-		c.app.NewSession()
-		c.blocks = nil
-		c.todos = nil
-		c.goalText = ""
-		c.scrollUp = 0
-		c.emitBlock(block{kind: blkDim, text: "已保存当前会话并开启新会话"})
-		return false
-	case "/help":
-		c.emitBlock(block{kind: blkText, text: `/help   显示本帮助
-!       空输入框按 ! 进入命令模式：所输命令回车直接执行（再按 ! 退出）
-/init   分析代码库并生成/更新 AGENTS.md
-/model  弹窗选择模型；/model 提供商/模型 直填切换
-/resume 弹窗恢复历史会话；/resume N 按序号恢复
-/plan   进入/退出计划模式（F2 同效）
-/goal   查看当前 goal 状态
-/new    保存当前会话并清屏开新会话（/clear 同效）
-/exit   退出（/quit 同效；Ctrl+C 空闲时按两次退出，Ctrl+D 同）
-快捷键：Ctrl+O 展开/折叠思考与工具块 · Tab 补全/切换模式（auto→计划→审批） · Shift+Tab 切换鼠标 · PgUp/PgDn 翻页
-鼠标：滚轮滚动 · 单击展开 · 拖选复制`})
-		return false
-	case "/init":
-		if c.running {
-			c.emitBlock(block{kind: blkErr, text: "当前有任务在执行，等空闲后再 /init"})
-			return false
-		}
-		c.emitBlock(block{kind: blkDim, text: "（初始化工作区：分析代码库并生成 AGENTS.md）"})
-		c.startRun("初始化工作区说明：请先分析当前工作区的代码结构（目录布局、构建命令、测试命令、技术栈与架构约定），" +
-			"然后在工作区根目录创建 AGENTS.md——面向 coding agent 的工作指南，包含：项目概述、构建与测试命令、" +
-			"代码风格与关键约定、常见的坑。若 AGENTS.md 已存在，在其基础上核对并增补缺漏，不要整体重写。" +
-			"注意：AGENTS.md 不会被自动注入上下文（保持默认提示词精简），后续会话的 agent 会按需自行读取，" +
-			"因此内容务必精炼、可扫描、只写稳定事实。")
-		return false
-	case "/plan":
-		c.app.Root().SetPlanMode(!c.app.Root().InPlanMode())
-		return false
-	case "/goal":
-		if g := c.app.Harness.Goals.Marshal(); g != "" {
-			c.emitBlock(block{kind: blkText, text: g})
-		} else {
-			c.emitBlock(block{kind: blkDim, text: "（当前无 goal）"})
-		}
-		return false
+	if handled, quit := c.handleSlash(input); handled {
+		return quit
 	}
 	if input == "/model" || strings.HasPrefix(input, "/model ") {
 		// 回合运行中不切换：中途换模型会让同一回合前后半落在不同模型上
@@ -493,18 +420,12 @@ func (c *Chat) submit(raw string) bool {
 			c.emitBlock(block{kind: blkErr, text: "用法: /resume N（N 为列表序号）"})
 			return false
 		}
-		sessions := c.app.Harness.Store.ListSessions(0)
-		if n > len(sessions) {
-			c.emitBlock(block{kind: blkErr, text: fmt.Sprintf("序号超出范围（共 %d 条会话）", len(sessions))})
-			return false
-		}
-		sess, rerr := store.LoadSessionFull(sessions[n-1].Path)
+		title, rerr := c.app.ResumeByIndex(n)
 		if rerr != nil {
-			c.emitBlock(block{kind: blkErr, text: "读取会话失败: " + rerr.Error()})
+			c.emitBlock(block{kind: blkErr, text: rerr.Error()})
 			return false
 		}
-		c.app.Restore(sess)
-		c.resetForReplay("已恢复会话: " + sessions[n-1].Title)
+		c.resetForReplay("已恢复会话: " + title)
 		return false
 	}
 	if strings.HasPrefix(input, "/") {
@@ -513,6 +434,65 @@ func (c *Chat) submit(raw string) bool {
 	}
 	c.startRun(input)
 	return false
+}
+
+// handleSlash 无参数的纯开关类斜杠指令；返回 handled=false 表示不属于
+// 下表指令（/model 与 /resume 含弹窗与参数路径，留在 submit 处理）。
+func (c *Chat) handleSlash(input string) (handled, quit bool) {
+	switch input {
+	case "/exit", "/quit":
+		return true, true
+	case "/new", "/clear":
+		if c.running {
+			c.emitBlock(block{kind: blkErr, text: "当前有任务在执行，等空闲后再开新会话"})
+			return true, false
+		}
+		c.app.NewSession()
+		c.blocks = nil
+		c.todos = nil
+		c.goalText = ""
+		c.scrollUp = 0
+		c.emitBlock(block{kind: blkDim, text: "已保存当前会话并开启新会话"})
+		return true, false
+	case "/help":
+		// 指令集与 app.SlashCmds 表保持同步（表是前缀提示/补全的事实
+		// 来源）；此处手写保留 TUI 特有的详细说明与快捷键/鼠标行
+		c.emitBlock(block{kind: blkText, text: `/help   显示本帮助
+!       空输入框按 ! 进入命令模式：所输命令回车直接执行（再按 ! 退出）
+/init   分析代码库并生成/更新 AGENTS.md
+/model  弹窗选择模型；/model 提供商/模型 直填切换
+/resume 弹窗恢复历史会话；/resume N 按序号恢复
+/plan   进入/退出计划模式（F2 同效）
+/goal   查看当前 goal 状态
+/new    保存当前会话并清屏开新会话（/clear 同效）
+/exit   退出（/quit 同效；Ctrl+C 空闲时按两次退出，Ctrl+D 同）
+快捷键：Ctrl+O 展开/折叠思考与工具块 · Tab 补全/切换模式（auto→计划→审批） · Shift+Tab 切换鼠标 · PgUp/PgDn 翻页
+鼠标：滚轮滚动 · 单击展开 · 拖选复制`})
+		return true, false
+	case "/init":
+		if c.running {
+			c.emitBlock(block{kind: blkErr, text: "当前有任务在执行，等空闲后再 /init"})
+			return true, false
+		}
+		c.emitBlock(block{kind: blkDim, text: "（初始化工作区：分析代码库并生成 AGENTS.md）"})
+		c.startRun("初始化工作区说明：请先分析当前工作区的代码结构（目录布局、构建命令、测试命令、技术栈与架构约定），" +
+			"然后在工作区根目录创建 AGENTS.md——面向 coding agent 的工作指南，包含：项目概述、构建与测试命令、" +
+			"代码风格与关键约定、常见的坑。若 AGENTS.md 已存在，在其基础上核对并增补缺漏，不要整体重写。" +
+			"注意：AGENTS.md 不会被自动注入上下文（保持默认提示词精简），后续会话的 agent 会按需自行读取，" +
+			"因此内容务必精炼、可扫描、只写稳定事实。")
+		return true, false
+	case "/plan":
+		c.app.Root().SetPlanMode(!c.app.Root().InPlanMode())
+		return true, false
+	case "/goal":
+		if g := c.app.Harness.Goals.Marshal(); g != "" {
+			c.emitBlock(block{kind: blkText, text: g})
+		} else {
+			c.emitBlock(block{kind: blkDim, text: "（当前无 goal）"})
+		}
+		return true, false
+	}
+	return false, false
 }
 
 // timeNow 可测试时间点。

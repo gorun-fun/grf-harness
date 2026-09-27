@@ -26,7 +26,7 @@ import (
 // BashDeps bash 工具依赖。
 type BashDeps struct {
 	Workspace string
-	Fs        *FsPolicy // 升级记录复用其 denied 表
+	Fs        *FsPolicy // 仅读策略开关（Limits；bash 的升级记录在本地 deniedBash，不经它）
 	Jobs      *JobManager
 	Artifacts *Artifacts
 	// 沙箱开关实时读 d.Fs.Limits()（set_policy 可运行时调整 policy）
@@ -108,20 +108,23 @@ func sandboxProfile(workspace string, readLimit bool) string {
 
 var deniedMarker = "[sandbox: file access denied under write-workspace mode]"
 
+// bashArgs bash 工具参数（具名类型供 spec 交叉校验测试反射 json tag）。
+type bashArgs struct {
+	Command            string `json:"command"`
+	Description        string `json:"description"`
+	TimeoutMS          int    `json:"timeoutMs"`
+	Workdir            string `json:"workdir"`
+	RunInBackground    bool   `json:"run_in_background"`
+	SandboxPermissions string `json:"sandbox_permissions"`
+	Justification      string `json:"justification"`
+}
+
 // RegisterBash 注册 bash 工具。
 func RegisterBash(r *Registry, d BashDeps) {
 	var deniedBash atomic.Value // string：最近一次被拒的命令（升级重试校验）
 
 	r.Register("bash", func(ctx context.Context, args string) (Result, error) {
-		var a struct {
-			Command            string `json:"command"`
-			Description        string `json:"description"`
-			TimeoutMS          int    `json:"timeoutMs"`
-			Workdir            string `json:"workdir"`
-			RunInBackground    bool   `json:"run_in_background"`
-			SandboxPermissions string `json:"sandbox_permissions"`
-			Justification      string `json:"justification"`
-		}
+		var a bashArgs
 		if err := decodeArgs(args, &a); err != nil {
 			return Result{}, err
 		}
@@ -130,8 +133,8 @@ func RegisterBash(r *Registry, d BashDeps) {
 		}
 		if a.Workdir == "" {
 			a.Workdir = d.Workspace
-		} else if !filepathIsAbs(a.Workdir) {
-			a.Workdir = joinPath(d.Workspace, a.Workdir)
+		} else if !filepath.IsAbs(a.Workdir) {
+			a.Workdir = filepath.Join(d.Workspace, a.Workdir)
 		}
 
 		// 升级重试协议
@@ -177,7 +180,10 @@ func RegisterBash(r *Registry, d BashDeps) {
 		if a.RunInBackground {
 			id := d.Jobs.StartStream("stream", firstNonEmpty(a.Description, a.Command), func(jctx context.Context, emit func(string)) error {
 				cmd := build(jctx, unconfined)
-				cmd.Cancel = nil
+				// job_kill 经 ctx 取消：先 SIGINT 给清理机会，5s 后由
+				// WaitDelay 兜底 SIGKILL 并关闭管道——置 nil 会让进程
+				// 永不停止（ctx 完成后仅等管道，作业僵尸运行）。
+				cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
 				var buf bytes.Buffer
 				cmd.Stdout = writerFunc(func(p []byte) (int, error) {
 					buf.Write(p)
@@ -300,7 +306,3 @@ func tailBytes(s string, n int) string {
 	}
 	return s[len(s)-n:]
 }
-
-func filepathIsAbs(p string) bool { return len(p) > 0 && p[0] == '/' }
-
-func joinPath(base, rel string) string { return base + "/" + rel }

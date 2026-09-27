@@ -23,13 +23,14 @@ var (
 	// 程度）、">" 可能因流截断缺失；整体缺失时懒惰体匹配到结尾（$ 兜底）。
 	// 闭合只认 tool 前缀的同名标签，避免 invoke 体被体内 parameter 的
 	// 闭合标签提前截断；DSML 开标签也可能配普通 </tool_call> 闭合（混搭）
-	dsmlCloser = `(?:</(?:｜｜DSML｜｜)?tool\w*\s*>?|$)`
-	reDSMLWrapper = regexp.MustCompile(`(?s)<｜｜DSML｜｜tool_calls>\s*(.*?)` + dsmlCloser)
+	// 标记常量见 fallback_tags.go
+	dsmlCloser    = `(?:</(?:` + dsmlCore + `)?tool\w*\s*>?|$)`
+	reDSMLWrapper = regexp.MustCompile(`(?s)` + dsmlMarker + `tool_calls>\s*(.*?)` + dsmlCloser)
 	// 单数形式：标签体直接是一个 JSON 对象（name 平铺在顶层，其余键为参数）
-	reDSMLSingle = regexp.MustCompile(`(?s)<｜｜DSML｜｜tool_call>\s*(.*?)` + dsmlCloser)
-	reDSMLInvoke  = regexp.MustCompile(`(?s)<｜｜DSML｜｜invoke\s+name\s*=\s*"([^"]+)"[^>]*>(.*?)(?:</｜｜DSML｜｜inv\w*\s*>?|$)`)
-	reDSMLParam   = regexp.MustCompile(`(?s)<｜｜DSML｜｜parameter\b([^>]*)>(.*?)(?:</｜｜DSML｜｜parameter>|$)`)
-	reDSMLAttr    = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*"([^"]*)"`)
+	reDSMLSingle = regexp.MustCompile(`(?s)` + dsmlMarker + `tool_call>\s*(.*?)` + dsmlCloser)
+	reDSMLInvoke = regexp.MustCompile(`(?s)` + dsmlMarker + `invoke\s+name\s*=\s*"([^"]+)"[^>]*>(.*?)(?:</` + dsmlCore + `inv\w*\s*>?|$)`)
+	reDSMLParam  = regexp.MustCompile(`(?s)` + dsmlMarker + `parameter\b([^>]*)>(.*?)(?:</` + dsmlCore + `parameter>|$)`)
+	reDSMLAttr   = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*"([^"]*)"`)
 )
 
 // extractDSMLCalls 从一段文本提取全部 DSML 工具调用，并返回剔除标签后
@@ -38,7 +39,7 @@ var (
 func extractDSMLCalls(text string) (calls []ToolCall, cleaned string) {
 	// 先把竖线/空格变体标记归一为标准全角形式（reMarkerVariant 见
 	// fallback_tags.go），后续正则只需处理一种写法
-	text = reMarkerVariant.ReplaceAllString(text, "｜｜DSML｜｜")
+	text = reMarkerVariant.ReplaceAllString(text, dsmlCore)
 	// 单数形式 <｜｜DSML｜｜tool_call>{...}</｜｜DSML｜｜tool_call>：体是
 	// JSON 对象，name 平铺在顶层，其余键即参数（兼容嵌套 arguments）。
 	for _, blk := range reDSMLSingle.FindAllStringSubmatchIndex(text, -1) {

@@ -11,11 +11,12 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"git.gorun.fun/share/grf-harness/llm"
-	"git.gorun.fun/share/grf-harness/store"
 	"git.gorun.fun/share/grf-harness/term"
 	"git.gorun.fun/share/grf-harness/tools"
 )
@@ -31,8 +32,6 @@ type Agent struct {
 	client   *llm.Client
 	clientMu sync.Mutex // client 引用的并发读写（运行中切换模型，见 SetClient）
 	reg      *tools.Registry
-	st       *store.Store
-	root     string
 	system   string
 
 	mu      sync.Mutex
@@ -54,7 +53,7 @@ type Agent struct {
 	planExtra   map[string]bool // 计划模式额外拦截的工具名（未标只读的插件工具）
 	toolCalls   int             // 已执行的工具调用数
 	toolTime    time.Duration   // 工具执行累计耗时
-	bgReminded  bool            // 已发过后台作业收割提醒（每会话至多一次）
+	bgReminded  bool            // 已发过后台作业收割提醒（每会话至多一次；仅回合 goroutine 访问，不加锁）
 	pausedSteps int             // 暂停时已消耗的工具循环步数（Resume 续用，见 pause.go）
 
 	mgr        *Manager
@@ -68,23 +67,18 @@ type Agent struct {
 	// OnIdleNotice：agent 空闲时收到通知（后台子代理落定）——由上层
 	//（TUI/app）注册以触发自动续跑；未注册时通知并入下次请求。
 	OnIdleNotice func(text string)
-	noticeCh     chan struct{}
-	noticeOnce   sync.Once
 }
 
 // NewAgent 创建根 agent（工具链由 BuildRegistry 组装完成后注入）。
-func NewAgent(id string, client *llm.Client, reg *tools.Registry, st *store.Store, root, system string) *Agent {
+func NewAgent(id string, client *llm.Client, reg *tools.Registry, system string) *Agent {
 	a := &Agent{
 		ID:        id,
 		Label:     "main",
 		client:    client,
 		reg:       reg,
-		st:        st,
-		root:      root,
 		system:    system,
 		maxSteps:  DefaultMaxSteps,
 		Jobs:      tools.NewJobManager(),
-		noticeCh:  make(chan struct{}, 1),
 		humanTurn: true,
 	}
 	a.history = []llm.Message{{Role: "system", Content: system}}
@@ -208,4 +202,24 @@ func firstLine(s string) string {
 		return t
 	}
 	return "(empty)"
+}
+
+// oneLine 压平多行为单行并截断（事件摘要用；n 为 rune 上限，超出加
+// 省略号）。
+func oneLine(s string, n int) string {
+	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "…"
+	}
+	return s
+}
+
+// shortIDSeq shortID 的原子自增计数。
+var shortIDSeq atomic.Int64
+
+// shortID 展示用短 id（hex 计数）。ID 唯一性由 agent_%d_/goal_%d_ 的
+// seq 前缀保证，这里只是装饰，纯自增计数即可（原时间戳混合运算无额外
+// 价值）。
+func shortID() string {
+	return fmt.Sprintf("%x", shortIDSeq.Add(1))
 }

@@ -8,6 +8,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -140,6 +141,17 @@ func (a *App) ExecBang(ctx context.Context, cmd string) tools.Result {
 	return a.Root().Reg().Execute(ctx, "bash", string(args))
 }
 
+// RunBang 直执行并整理输出：ExecBang + BangOutput 一步完成（错误归一为
+// error，原始 res.Err 字符串原样包转），三个表面共用；展示方式（打印/
+// 内容块）由调用方决定。
+func (a *App) RunBang(ctx context.Context, cmd string) (string, error) {
+	res := a.ExecBang(ctx, cmd)
+	if res.Err != "" {
+		return "", errors.New(res.Err)
+	}
+	return BangOutput(res.Text), nil
+}
+
 // BangOutput 清理直执行输出：去掉面向模型的 exit code 标注（"!cmd"
 // 展示给用户看原始输出）。
 func BangOutput(text string) string {
@@ -165,6 +177,23 @@ func (a *App) Restore(sess store.Session) {
 	}
 	a.Harness.Store.ResetCurrent()
 	a.Harness.Goals.DisarmAfterResume()
+}
+
+// ResumeByIndex 按列表序号恢复历史会话（/resume N 的公共语义：序号对应
+// ListSessions(0) 全量列表的 1 起下标，越界或读取失败返回错误，成功即
+// 完成 Restore 并返回会话标题）。调用方负责参数解析（n<1 的用法提示）
+// 与展示。
+func (a *App) ResumeByIndex(n int) (title string, err error) {
+	sessions := a.Harness.Store.ListSessions(0)
+	if n < 1 || n > len(sessions) {
+		return "", fmt.Errorf("序号超出范围（共 %d 条会话）", len(sessions))
+	}
+	sess, err := store.LoadSessionFull(sessions[n-1].Path)
+	if err != nil {
+		return "", fmt.Errorf("读取会话失败: %w", err)
+	}
+	a.Restore(sess)
+	return sessions[n-1].Title, nil
 }
 
 // NewSession 保存当前会话记录并开启全新会话（/new、/clear 共用）。

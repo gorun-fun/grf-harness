@@ -1,5 +1,5 @@
 // Package weixin 微信 ClawBot 消息渠道：`gh connect weixin` 拉起守护进程
-// （见根目录 connect.go），长轮询收消息后交本地 agent（全部 25 个工具）
+// （见根目录 connect.go），长轮询收消息后交本地 agent（全部 28 个工具）
 // 处理并回复。按功能线条分文件：bot.go（Run 入口/扫码登录/长轮询主循环）、
 // pool.go（每用户 agent 会话池）、mux.go（按用户分发与回合执行）、
 // login.go（扫码流程）、media.go（媒体下载解密）、ilink.go（HTTP 客户端）、
@@ -19,13 +19,10 @@ import (
 	"git.gorun.fun/share/grf-harness/llm"
 )
 
-// DefaultSystemPrompt 微信侧默认系统提示词。
-const DefaultSystemPrompt = "你是运行在用户微信里的 AI 助手,回答请简洁准确。"
-
 const replyOnLlmError = "⚠️ AI 服务暂时不可用,请稍后再试"
 
 // Run 执行 connect weixin:扫码登录(必要时)→ 长轮询收消息 → 交本地 agent
-// (全部 25 个工具)处理并回复。阻塞直到 ctx 取消;退出前发送 notifystop。
+// (全部 28 个工具)处理并回复。阻塞直到 ctx 取消;退出前发送 notifystop。
 // workspace 为 agent 工作区;空串用用户 home 目录。
 func Run(ctx context.Context, systemPrompt, workspace string) error {
 	// agent 使用 gh 当前生效的模型配置(~/.grf/settings.json)
@@ -117,7 +114,7 @@ func LoginInteractive(ctx context.Context) error {
 func messageLoop(ctx context.Context, bot *Client, st *State, client *llm.Client,
 	systemPrompt, workspace string, autoApprove bool) error {
 	pool := newAgentPool(client, systemPrompt, workspace, autoApprove)
-	mux := newUserMux(ctx, bot, st, pool)
+	mux := newUserMux(ctx, bot, pool)
 	pool.mux = mux
 	for {
 		if ctx.Err() != nil {
@@ -158,7 +155,7 @@ func messageLoop(ctx context.Context, bot *Client, st *State, client *llm.Client
 				if !ok {
 					continue
 				}
-				if piece := extractPiece(ctx, pool, msg); piece != nil {
+				if piece := extractPiece(msg); piece != nil {
 					mux.push(piece)
 				}
 			}

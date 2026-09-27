@@ -13,12 +13,11 @@ import (
 // ---- 通用列表弹窗 ----
 
 type popup struct {
-	title string
-	items []string
-	sel   int
-	top   int // 可视窗口首项（长列表滚动）
-	mark  string // 打 ✓ 的项
-	kind  string // "model" | "resume"
+	title  string
+	items  []string
+	sel    int
+	top    int    // 可视窗口首项（长列表滚动）
+	mark   string // 打 ✓ 的项
 	onDone func(idx int)
 }
 
@@ -80,12 +79,18 @@ type askForm struct {
 	custom  bool    // 有选项问题切到"✎ 自定义输入"行后的手输模式
 	text    *Editor // 无选项问题与自定义输入的文本输入
 	answers map[string]any
-	head    string // 标题行前缀（空 = ask_user_question）
-	done    func(answers map[string]any, err error)
+	// picked 每题作答来源：选中选项的下标；-1 = 文本作答（自定义输入/
+	// 无选项题；多选无单一选中下标也记 -1）。审批类消费方（host.go）
+	// 据此按下标判定，避免自定义输入恰好与选项文案相同或选项改文案
+	// 导致的误判。
+	picked map[string]int
+	head   string // 标题行前缀（空 = ask_user_question）
+	done   func(answers map[string]any, picked map[string]int, err error)
 }
 
-func newAskForm(qs []tools.Question, done func(map[string]any, error)) *askForm {
-	f := &askForm{qs: qs, checked: map[int]bool{}, answers: map[string]any{}, done: done}
+func newAskForm(qs []tools.Question, done func(map[string]any, map[string]int, error)) *askForm {
+	f := &askForm{qs: qs, checked: map[int]bool{}, answers: map[string]any{},
+		picked: map[string]int{}, done: done}
 	f.text = NewEditor("答: ")
 	return f
 }
@@ -116,13 +121,12 @@ func (f *askForm) render(w int) []string {
 		lines = append(lines, " "+ln)
 	}
 	if len(f.q().Options) == 0 || f.custom {
-		t, col := f.text.Render(w - 2)
+		t, _ := f.text.Render(w - 2)
 		hint := "（回车提交 · Esc 取消全部提问）"
 		if f.custom {
 			hint = "（回车提交自定义答案 · Esc 返回选项）"
 		}
 		lines = append(lines, " "+t, dim("  "+hint))
-		_ = col
 		return lines
 	}
 	for i, opt := range f.q().Options {
@@ -163,6 +167,7 @@ func (f *askForm) finishQuestion() {
 	switch {
 	case len(q.Options) == 0 || f.custom:
 		f.answers[q.ID] = strings.TrimSpace(f.text.Value())
+		f.picked[q.ID] = -1
 	case q.MultiSelect:
 		var labels []string
 		for i, opt := range q.Options {
@@ -174,8 +179,10 @@ func (f *askForm) finishQuestion() {
 			labels = append(labels, q.Options[f.sel].Label)
 		}
 		f.answers[q.ID] = labels
-	case f.sel < len(q.Options):
+		f.picked[q.ID] = -1
+	default: // 单选取选中标签（sel==选项数时走的是上面的自定义输入分支）
 		f.answers[q.ID] = q.Options[f.sel].Label
+		f.picked[q.ID] = f.sel
 	}
 	f.cur++
 	f.sel = 0
@@ -183,12 +190,9 @@ func (f *askForm) finishQuestion() {
 	f.custom = false
 	f.text.Reset()
 	if f.cur >= len(f.qs) {
-		f.done(f.answers, nil)
+		f.done(f.answers, f.picked, nil)
 	}
 }
 
 // ---- 工具审批 ----
 // （沙箱升级审批已复用 ask 表单，见 host.go 的 escRequest 分支）
-
-// fmt 引用（render 中使用）
-var _ = strings.TrimSpace

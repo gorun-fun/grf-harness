@@ -87,7 +87,7 @@ func TestAsyncAwaitHost(t *testing.T) {
 		"agent": func(ip *Interp, args []Value) (Value, error) {
 			return newFuture(func() (Value, error) {
 				time.Sleep(10 * time.Millisecond)
-				return "R:" + ToString(arg(args, 0)), nil
+				return "R:" + ToString(Arg(args, 0)), nil
 			}), nil
 		},
 	}
@@ -111,7 +111,7 @@ func TestParallelHost(t *testing.T) {
 		"agent": func(ip *Interp, args []Value) (Value, error) {
 			return newFuture(func() (Value, error) {
 				time.Sleep(5 * time.Millisecond)
-				return "a" + ToString(arg(args, 0)), nil
+				return "a" + ToString(Arg(args, 0)), nil
 			}), nil
 		},
 	}
@@ -130,7 +130,7 @@ return out.join(",");
 
 // parallelImpl 与 agent 包的 workflow 接线同构的参考实现（供测试）。
 func parallelImpl(ip *Interp, args []Value) (Value, error) {
-	thunks, ok := arg(args, 0).([]any)
+	thunks, ok := Arg(args, 0).([]any)
 	if !ok {
 		return nil, rtErr("parallel expects an array of thunks")
 	}
@@ -157,7 +157,7 @@ func parallelImpl(ip *Interp, args []Value) (Value, error) {
 func TestPipelineHost(t *testing.T) {
 	host := map[string]HostFn{
 		"pipeline": func(ip *Interp, args []Value) (Value, error) {
-			items, _ := arg(args, 0).([]any)
+			items, _ := Arg(args, 0).([]any)
 			stages := make([]*Fn, 0)
 			for _, s := range args[1:] {
 				if f, ok := s.(*Fn); ok {

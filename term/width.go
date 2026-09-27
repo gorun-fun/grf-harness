@@ -46,23 +46,44 @@ func isWide(r rune) bool {
 	return false
 }
 
-// StringWidth 计算 ANSI 转义序列之外的显示宽度。
-func StringWidth(s string) int {
-	w := 0
+// forEachRune ANSI 感知逐 rune 遍历：转义序列中的 rune（含起始 ESC
+// 本身）以 esc=true 回调，转义序列终止判定沿用 isFinalByte；fn 返回
+// false 时立即停止遍历。StringWidth / StripANSI / Truncate 共用此遍历；
+// wrapLine 需要收集完整 SGR 串，保持专用实现。
+func forEachRune(s string, fn func(r rune, esc bool) bool) {
 	esc := false
 	for _, r := range s {
 		if esc {
+			if !fn(r, true) {
+				return
+			}
 			if isFinalByte(r) {
 				esc = false
 			}
 			continue
 		}
 		if r == 0x1b {
+			if !fn(r, true) {
+				return
+			}
 			esc = true
 			continue
 		}
-		w += RuneWidth(r)
+		if !fn(r, false) {
+			return
+		}
 	}
+}
+
+// StringWidth 计算 ANSI 转义序列之外的显示宽度。
+func StringWidth(s string) int {
+	w := 0
+	forEachRune(s, func(r rune, esc bool) bool {
+		if !esc {
+			w += RuneWidth(r)
+		}
+		return true
+	})
 	return w
 }
 
@@ -73,55 +94,13 @@ func isFinalByte(r rune) bool {
 // StripANSI 去除所有 ANSI 转义序列。
 func StripANSI(s string) string {
 	var b strings.Builder
-	esc := false
-	for _, r := range s {
-		if esc {
-			if isFinalByte(r) {
-				esc = false
-			}
-			continue
+	forEachRune(s, func(r rune, esc bool) bool {
+		if !esc {
+			b.WriteRune(r)
 		}
-		if r == 0x1b {
-			esc = true
-			continue
-		}
-		b.WriteRune(r)
-	}
+		return true
+	})
 	return b.String()
-}
-
-// cell 单个显示单元：rune + 宽度（宽字符后补 nil 填充占位）。
-type cell struct {
-	r    rune
-	w    int
-	fill bool
-}
-
-// explode 把一行文本拆成显示单元序列，同时收集遍历中出现的 SGR 样式码。
-func explode(line string) (cells []cell) {
-	esc := false
-	var seq strings.Builder
-	for _, r := range line {
-		if esc {
-			seq.WriteRune(r)
-			if isFinalByte(r) {
-				esc = false
-				_ = seq.String() // 样式仅用于判断，具体延续见 Wrap
-			}
-			continue
-		}
-		if r == 0x1b {
-			esc = true
-			seq.Reset()
-			continue
-		}
-		w := RuneWidth(r)
-		cells = append(cells, cell{r: r, w: w})
-		if w == 2 {
-			cells = append(cells, cell{fill: true})
-		}
-	}
-	return cells
 }
 
 // Wrap 把文本按 width 列软换行成多行，保留其中的 ANSI 样式：折行处补
@@ -213,27 +192,17 @@ func Truncate(s string, width int) string {
 	}
 	var b strings.Builder
 	w := 0
-	esc := false
-	for _, r := range s {
-		if esc {
-			b.WriteRune(r)
-			if isFinalByte(r) {
-				esc = false
+	forEachRune(s, func(r rune, esc bool) bool {
+		if !esc {
+			rw := RuneWidth(r)
+			if w+rw > width {
+				return false
 			}
-			continue
-		}
-		if r == 0x1b {
-			esc = true
-			b.WriteRune(r)
-			continue
-		}
-		rw := RuneWidth(r)
-		if w+rw > width {
-			break
+			w += rw
 		}
 		b.WriteRune(r)
-		w += rw
-	}
+		return true
+	})
 	return b.String()
 }
 

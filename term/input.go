@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 // Event 终端输入事件。
@@ -285,34 +286,13 @@ func atoi(s string) int {
 	return v
 }
 
-// decodeRune 解码 UTF-8 首 rune；非法返回 (0,0)。
+// decodeRune 解码 UTF-8 首 rune；非法或不完整序列按 (0,0) 返回，由
+// 调用方按单字节丢弃（utf8.DecodeRune 对非法/不完整输入返回
+// RuneError 且 size<=1）。
 func decodeRune(b []byte) (rune, int) {
-	c := b[0]
-	var size int
-	switch {
-	case c&0xE0 == 0xC0:
-		size = 2
-	case c&0xF0 == 0xE0:
-		size = 3
-	case c&0xF8 == 0xF0:
-		size = 4
-	default:
+	r, size := utf8.DecodeRune(b)
+	if r == utf8.RuneError && size <= 1 {
 		return 0, 0
 	}
-	if len(b) < size {
-		return 0, 0 // 不完整（正常不会发生：Read 已给完整块）
-	}
-	for i := 1; i < size; i++ {
-		if b[i]&0xC0 != 0x80 {
-			return 0, 0
-		}
-	}
-	switch size {
-	case 2:
-		return rune(c&0x1F)<<6 | rune(b[1]&0x3F), 2
-	case 3:
-		return rune(c&0x0F)<<12 | rune(b[1]&0x3F)<<6 | rune(b[2]&0x3F), 3
-	default:
-		return rune(c&0x07)<<18 | rune(b[1]&0x3F)<<12 | rune(b[2]&0x3F)<<6 | rune(b[3]&0x3F), 4
-	}
+	return r, size
 }

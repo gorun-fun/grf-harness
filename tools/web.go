@@ -97,14 +97,22 @@ func ddgSearch(ctx context.Context, q string) []SearchHit {
 	return ddgHTML(ctx, q)
 }
 
+// ddgPageLimit DDG 结果页响应体读取上限。合并前 lite 取 2MB、html 取
+// 4MB，统一取较宽的 4MB：lite 表格版页面实际远小于 2MB，放宽无损；html
+// 版标记冗余更大，按 2MB 截断会丢尾部结果。
+const ddgPageLimit = 4 << 20
+
 var liteLinkRe = regexp.MustCompile(`(?s)<a[^>]+class="result-link"[^>]*href="([^"]+)"[^>]*>(.*?)</a>`)
 var liteSnipRe = regexp.MustCompile(`(?s)class="result-snippet"[^>]*>(.*?)</td>`)
 
-// ddgLite lite.duckduckgo.com/late 表格版结果。
-func ddgLite(ctx context.Context, q string) []SearchHit {
+var htmlLinkRe = regexp.MustCompile(`(?s)<a[^>]+class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)</a>`)
+var htmlSnipRe = regexp.MustCompile(`(?s)class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>`)
+
+// ddgFetch 抓取并解析一个 DDG POST 结果端点（lite/html 两版除 URL 与
+// 提取正则外逐行相同，故合并）：同一套表单 POST + link/snippet 正则提取。
+func ddgFetch(ctx context.Context, q, endpoint string, linkRe, snipRe *regexp.Regexp) []SearchHit {
 	form := url.Values{"q": {q}}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		"https://lite.duckduckgo.com/lite/", strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil
 	}
@@ -115,14 +123,14 @@ func ddgLite(ctx context.Context, q string) []SearchHit {
 		return nil
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, ddgPageLimit))
 	if err != nil {
 		return nil
 	}
 	page := string(data)
 	var hits []SearchHit
-	links := liteLinkRe.FindAllStringSubmatch(page, -1)
-	snips := liteSnipRe.FindAllStringSubmatch(page, -1)
+	links := linkRe.FindAllStringSubmatch(page, -1)
+	snips := snipRe.FindAllStringSubmatch(page, -1)
 	for i, m := range links {
 		u := cleanDDGURL(m[1])
 		title := htmlText(m[2])
@@ -138,45 +146,14 @@ func ddgLite(ctx context.Context, q string) []SearchHit {
 	return hits
 }
 
-var htmlLinkRe = regexp.MustCompile(`(?s)<a[^>]+class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)</a>`)
-var htmlSnipRe = regexp.MustCompile(`(?s)class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>`)
+// ddgLite lite.duckduckgo.com/lite 表格版结果。
+func ddgLite(ctx context.Context, q string) []SearchHit {
+	return ddgFetch(ctx, q, "https://lite.duckduckgo.com/lite/", liteLinkRe, liteSnipRe)
+}
 
-// ddgHTML html.duckduckgo.com 结果页。
+// ddgHTML html.duckduckgo.com/html 结果页。
 func ddgHTML(ctx context.Context, q string) []SearchHit {
-	form := url.Values{"q": {q}}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		"https://html.duckduckgo.com/html/", strings.NewReader(form.Encode()))
-	if err != nil {
-		return nil
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", ua())
-	resp, err := webClient.Do(req)
-	if err != nil {
-		return nil
-	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if err != nil {
-		return nil
-	}
-	page := string(data)
-	var hits []SearchHit
-	links := htmlLinkRe.FindAllStringSubmatch(page, -1)
-	snips := htmlSnipRe.FindAllStringSubmatch(page, -1)
-	for i, m := range links {
-		u := cleanDDGURL(m[1])
-		title := htmlText(m[2])
-		if u == "" || title == "" {
-			continue
-		}
-		h := SearchHit{Title: title, URL: u}
-		if i < len(snips) {
-			h.Snippet = htmlText(snips[i][1])
-		}
-		hits = append(hits, h)
-	}
-	return hits
+	return ddgFetch(ctx, q, "https://html.duckduckgo.com/html/", htmlLinkRe, htmlSnipRe)
 }
 
 func ua() string {
@@ -221,12 +198,16 @@ func htmlText(s string) string {
 	return strings.TrimSpace(s)
 }
 
+// webSearchArgs web_search 工具参数（具名类型供 spec 交叉校验测试反射
+// json tag）。
+type webSearchArgs struct {
+	Queries []string `json:"queries"`
+}
+
 // RegisterWebSearch 注册 web_search 工具。
 func RegisterWebSearch(r *Registry) {
 	r.Register("web_search", func(ctx context.Context, args string) (Result, error) {
-		var a struct {
-			Queries []string `json:"queries"`
-		}
+		var a webSearchArgs
 		if err := decodeArgs(args, &a); err != nil {
 			return Result{}, err
 		}
@@ -268,6 +249,3 @@ func clipRunes(s string, n int) string {
 	}
 	return string(r[:n]) + "…"
 }
-
-// 保证 time 包被引用（客户端超时）。
-var _ = time.Second

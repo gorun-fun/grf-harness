@@ -86,13 +86,9 @@ func runConfigCmd(args []string) {
 		fatal(fmt.Errorf("读取配置: %w", err))
 	}
 	if len(args) == 0 {
-		path, _ := config.Path()
+		path := config.Path()
 		fmt.Printf("配置文件: %s\n", path)
-		if s.MaxSteps > 0 {
-			fmt.Printf("循环轮次上限: %d（自定义）\n", s.MaxSteps)
-		} else {
-			fmt.Printf("循环轮次上限: %d（默认）\n", agent.DefaultMaxSteps)
-		}
+		printMaxSteps(s)
 		fmt.Printf("策略: %s\n", s.Policy)
 		fmt.Printf("非交互自动批准: %v\n", s.AutoApprove)
 		if s.SystemPrompt != "" {
@@ -121,13 +117,19 @@ func runConfigCmd(args []string) {
 	}
 }
 
+// printMaxSteps 打印循环轮次上限（自定义值或默认值）；gh config 与
+// gh config steps 无参数形态共用。
+func printMaxSteps(s *config.Settings) {
+	if s.MaxSteps > 0 {
+		fmt.Printf("循环轮次上限: %d（自定义）\n", s.MaxSteps)
+	} else {
+		fmt.Printf("循环轮次上限: %d（默认）\n", agent.DefaultMaxSteps)
+	}
+}
+
 func runStepsCmd(args []string, s *config.Settings) {
 	if len(args) == 0 {
-		if s.MaxSteps > 0 {
-			fmt.Printf("循环轮次上限: %d（自定义）\n", s.MaxSteps)
-		} else {
-			fmt.Printf("循环轮次上限: %d（默认）\n", agent.DefaultMaxSteps)
-		}
+		printMaxSteps(s)
 		return
 	}
 	if args[0] == "reset" {
@@ -212,7 +214,7 @@ func runPromptCmd(args []string, s *config.Settings) {
 
 func printVersion() {
 	fmt.Println("grf-harness", app.Version)
-	path, _ := config.Path()
+	path := config.Path()
 	fmt.Printf("配置文件: %s\n", path)
 	if eff, err := config.Load(); err == nil {
 		fmt.Printf("默认模型: %s/%s\n", eff.Provider, eff.Model)

@@ -25,8 +25,8 @@ var (
 	reOpenToolCall = regexp.MustCompile(`<tool_call\s*>`)
 	// 闭合标签变体穷举：</tool_call>、</tool_call（缺 >）、任意程度截断的
 	// 名称（</tool_c>）、混用 DSML 风格的 </｜｜DSML｜｜tool_c...> 及其截断
-	//（变体归一正则见 fallback_tags.go，与此处保持同一套写法）
-	reLooseCloser = regexp.MustCompile(`\s*</(?:(?:` + reMarkerVariant.String() + `)?tool\w*|` + reMarkerVariant.String() + `\w+)\s*>?`)
+	//（变体 pattern 见 fallback_tags.go，与此处保持同一套写法）
+	reLooseCloser = regexp.MustCompile(`\s*</(?:(?:` + markerVariantPattern + `)?tool\w*|` + markerVariantPattern + `\w+)\s*>?`)
 	reAttrName    = regexp.MustCompile(`name\s*[:=]\s*["']?([A-Za-z0-9_.-]+)`)
 	reAttrArgs    = regexp.MustCompile(`arguments\s*[:=]\s*`)
 )

@@ -44,3 +44,30 @@ func TestBangOutput(t *testing.T) {
 		}
 	}
 }
+
+// TestRunBang 直执行一步完成（ExecBang + BangOutput + 错误归一）：
+// 三表面（单任务直出 / 行模式 REPL / TUI 命令模式）共用的入口。
+func TestRunBang(t *testing.T) {
+	a, err := New(Options{Workspace: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+
+	out, err := a.RunBang(context.Background(), "echo run-bang")
+	if err != nil {
+		t.Fatalf("执行失败: %v", err)
+	}
+	if out != "run-bang" {
+		t.Fatalf("RunBang 输出不符: %q", out)
+	}
+
+	// 非零退出仍算工具成功：输出带 exit code 标注，由 BangOutput 清掉
+	out, err = a.RunBang(context.Background(), "exit 3")
+	if err != nil {
+		t.Fatalf("非零退出不应报错: %v", err)
+	}
+	if out != "" {
+		t.Fatalf("exit code 标注应被清理: %q", out)
+	}
+}

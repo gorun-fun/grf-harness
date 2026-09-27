@@ -1,6 +1,8 @@
 // image.go read_image 工具：读取 PNG/JPEG/WebP/GIF 图像并作为多模态
-// 内容回传。PNG/JPEG/GIF 用标准库解码校验，过大时按比例缩小（最长边
-// 1568）后重编码 PNG；WebP 无法本地解码，小文件直接透传（base64）。
+// 内容回传。先按内容解码（PNG/JPEG/GIF 用标准库），mime 一律以解码出
+// 的实际格式为准，扩展名仅作准入参考——避免扩展名与内容不符时 mime
+// 与字节错位。过大时按比例缩小（最长边 1568）后重编码 PNG；WebP 本地
+// 无法解码，确认不可解码的小文件直接透传（base64）。
 package tools
 
 import (
@@ -23,7 +25,8 @@ const (
 	maxPassthrough = 4 << 20
 )
 
-// ReadImageFile 读取图像文件，返回 (mime, base64, error)。
+// ReadImageFile 读取图像文件，返回 (mime, base64, error)。mime 以实际
+// 解码出的格式为准；仅真正的 WebP（本地不可解码）按扩展名透传。
 func ReadImageFile(path string) (string, string, error) {
 	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(path), "."))
 	switch ext {
@@ -38,15 +41,17 @@ func ReadImageFile(path string) (string, string, error) {
 	if len(data) > 20<<20 {
 		return "", "", fmt.Errorf("image file too large (%d bytes)", len(data))
 	}
-	if ext == "webp" {
-		if len(data) > maxPassthrough {
-			return "", "", fmt.Errorf("webp file too large to pass through (%d bytes)", len(data))
-		}
-		return "image/webp", base64.StdEncoding.EncodeToString(data), nil
-	}
 
 	img, format, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
+		// 解码失败：仅 .webp 且体积可接受时按 WebP 透传（标准库没有
+		// WebP 解码器，真 WebP 必然走到这里；其余扩展名视为损坏图像）
+		if ext == "webp" {
+			if len(data) > maxPassthrough {
+				return "", "", fmt.Errorf("webp file too large to pass through (%d bytes)", len(data))
+			}
+			return "image/webp", base64.StdEncoding.EncodeToString(data), nil
+		}
 		return "", "", fmt.Errorf("decode %s image: %w", ext, err)
 	}
 	b := img.Bounds()
@@ -63,6 +68,7 @@ func ReadImageFile(path string) (string, string, error) {
 		}
 		return "image/png", base64.StdEncoding.EncodeToString(buf.Bytes()), nil
 	}
+	// 原样返回的分支也以解码格式定 mime（data 与 format 必然同源）
 	switch format {
 	case "png":
 		return "image/png", base64.StdEncoding.EncodeToString(data), nil
@@ -120,13 +126,17 @@ func downscale(img image.Image, maxDim int) image.Image {
 	return dst
 }
 
+// readImageArgs read_image 工具参数（具名类型供 spec 交叉校验测试反射
+// json tag）。
+type readImageArgs struct {
+	FilePath string `json:"file_path"`
+}
+
 // RegisterReadImage 注册 read_image 工具。fs 用于读边界校验
 // （policy 的 read-workspace 拒绝工作区外路径；可为 nil，跳过校验）。
 func RegisterReadImage(r *Registry, fs *FsPolicy) {
 	r.Register("read_image", func(ctx context.Context, args string) (Result, error) {
-		var a struct {
-			FilePath string `json:"file_path"`
-		}
+		var a readImageArgs
 		if err := decodeArgs(args, &a); err != nil {
 			return Result{}, err
 		}

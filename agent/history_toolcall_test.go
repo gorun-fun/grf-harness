@@ -130,7 +130,7 @@ func TestLegacyImageHistoryPassesStrictToolCallCheck(t *testing.T) {
 	defer srv.Close()
 
 	h := buildToolCallHarness(t, srv.URL)
-	h.Root.Restore([]llm.Message{
+	h.Root.RestoreFull([]llm.Message{
 		{Role: "user", Content: "看图"},
 		{Role: "assistant", ToolCalls: []llm.ToolCall{
 			{ID: "c9", Function: llm.FunctionCall{Name: "read_image"}},
@@ -139,7 +139,7 @@ func TestLegacyImageHistoryPassesStrictToolCallCheck(t *testing.T) {
 			llm.TextPart("[tool result: read_image] ok"), llm.ImagePart("image/png", "aGk="),
 		}},
 		{Role: "assistant", Content: "图里是一只猫"},
-	})
+	}, "")
 	if _, err := h.Root.Run(t.Context(), "继续"); err != nil {
 		t.Fatalf("旧版带图历史应能继续对话: %v", err)
 	}

@@ -71,5 +71,5 @@ func tcset(fd int, t *syscall.Termios) error {
 	return ioctlTermios(fd, ioctlWrite, t)
 }
 
-// StdinSize/StdoutSize 便捷封装。
+// StdoutSize 便捷封装。
 func StdoutSize() (int, int) { return Size(int(os.Stdout.Fd())) }

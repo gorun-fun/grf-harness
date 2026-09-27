@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"git.gorun.fun/share/grf-harness/config"
 	"git.gorun.fun/share/grf-harness/llm"
 	"git.gorun.fun/share/grf-harness/term"
 )
@@ -123,7 +124,7 @@ func writeSession(path string, msgs []llm.Message, cacheKey string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	return config.WriteFileAtomic(path, data, 0o644)
 }
 
 // Session 一场会话的完整恢复材料：消息（不含 system）+ system 提示词

@@ -477,6 +477,46 @@ func TestBusyConflict(t *testing.T) {
 	}
 }
 
+// 真正同时到达的并发请求必须恰好一个执行、其余 409：旧实现预检
+// （IsRunning）与登记（beginTurn）之间存在秒级窗口，多个请求可同时
+// 通过预检——漏网者退化为 200+failed 且推进链尾。
+func TestBusyConcurrentClaims(t *testing.T) {
+	f := newFakeLLM([]string{`慢`, `慢`, `慢`, `慢`})
+	f.delay = 400 * time.Millisecond
+	defer f.Close()
+	ts := newTestServer(t, f)
+
+	_, b1 := post(t, ts, "/v1/responses", map[string]any{"model": "m", "input": "一"})
+	var r1 ResponseResource
+	_ = json.Unmarshal(b1, &r1)
+
+	const n = 4
+	codes := make(chan int, n)
+	start := make(chan struct{})
+	for i := 0; i < n; i++ {
+		go func() {
+			<-start
+			code, _ := post(t, ts, "/v1/responses", map[string]any{
+				"model": "m", "input": "并发", "previous_response_id": r1.ID})
+			codes <- code
+		}()
+	}
+	close(start)
+	ok := 0
+	for i := 0; i < n; i++ {
+		switch c := <-codes; c {
+		case 200:
+			ok++
+		case 409:
+		default:
+			t.Fatalf("意外状态码 %d", c)
+		}
+	}
+	if ok != 1 {
+		t.Fatalf("并发请求应恰好一个执行，实际 %d 个 200", ok)
+	}
+}
+
 // background 模式 + retrieve 轮询。
 func TestBackgroundAndRetrieve(t *testing.T) {
 	f := newFakeLLM([]string{`后台结果`})
@@ -542,6 +582,97 @@ func TestConversations(t *testing.T) {
 	})
 	if code != 404 {
 		t.Fatalf("归档会话应 404: %d", code)
+	}
+}
+
+// 归档与在跑回合的生命周期竞态：cancel 后回合未在期限内落定时必须拒绝
+// 归档（409、会话原样保留在缓存且不标记归档），落定后重试才 204。回归：
+// 旧实现 waitTurn 超时后照常 dropSession，脱离缓存的回合 goroutine 继续
+// 写快照/存档，与 h.Close 清掉的产物目录互相踩踏。
+func TestArchiveTurnSettleGuard(t *testing.T) {
+	old := archiveSettleTimeout
+	archiveSettleTimeout = 200 * time.Millisecond // 缩短归档等待期限，测试不等 5 秒
+	t.Cleanup(func() { archiveSettleTimeout = old })
+
+	f := newFakeLLM([]string{`慢回复`})
+	f.delay = 700 * time.Millisecond // 回合耗时远超归档等待期限
+	defer f.Close()
+	t.Setenv("GRF_HOME", t.TempDir())
+	s, err := New(t.TempDir(), "test-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.clientFactory = func() (*llm.Client, error) {
+		return llm.NewClient(llm.Config{BaseURL: f.URL(), APIKey: "t", Model: "m"}), nil
+	}
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+
+	code, body := post(t, ts, "/v1/responses", map[string]any{
+		"model": "m", "input": "后台慢跑", "background": true,
+	})
+	if code != 200 {
+		t.Fatalf("background status %d: %s", code, body)
+	}
+	var r ResponseResource
+	_ = json.Unmarshal(body, &r)
+
+	// 等回合真正开跑（IsRunning 为真 ⇒ beginTurn 已登记取消句柄）
+	s.mu.Lock()
+	sess := s.sessions[r.SessionID]
+	s.mu.Unlock()
+	if sess == nil {
+		t.Fatal("会话不在缓存")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for !sess.root.IsRunning() && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !sess.root.IsRunning() {
+		t.Fatal("回合未开跑")
+	}
+	// 取消句柄换成 no-op：模拟"取消后仍未及时落定"的回合（真实场景如
+	// 工具深陷不可中断的 IO）——waitTurn 必然超时。
+	sess.mu.Lock()
+	sess.cancel = func() {}
+	sess.mu.Unlock()
+
+	doDelete := func() int {
+		req, _ := http.NewRequest("DELETE", ts.URL+"/v1/conversations/"+r.SessionID, nil)
+		req.Header.Set("Authorization", "Bearer test-token")
+		resp, derr := http.DefaultClient.Do(req)
+		if derr != nil {
+			t.Fatal(derr)
+		}
+		defer resp.Body.Close()
+		_, _ = io.ReadAll(resp.Body)
+		return resp.StatusCode
+	}
+
+	// 未落定时归档 → 409，且会话原样保留（不 drop、不标记归档）
+	if c := doDelete(); c != 409 {
+		t.Fatalf("未落定时归档应 409: %d", c)
+	}
+	s.mu.Lock()
+	_, cached := s.sessions[r.SessionID]
+	s.mu.Unlock()
+	if !cached || sess.meta.Archived {
+		t.Fatal("409 后会话必须原样保留（不 drop、不标记归档）")
+	}
+
+	// 回合自然落定后重试归档 → 204，且真正归档生效（续发 404）
+	deadline = time.Now().Add(5 * time.Second)
+	for !sess.waitTurn(200*time.Millisecond) && time.Now().Before(deadline) {
+	}
+	time.Sleep(150 * time.Millisecond) // 略等 endTurn 之后的终态快照写完
+	if c := doDelete(); c != 204 {
+		t.Fatalf("落定后归档应 204: %d", c)
+	}
+	code, _ = post(t, ts, "/v1/responses", map[string]any{
+		"model": "m", "input": "再发", "previous_response_id": r.ID,
+	})
+	if code != 404 {
+		t.Fatalf("归档后续发应 404: %d", code)
 	}
 }
 

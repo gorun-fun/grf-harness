@@ -38,7 +38,7 @@ func TestRewriteModelIdentity(t *testing.T) {
 }
 
 func TestUpdateModelIdentitySyncsHistory(t *testing.T) {
-	a := NewAgent("agent_root", nil, nil, nil, "", BuildSystemPrompt(PromptOptions{Workspace: "/tmp", Model: "qwen/qwen3.8-27b"}, ""))
+	a := NewAgent("agent_root", nil, nil, BuildSystemPrompt(PromptOptions{Workspace: "/tmp", Model: "qwen/qwen3.8-27b"}, ""))
 	a.Reset() // history 头部带上 system
 	a.UpdateModelIdentity("glm-5.3-flash")
 	if !strings.Contains(a.SystemText(), ModelIdentityLine("glm-5.3-flash")) {
@@ -111,7 +111,7 @@ func TestSwitchClientConcurrentWithTurn(t *testing.T) {
 			t.Errorf("Run: %v", err)
 		}
 		_ = h.systemPromptFor(nil, true, "s1", "") // newChild 的提示词装配读路径
-		_ = h.managedEnv()                    // bash 事实变量读路径
+		_ = h.managedEnv()                         // bash 事实变量读路径
 	}
 	close(stop)
 	<-switched

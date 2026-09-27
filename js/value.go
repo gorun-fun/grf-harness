@@ -136,6 +136,22 @@ func rtErr(format string, a ...any) error { return &RuntimeError{Msg: fmt.Sprint
 
 // ---- 运算 ----
 
+// cmpOp 次序比较四则归一：三个直接比较结果按 op 映射为 <、<=、>、>=。
+// less/equal/greater 须分别传入——浮点 NaN 下三者全为 false 而四则比较
+// 恰均为 false，不能用布尔代数互推。字符串与数字两个分支共用。
+func cmpOp(op string, less, equal, greater bool) bool {
+	switch op {
+	case "<":
+		return less
+	case "<=":
+		return less || equal
+	case ">":
+		return greater
+	default: // ">="
+		return greater || equal
+	}
+}
+
 func binOp(op string, l, r Value) (Value, error) {
 	switch op {
 	case "+":
@@ -173,29 +189,11 @@ func binOp(op string, l, r Value) (Value, error) {
 	case "<", ">", "<=", ">=":
 		if ls, ok := l.(string); ok {
 			if rs, ok := r.(string); ok {
-				switch op {
-				case "<":
-					return ls < rs, nil
-				case ">":
-					return ls > rs, nil
-				case "<=":
-					return ls <= rs, nil
-				default:
-					return ls >= rs, nil
-				}
+				return cmpOp(op, ls < rs, ls == rs, ls > rs), nil
 			}
 		}
 		ln, rn := ToNumber(l), ToNumber(r)
-		switch op {
-		case "<":
-			return ln < rn, nil
-		case ">":
-			return ln > rn, nil
-		case "<=":
-			return ln <= rn, nil
-		default:
-			return ln >= rn, nil
-		}
+		return cmpOp(op, ln < rn, ln == rn, ln > rn), nil
 	}
 	return nil, rtErr("unsupported operator %q", op)
 }

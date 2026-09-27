@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"git.gorun.fun/share/grf-harness/config"
 )
 
 // SkillCatalog 技能目录：workspace/.grf/skills 与 ~/.grf/skills 下的
@@ -39,7 +41,7 @@ func (c *SkillCatalog) Add(name, content string) {
 // LoadSkills 加载两级技能目录（工作区优先）。
 func LoadSkills(workspace string) *SkillCatalog {
 	c := NewSkillCatalog()
-	home := userGrfHome()
+	home := config.Home()
 	dirs := []string{filepath.Join(home, "skills"), filepath.Join(workspace, ".grf", "skills")}
 	for _, dir := range dirs {
 		entries, err := os.ReadDir(dir)
@@ -86,12 +88,15 @@ func (c *SkillCatalog) Summary(name string) string {
 	return ""
 }
 
+// skillArgs skill 工具参数（具名类型供 spec 交叉校验测试反射 json tag）。
+type skillArgs struct {
+	Name string `json:"name"`
+}
+
 // RegisterSkill 注册 skill 工具。
 func RegisterSkill(r *Registry, catalog *SkillCatalog) {
 	r.Register("skill", func(ctx context.Context, args string) (Result, error) {
-		var a struct {
-			Name string `json:"name"`
-		}
+		var a skillArgs
 		if err := decodeArgs(args, &a); err != nil {
 			return Result{}, err
 		}
@@ -107,16 +112,4 @@ func RegisterSkill(r *Registry, catalog *SkillCatalog) {
 		}
 		return TextResult(fmt.Sprintf("skill %q loaded; follow its instructions for the task at hand:\n\n%s", a.Name, content)), nil
 	})
-}
-
-// userGrfHome 用户级配置目录（GRF_HOME 覆盖 ~/.grf）。
-func userGrfHome() string {
-	if v := os.Getenv("GRF_HOME"); v != "" {
-		return v
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ".grf"
-	}
-	return filepath.Join(home, ".grf")
 }

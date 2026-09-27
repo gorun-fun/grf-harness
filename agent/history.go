@@ -16,9 +16,6 @@ func (a *Agent) History() []llm.Message {
 	return append([]llm.Message(nil), a.history...)
 }
 
-// Restore 原样回放上一场会话的消息（system 用当前构建期提示词）。
-func (a *Agent) Restore(msgs []llm.Message) { a.RestoreFull(msgs, "") }
-
 // RestoreFull 原样回放上一场会话的消息。systemText 非空时优先回放它
 // （会话文件存的构建期提示词原文）——即使当前版本的提示词代码或运行时
 // 事实已变化，请求前缀仍与上一场逐字一致，提示词缓存可命中；为空时
@@ -37,9 +34,9 @@ func (a *Agent) RestoreFull(msgs []llm.Message, systemText string) {
 		}
 	}
 	a.mu.Lock()
-	a.system = systemText
-	a.history = append([]llm.Message{{Role: "system", Content: systemText}}, h...)
-	a.mu.Unlock()
+	defer a.mu.Unlock()
+	a.history = h // 回放列表已剔除全部 system 消息，头部由下面补
+	a.setSystemLocked(systemText)
 }
 
 // Reset 清空历史与 todo，回到全新会话（保留 system 提示词与配置）。
@@ -55,20 +52,33 @@ func (a *Agent) Reset() {
 	}
 }
 
+// setSystemLocked 更新系统提示词并同步 history 头部的 system 消息
+// （调用方须持 a.mu；RestoreFull / SetSystemText / UpdateModelIdentity
+// 三处共用）。前缀缓存不变量：a.system 与 history[0] 是同一份提示词的
+// 两个视图——请求前缀按 history 序列化、a.system 供 Reset 重建与身份
+// 行重写读取，两者不同步会让下次请求的前缀悄悄变化、提示词缓存静默
+// 失效。history 头部不是 system 时（构建/回放路径均保证 system 打头，
+// 理论不可达）补一条 system 头。
+func (a *Agent) setSystemLocked(text string) {
+	a.system = text
+	if len(a.history) > 0 && a.history[0].Role == "system" {
+		a.history[0].Content = text
+		return
+	}
+	a.history = append([]llm.Message{{Role: "system", Content: text}}, a.history...)
+}
+
 // SetSystemText 替换静态系统提示词：构建期在工具注册完成后按实际可用
 // 工具集组装 inner prompt 再回填（见 Harness.systemPromptFor）；运行期
 // 由 Responses 请求级 instructions 生效。会改写请求前缀，提示词缓存将
-// 失效。
+// 失效（同步约束见 setSystemLocked）。
 func (a *Agent) SetSystemText(text string) {
 	if text == "" {
 		return
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.system = text
-	if len(a.history) > 0 && a.history[0].Role == "system" {
-		a.history[0].Content = text
-	}
+	a.setSystemLocked(text)
 }
 
 // UpdateModelIdentity 切换模型后原位重写系统提示词中的模型身份行：身份
@@ -76,6 +86,7 @@ func (a *Agent) SetSystemText(text string) {
 // 只换 client 不更新会让模型以旧身份自我认知（如实际调用 glm 却按提示词
 // 自称旧模型）。只改模型名、其余逐字保留；模型行按改变频率排在提示词
 // 最末（见 prompt.go 文件头），切换模型时改写只作废其后的尾部缓存。
+// （history 头部同步见 setSystemLocked。）
 func (a *Agent) UpdateModelIdentity(model string) {
 	if model == "" {
 		return
@@ -86,10 +97,7 @@ func (a *Agent) UpdateModelIdentity(model string) {
 	if next == a.system {
 		return
 	}
-	a.system = next
-	if len(a.history) > 0 && a.history[0].Role == "system" {
-		a.history[0].Content = next
-	}
+	a.setSystemLocked(next)
 }
 
 // sanitizeSnapshot 请求前清洗历史：剔除任何没有正文、没有多模态 parts
@@ -116,6 +124,7 @@ func sanitizeSnapshot(h []llm.Message) []llm.Message {
 //     被 tool 消息闭合（图像伪消息保留原位，模型仍能看到图）；
 //  2. 暂停恢复等路径把闭合 tool 消息追加到队尾，与发起的 assistant 之间
 //     隔了 user 消息（挪回紧后位置）。
+//
 // 归位时丢弃与发起 assistant 对不上的游离 tool 消息（异常历史残留，
 // 留在原位同样会被供应商整单拒绝）。
 func canonicalizeToolResults(h []llm.Message) []llm.Message {

@@ -21,12 +21,16 @@ type TodoState struct {
 	OnChange func([]Todo)
 }
 
+// todoWriteArgs todo_write 工具参数（具名类型供 spec 交叉校验测试反射
+// json tag）。
+type todoWriteArgs struct {
+	Todos []Todo `json:"todos"`
+}
+
 // RegisterTodoWrite 注册 todo_write。state 由 agent 持有。
 func RegisterTodoWrite(r *Registry, state *TodoState) {
 	r.Register("todo_write", func(ctx context.Context, args string) (Result, error) {
-		var a struct {
-			Todos []Todo `json:"todos"`
-		}
+		var a todoWriteArgs
 		if err := decodeArgs(args, &a); err != nil {
 			return Result{}, err
 		}

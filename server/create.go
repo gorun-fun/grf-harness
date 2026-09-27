@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -22,19 +21,14 @@ import (
 
 // handleCreate POST /v1/responses。
 func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, 64<<20))
-	if err != nil {
-		writeError(w, 400, errInvalid, "read body: "+err.Error(), "")
-		return
-	}
 	var req createRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		writeError(w, 400, errInvalid, "invalid JSON body: "+err.Error(), "")
+	if !decodeJSON(w, r, &req, bodyLimitMain) {
 		return
 	}
 
 	// 会话定位：previous_response_id 链尾校验 / 懒创建。
 	var sess *session
+	var err error
 	if req.PreviousResponseID != "" {
 		sid, _, err := parseRespID(req.PreviousResponseID)
 		if err != nil {
@@ -64,6 +58,23 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, errInvalid, "a turn is already running in this session; cancel it (POST /v1/responses/{id}/cancel) or retry later", "")
 		return
 	}
+	// 回合槽占用：上面的预检与 execute 的 beginTurn 之间隔着请求级配置、
+	// input 解析与斜杠指令（/compact 可达秒级），两个并发请求可同时通过
+	// 预检——漏网时 409 退化为 200+failed 且推进链尾。tryClaim 原子完成
+	// "检查+占用"；execute 的各出口按占用代号释放，本地 defer 兜底
+	// execute 未被调用的早退路径（代号匹配保证不误伤后续占用），background
+	// 模式随会话移交后台 goroutine。
+	claim, ok := sess.tryClaim()
+	if !ok {
+		writeError(w, 409, errInvalid, "a turn is already running in this session; cancel it (POST /v1/responses/{id}/cancel) or retry later", "")
+		return
+	}
+	handoff := false
+	defer func() {
+		if !handoff {
+			sess.releaseClaim(claim)
+		}
+	}()
 
 	// grf:history 截断（编辑重发）：在解析 input 与暂停判定之前替换
 	// 历史，使 paused 状态按覆写后的历史计算（截掉未闭合 tool_call 即
@@ -131,14 +142,15 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 
 	respID := sess.nextResp()
 	if req.Stream {
-		s.runStreaming(w, r, sess, &req, respID, text, images, resume, store)
+		s.runStreaming(w, r, sess, &req, respID, claim, text, images, resume, store)
 		return
 	}
 	if req.Background {
-		s.runBackground(w, sess, &req, respID, text, images, resume, store)
+		handoff = true // 占用随会话移交后台 goroutine，由其 execute 释放
+		s.runBackground(w, sess, &req, respID, claim, text, images, resume, store)
 		return
 	}
-	res, execErr := s.execute(r.Context(), sess, &req, respID, text, images, resume, store, nil, nil)
+	res, execErr := s.execute(r.Context(), sess, &req, respID, claim, text, images, resume, store, nil, nil)
 	if execErr != nil {
 		writeError(w, 400, errInvalid, execErr.Error(), "input")
 		return
@@ -148,10 +160,11 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 
 // execute 回合执行：接线事件桥、跑 RunTurn/Resume、拼终态资源。
 // sink 非空时事件实时流出（SSE）；onStart 在回合开跑前回调一次
-// （流式模式借此发 response.created/in_progress）。返回的 error 非空表示
-// 调用方输入问题（agent.ErrResumeInput 类），应映射 400、不生成资源；
-// 执行类失败进资源的 failed 终态。
-func (s *Server) execute(ctx context.Context, sess *session, req *createRequest, respID string,
+// （流式模式借此发 response.created/in_progress）。claim 是 handleCreate
+// 占用的回合槽代号，各出口据此释放。返回的 error 非空表示调用方输入
+// 问题（agent.ErrResumeInput 类），应映射 400、不生成资源；执行类失败
+// 进资源的 failed 终态。
+func (s *Server) execute(ctx context.Context, sess *session, req *createRequest, respID string, claim uint64,
 	text string, images []tools.Image, resume []agent.ResumeInput, store bool,
 	sink func(*event), onStart func(base *ResponseResource)) (*ResponseResource, error) {
 
@@ -167,6 +180,7 @@ func (s *Server) execute(ctx context.Context, sess *session, req *createRequest,
 		out, rewrite, handled, cerr := s.runSlashCommand(ctx, sess, text)
 		if cerr != nil {
 			sess.rollbackResp(respID)
+			sess.releaseClaim(claim) // 斜杠路径未走 beginTurn，这里释放（background 场景无人兜底）
 			return nil, cerr
 		}
 		if handled {
@@ -183,6 +197,7 @@ func (s *Server) execute(ctx context.Context, sess *session, req *createRequest,
 				_, _ = sess.h.Store.SaveSession(sess.root.History())
 				sess.saveSnap(base)
 			}
+			sess.releaseClaim(claim)
 			return base, nil
 		}
 		text = rewrite
@@ -213,7 +228,7 @@ func (s *Server) execute(ctx context.Context, sess *session, req *createRequest,
 	// 外部取消要在自身 cancel() 之前采样（否则 tctx.Err() 恒真，
 	// 一切失败都会被误判为 cancelled）。
 	extCanceled := ctx.Err() != nil
-	sess.endTurn()
+	sess.endTurn(claim)
 	cancel()
 
 	// 调用方输入校验失败：不生成终态资源（链尾不动，客户端可用原
@@ -265,7 +280,7 @@ func (s *Server) execute(ctx context.Context, sess *session, req *createRequest,
 
 // runStreaming SSE 流式模式。
 func (s *Server) runStreaming(w http.ResponseWriter, r *http.Request, sess *session,
-	req *createRequest, respID string, text string, images []tools.Image,
+	req *createRequest, respID string, claim uint64, text string, images []tools.Image,
 	resume []agent.ResumeInput, store bool) {
 
 	flusher, ok := w.(http.Flusher)
@@ -277,13 +292,20 @@ func (s *Server) runStreaming(w http.ResponseWriter, r *http.Request, sess *sess
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(200)
 
+	// send 并发前提（不加锁的依据）：llm 层 stream hooks 在 SSE 读取循环
+	// 内同步调用（llm/client.go chatStreamOnce 的 scanner 循环），
+	// RunTurn 返回后不再有任何回调——因此回合 goroutine 内经事件桥到
+	// send 的写出，与 HTTP goroutine 自身的 send（onStart 在回合开跑前、
+	// 终态/错误事件在 execute 返回后）先后不重叠，w 无需加锁。若 llm 层
+	// 改为异步投递增量，需重新评估此处的并发安全（http.ResponseWriter
+	// 非并发安全）。
 	send := func(ev *event) {
 		data, _ := json.Marshal(ev)
 		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Type, data)
 		flusher.Flush()
 	}
 
-	res, execErr := s.execute(r.Context(), sess, req, respID, text, images, resume, store, send,
+	res, execErr := s.execute(r.Context(), sess, req, respID, claim, text, images, resume, store, send,
 		func(base *ResponseResource) {
 			started := shallowCopy(base)
 			started.Status = statusInProgress
@@ -304,15 +326,16 @@ func (s *Server) runStreaming(w http.ResponseWriter, r *http.Request, sess *sess
 }
 
 // runBackground 后台模式：立即返回 queued，goroutine 执行，retrieve 取终态。
+// 回合槽占用（claim）随本函数移交给后台 goroutine，由其 execute 释放。
 func (s *Server) runBackground(w http.ResponseWriter, sess *session,
-	req *createRequest, respID string, text string, images []tools.Image,
+	req *createRequest, respID string, claim uint64, text string, images []tools.Image,
 	resume []agent.ResumeInput, store bool) {
 
 	base := s.buildResource(sess, req, respID)
 	base.Status = statusQueued
 	writeJSON(w, 200, base)
 	go func() {
-		res, execErr := s.execute(context.Background(), sess, req, respID, text, images, resume, store, nil, nil)
+		res, execErr := s.execute(context.Background(), sess, req, respID, claim, text, images, resume, store, nil, nil)
 		if execErr != nil {
 			// 校验类失败：不落终态快照，retrieve 持续返回 queued 之外的
 			// 404/在跑态之外——写入一个 failed 快照让轮询方拿到明确结果。
@@ -607,10 +630,11 @@ func parseContentParts(raw json.RawMessage) (text string, images []tools.Image, 
 	return strings.Join(texts, ""), images, nil
 }
 
-// imageDataURL data URL → Image（远程 URL 一期不支持）。
+// imageDataURL data URL → Image（远程 URL 一期不支持）。截断用 rune 版
+// truncateRunes（data URL 前缀为 ASCII，语义与按字节截断一致）。
 func imageDataURL(u string) (tools.Image, error) {
 	if !strings.HasPrefix(u, "data:") {
-		return tools.Image{}, fmt.Errorf("input_image only supports data URLs (got %q)", truncate(u, 64))
+		return tools.Image{}, fmt.Errorf("input_image only supports data URLs (got %q)", truncateRunes(u, 64))
 	}
 	comma := strings.Index(u, ",")
 	if comma < 0 {
@@ -622,11 +646,4 @@ func imageDataURL(u string) (tools.Image, error) {
 		return tools.Image{}, fmt.Errorf("decode image: %w", err)
 	}
 	return tools.Image{Mime: mime, B64: b64}, nil
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
 }

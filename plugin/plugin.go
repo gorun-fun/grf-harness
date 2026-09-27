@@ -42,8 +42,9 @@ type Conn struct {
 	Where   string // 命令行或端点 URL（诊断展示）
 	Timeout time.Duration
 
-	mu      sync.Mutex
-	deadErr error // 连接失败信息（首次握手失败即记；连接成功后为 nil）
+	// deadErr 连接失败信息（首次握手失败即记；连接成功后为 nil）。
+	// connect 完成后不可变，发布经 Manager.mu，读取无需加锁。
+	deadErr error
 }
 
 // DeadErr 首次连接失败信息（nil = 连接正常）。
@@ -112,10 +113,7 @@ func (m *Manager) Load(settings *config.Settings) {
 	m.tools = map[string]*toolEntry{}
 	m.mu.Unlock()
 
-	entries, discoverErr := resolveEntries(settings)
-	if discoverErr != "" {
-		m.warn(discoverErr)
-	}
+	entries := resolveEntries(settings)
 	// 并发连接（本地进程 spawn 与远程握手都可慢）
 	var wg sync.WaitGroup
 	for _, e := range entries {
@@ -129,9 +127,9 @@ func (m *Manager) Load(settings *config.Settings) {
 }
 
 // resolveEntries 配置项 + 自动发现，按名字去重（配置优先）。
-func resolveEntries(settings *config.Settings) ([]config.Plugin, string) {
+func resolveEntries(settings *config.Settings) []config.Plugin {
 	if settings == nil {
-		return nil, ""
+		return nil
 	}
 	seen := map[string]bool{}
 	var out []config.Plugin
@@ -155,7 +153,7 @@ func resolveEntries(settings *config.Settings) ([]config.Plugin, string) {
 			}
 		}
 	}
-	return out, ""
+	return out
 }
 
 // pluginName 插件展示名：显式配置名 > 可执行文件名 > URL 主机。

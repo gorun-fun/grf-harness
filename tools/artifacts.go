@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync/atomic"
-	"time"
 )
 
 type Artifacts struct {
@@ -19,15 +18,6 @@ type Artifacts struct {
 func NewArtifacts() (*Artifacts, error) {
 	dir, err := os.MkdirTemp("", "grf-artifacts-*")
 	if err != nil {
-		return nil, err
-	}
-	return &Artifacts{dir: dir}, nil
-}
-
-// NewArtifactsDir 在指定目录创建产物目录。
-func NewArtifactsDir(base string) (*Artifacts, error) {
-	dir := filepath.Join(base, fmt.Sprintf("grf-%d", time.Now().UnixNano()))
-	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
 	return &Artifacts{dir: dir}, nil

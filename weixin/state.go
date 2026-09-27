@@ -11,13 +11,11 @@ import (
 // State iLink 连接状态,落盘保存(含 token 与长轮询游标,勿泄露)。
 // 保存位置:~/.grf/weixin_state.json(GRF_HOME 可重定位)。
 type State struct {
-	BotToken       string `json:"bot_token"`
-	BaseURL        string `json:"baseurl"`
-	IlinkBotID     string `json:"ilink_bot_id"`
-	IlinkUserID    string `json:"ilink_user_id"`
-	GetUpdatesBuf  string `json:"get_updates_buf"`
-	LastFromID     string `json:"last_from_id"`
-	LastContextTok string `json:"last_context_token"`
+	BotToken      string `json:"bot_token"`
+	BaseURL       string `json:"baseurl"`
+	IlinkBotID    string `json:"ilink_bot_id"`
+	IlinkUserID   string `json:"ilink_user_id"`
+	GetUpdatesBuf string `json:"get_updates_buf"`
 }
 
 func stateFile() string {

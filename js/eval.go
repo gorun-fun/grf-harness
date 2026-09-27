@@ -6,6 +6,28 @@ import "strings"
 
 // ---- 语句 ----
 
+// loopSignal 判别循环体内的控制流信号：brk=break、cont=continue；
+// 两者皆 false 表示 err 不是循环信号（应向上抛）。
+func loopSignal(err error) (brk, cont bool) {
+	switch err.(type) {
+	case *breakSig:
+		return true, false
+	case *continueSig:
+		return false, true
+	}
+	return false, false
+}
+
+// ctrlSignal 判别控制流信号（return/break/continue）：try 语句中这三类
+// 信号必须穿透 catch，不能当异常捕获。
+func ctrlSignal(err error) bool {
+	switch err.(type) {
+	case *returnSig, *breakSig, *continueSig:
+		return true
+	}
+	return false
+}
+
 func (ip *Interp) evalStmt(st Node, env *Env) (Value, error) {
 	switch s := st.(type) {
 	case *VarDecl:
@@ -55,14 +77,14 @@ func (ip *Interp) evalStmt(st Node, env *Env) (Value, error) {
 				}
 			}
 			if _, err := ip.execBody(s.Body, child); err != nil {
-				if _, ok := err.(*breakSig); ok {
+				brk, cont := loopSignal(err)
+				if brk {
 					break
 				}
-				if _, ok := err.(*continueSig); ok {
-					// 落到 update
-				} else {
+				if !cont {
 					return nil, err
 				}
+				// continue：落到 update
 			}
 			if s.Update != nil {
 				if _, err := ip.evalExpr(s.Update, child); err != nil {
@@ -84,13 +106,14 @@ func (ip *Interp) evalStmt(st Node, env *Env) (Value, error) {
 			child := NewEnv(env)
 			child.declare(s.Name, item)
 			if _, err := ip.execBody(s.Body, child); err != nil {
-				if _, ok := err.(*breakSig); ok {
+				brk, cont := loopSignal(err)
+				if brk {
 					break
 				}
-				if _, ok := err.(*continueSig); ok {
-					continue
+				if !cont {
+					return nil, err
 				}
-				return nil, err
+				continue
 			}
 		}
 		return nil, nil
@@ -104,13 +127,14 @@ func (ip *Interp) evalStmt(st Node, env *Env) (Value, error) {
 				break
 			}
 			if _, err := ip.execBody(s.Body, env); err != nil {
-				if _, ok := err.(*breakSig); ok {
+				brk, cont := loopSignal(err)
+				if brk {
 					break
 				}
-				if _, ok := err.(*continueSig); ok {
-					continue
+				if !cont {
+					return nil, err
 				}
-				return nil, err
+				continue
 			}
 		}
 		return nil, nil
@@ -138,13 +162,8 @@ func (ip *Interp) evalStmt(st Node, env *Env) (Value, error) {
 	case *TryStmt:
 		v, err := ip.execBody(s.Body, NewEnv(env))
 		if err != nil {
-			if _, isCtrl := err.(*returnSig); isCtrl {
-				return v, err // return 穿透 try
-			}
-			if _, isCtrl := err.(*breakSig); isCtrl {
-				return v, err
-			}
-			if _, isCtrl := err.(*continueSig); isCtrl {
+			// return/break/continue 穿透 try，不当异常捕获
+			if ctrlSignal(err) {
 				return v, err
 			}
 			if s.Catch != nil {

@@ -18,13 +18,13 @@ import (
 // 尾部换行挂账（pending）：模型可能在正文尾部多发换行，延迟到下一段
 // 内容或收尾时才输出，避免与收尾换行叠加出多余空行。
 type stdoutUI struct {
-	tty     bool
-	w       io.Writer
-	start   time.Time
-	chars   int
-	active  bool
-	mdOpen  bool // 正文已开始输出（事件前需换行）
-	pending int  // 挂账的尾部连续换行数
+	tty      bool
+	w        io.Writer
+	start    time.Time
+	chars    int
+	active   bool
+	bodyOpen bool // 正文已开始输出（事件前需换行；不做 markdown 渲染）
+	pending  int  // 挂账的尾部连续换行数
 }
 
 // flushPending 落盘挂账的尾部换行。
@@ -49,8 +49,8 @@ func (s *stdoutUI) reasoning(delta string) {
 
 func (s *stdoutUI) content(delta string) {
 	s.fold()
-	if !s.mdOpen {
-		s.mdOpen = true
+	if !s.bodyOpen {
+		s.bodyOpen = true
 	}
 	body := strings.TrimRight(delta, "\n")
 	if body != "" {
@@ -76,9 +76,9 @@ func (s *stdoutUI) fold() {
 func (s *stdoutUI) printEvent(kind, detail string) {
 	s.fold()
 	s.pending = 0
-	if s.mdOpen {
+	if s.bodyOpen {
 		fmt.Fprintln(s.w)
-		s.mdOpen = false
+		s.bodyOpen = false
 	}
 	prefix := "🔧"
 	switch kind {
@@ -112,12 +112,35 @@ func (s *stdoutUI) attach(ag *agent.Agent) {
 		case "done":
 			s.fold()
 			s.pending = 0
-			if s.mdOpen {
+			if s.bodyOpen {
 				fmt.Fprintln(s.w)
-				s.mdOpen = false
+				s.bodyOpen = false
 			}
 		}
 	})
+}
+
+// collectBackgroundPrompt 后台子代理收尾续跑指令：吸收已落定的后台结果
+// 并给出最终汇总答复（直出的两表面——单任务模式与行模式 REPL——共用；
+// TUI 空闲通知分支措辞不同，见 tui/chat.go 的 noticeMsg）。
+const collectBackgroundPrompt = "Collect the settled background results above and give the user your final consolidated answer now."
+
+// collectBackground 后台子代理收尾：等待落定（wait 上限）、逐条经 print
+// 展示首行摘要，有落定通知时续跑一轮汇总作答。after 在通知展示完、续跑
+// 开始前调用一次（输出分隔用，可为 nil）。返回续跑错误（无通知时 nil）。
+func (a *App) collectBackground(ctx context.Context, wait time.Duration, print func(string), after func()) error {
+	notices := a.Root().RunAndWaitBackground(wait)
+	if len(notices) == 0 {
+		return nil
+	}
+	for _, n := range notices {
+		print(term.FirstLine(n, 0))
+	}
+	if after != nil {
+		after()
+	}
+	_, err := a.Root().RunAutoGoal(ctx, collectBackgroundPrompt)
+	return err
 }
 
 // RunTask 单次任务模式：执行任务、流式直出到 stdout、保存会话。
@@ -136,18 +159,16 @@ func (a *App) RunTask(ctx context.Context, task string) error {
 	if err != nil {
 		return err
 	}
-	// 后台子代理收尾：短暂等待并吸收通知
-	if notices := a.Root().RunAndWaitBackground(10 * time.Second); len(notices) > 0 {
-		for _, n := range notices {
-			ui.printEvent("notice", term.FirstLine(n, 0))
-		}
-		if !ui.mdOpen {
-			fmt.Fprintln(os.Stdout)
-		}
-		_, err = a.Root().RunAutoGoal(ctx, "Collect the settled background results above and give the user your final consolidated answer now.")
-		if err != nil {
-			return err
-		}
+	// 后台子代理收尾：短暂等待并吸收通知；通知与续答回答间补一个空行
+	if err := a.collectBackground(ctx, 10*time.Second,
+		func(s string) { ui.printEvent("notice", s) },
+		func() {
+			if !ui.bodyOpen {
+				fmt.Fprintln(os.Stdout)
+			}
+		},
+	); err != nil {
+		return err
 	}
 	a.Harness.Artifacts.Cleanup()
 	if _, serr := a.SaveSession(); serr != nil {

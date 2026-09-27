@@ -13,12 +13,15 @@ import (
 	"time"
 )
 
+// globArgs glob 工具参数（具名类型供 spec 交叉校验测试反射 json tag）。
+type globArgs struct {
+	Pattern string `json:"pattern"`
+	Path    string `json:"path"`
+}
+
 func registerGlob(r *Registry, workspace string, fs *FsPolicy, artifacts *Artifacts) {
 	r.Register("glob", func(ctx context.Context, args string) (Result, error) {
-		var a struct {
-			Pattern string `json:"pattern"`
-			Path    string `json:"path"`
-		}
+		var a globArgs
 		if err := decodeArgs(args, &a); err != nil {
 			return Result{}, err
 		}
@@ -53,43 +56,52 @@ func registerGlob(r *Registry, workspace string, fs *FsPolicy, artifacts *Artifa
 	})
 }
 
-// GlobFiles 实现 glob 语义：返回按修改时间新→旧排序的匹配文件（仅文件）。
-func GlobFiles(pattern, base string) ([]string, error) {
+// walkFiles glob/grep 共用的目录遍历骨架：绝对化搜索根，忽略不可读项，
+// 跳过 VCS 元数据目录（.git/.hg/.svn，搜索根本身除外），d.Info() 失败或
+// Rel 换算失败的文件跳过，其余以 (path, rel, info) 回调 visit；visit 返回
+// false 时提前结束整趟遍历（grep 的 cap 截断用）。不区分文件类型，
+// 是否只要普通文件由 visit 自行判断（grep 过滤非常规文件，glob 不限）。
+func walkFiles(base string, visit func(path, rel string, info os.FileInfo) bool) {
 	baseAbs := absOr(base)
-	type ent struct {
-		rel string
-		mod time.Time
-		abs string
-	}
-	var found []ent
-	err := filepath.WalkDir(baseAbs, func(path string, d os.DirEntry, err error) error {
+	_ = filepath.WalkDir(baseAbs, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil // 不可读的目录直接跳过
 		}
 		if d.IsDir() {
 			name := d.Name()
-			if path != baseAbs && (name == ".git" || name == ".hg" || name == ".svn") {
+			if p != baseAbs && (name == ".git" || name == ".hg" || name == ".svn") {
 				return filepath.SkipDir
 			}
-			return nil
-		}
-		rel, rerr := filepath.Rel(baseAbs, path)
-		if rerr != nil {
-			return nil
-		}
-		if !matchGlob(pattern, rel) {
 			return nil
 		}
 		info, ierr := d.Info()
 		if ierr != nil {
 			return nil
 		}
-		found = append(found, ent{rel: rel, mod: info.ModTime(), abs: path})
+		rel, rerr := filepath.Rel(baseAbs, p)
+		if rerr != nil {
+			return nil
+		}
+		if !visit(p, rel, info) {
+			return filepath.SkipAll
+		}
 		return nil
 	})
-	if err != nil {
-		return nil, err
+}
+
+// GlobFiles 实现 glob 语义：返回按修改时间新→旧排序的匹配文件（仅文件）。
+func GlobFiles(pattern, base string) ([]string, error) {
+	type ent struct {
+		rel string
+		mod time.Time
 	}
+	var found []ent
+	walkFiles(base, func(_, rel string, info os.FileInfo) bool {
+		if matchGlob(pattern, rel) {
+			found = append(found, ent{rel: rel, mod: info.ModTime()})
+		}
+		return true
+	})
 	sort.Slice(found, func(i, j int) bool {
 		if found[i].mod.Equal(found[j].mod) {
 			return found[i].rel < found[j].rel

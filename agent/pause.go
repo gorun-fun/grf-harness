@@ -115,47 +115,32 @@ func (a *Agent) applyResume(turnCtx context.Context, inputs []ResumeInput) error
 	}
 	for _, c := range open {
 		in := byID[c.ID]
-		kind := PauseKindApproval
-		if a.reg.IsClient(c.Name()) {
-			kind = PauseKindFunction
-		} else if c.Name() == "ask_user_question" {
-			kind = PauseKindQuestion
-		}
+		// 类别按名字重推断（与 deferCall 共用 pauseKindOf，见其注释）
+		kind := pauseKindOf(a.reg, c.Name())
 		switch kind {
 		case PauseKindFunction:
 			out := in.Output
 			if in.Dismiss {
 				out = "[client tool] the caller dismissed this call without executing it; proceed without it or offer an alternative"
 			}
-			a.emit("result", firstLine(out))
-			a.emitToolEvent(ToolEvent{CallID: c.ID, Name: c.Name(), Status: ToolStatusDone,
-				Input: c.Arguments(), Output: out})
-			a.appendToolResult(c, tools.Result{Text: out})
+			a.finishCall(c, c.ID, tools.Result{Text: out}, ToolStatusDone, true)
 		case PauseKindQuestion:
 			if in.Dismiss {
 				out := "error: the user could not answer: dismissed by the caller; proceed with reasonable assumptions and state them"
-				a.emitToolEvent(ToolEvent{CallID: c.ID, Name: c.Name(), Status: ToolStatusError,
-					Input: c.Arguments(), Output: out, Err: out})
-				a.appendToolResult(c, tools.Result{Text: out, Err: out})
+				a.finishCall(c, c.ID, tools.Result{Text: out, Err: out}, ToolStatusError, false)
 				break
 			}
 			out, err := tools.MarshalAnswers(in.Answers)
 			if err != nil {
 				return fmt.Errorf("marshal answers: %w", err)
 			}
-			a.emitToolEvent(ToolEvent{CallID: c.ID, Name: c.Name(), Status: ToolStatusDone,
-				Input: c.Arguments(), Output: out})
-			a.appendToolResult(c, tools.Result{Text: out})
+			a.finishCall(c, c.ID, tools.Result{Text: out}, ToolStatusDone, false)
 		case PauseKindApproval:
 			if in.Approved && !in.Dismiss {
 				a.execToolCall(turnCtx, c, c.ID)
 				continue
 			}
-			denied := deniedResultText(in.Feedback)
-			a.emit("result", firstLine(denied))
-			a.emitToolEvent(ToolEvent{CallID: c.ID, Name: c.Name(), Status: ToolStatusDenied,
-				Input: c.Arguments(), Output: denied})
-			a.appendToolResult(c, tools.Result{Text: denied})
+			a.finishCall(c, c.ID, tools.Result{Text: deniedResultText(in.Feedback)}, ToolStatusDenied, true)
 		}
 	}
 	return nil

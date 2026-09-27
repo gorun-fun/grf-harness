@@ -42,6 +42,7 @@ func (p *agentPool) drop(fromID string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	delete(p.agents, fromID)
+	delete(p.hosts, fromID)
 }
 
 // get 取该用户的 agent 与宿主;首次触达时组装 harness(ask_user 经

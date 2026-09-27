@@ -12,21 +12,30 @@ import (
 )
 
 // Run 处理一条用户输入，执行完整工具调用循环，返回最终回复。
+// 身份继承上一回合（humanTurn）：Run/RunWithImages 不带身份参数。
 func (a *Agent) Run(ctx context.Context, userInput string) (string, error) {
-	return a.RunAs(ctx, userInput, a.humanTurn)
+	return a.RunAs(ctx, userInput, a.currentHuman())
 }
 
 // RunWithImages 处理一条带图像的用户输入：user 消息按多模态 parts
 // （文本 + data URL 图像）发送。无图像时退化为普通 Run。
 func (a *Agent) RunWithImages(ctx context.Context, userInput string, images []tools.Image) (string, error) {
 	if len(images) == 0 {
-		return a.RunAs(ctx, userInput, a.humanTurn)
+		return a.RunAs(ctx, userInput, a.currentHuman())
 	}
 	parts := []llm.Part{llm.TextPart(userInput)}
 	for _, img := range images {
 		parts = append(parts, llm.ImagePart(img.Mime, img.B64))
 	}
-	return a.runMessage(ctx, llm.Message{Role: "user", ContentParts: parts}, a.humanTurn)
+	return a.runMessage(ctx, llm.Message{Role: "user", ContentParts: parts}, a.currentHuman())
+}
+
+// currentHuman 加锁读 humanTurn：字段由 a.mu 保护（runTurn 锁内写），
+// Run* 在进入回合前读取——并发场景下裸读是与写侧的 data race。
+func (a *Agent) currentHuman() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.humanTurn
 }
 
 // RunAs 以指定身份（human / 系统）执行一轮。续跑与通知触发的回合用

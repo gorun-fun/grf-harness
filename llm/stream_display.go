@@ -39,7 +39,7 @@ func (f *displayFilter) delta(full string) string {
 // 标记前缀，如 "<tool_c"），等闭合后由 extract 整体剔除。
 func holdUnclosedTag(s string) string {
 	cut := len(s)
-	for _, m := range []string{dsmlMarker, toolCallTag, "</｜｜DSML｜｜"} {
+	for _, m := range []string{dsmlMarker, toolCallTag, dsmlCloseMark} {
 		if i := strings.LastIndex(s, m); i >= 0 && i < cut {
 			cut = i
 		}
@@ -54,10 +54,12 @@ func holdUnclosedTag(s string) string {
 	if cut < len(s) {
 		return s[:cut]
 	}
-	// 无完整标记：检查尾部是否是某个标记的真前缀（从 "<" 开始）
+	// 无完整标记：检查尾部是否是某个标记的真前缀（从 "<" 开始）；
+	// "<｜"/"</｜" 为 DSML 标记的全角前缀（ASCII 变体 "<||" 同理，见
+	// fallback_tags.go 的 dsmlBar）
 	for n := len(s); n > 0; n-- {
 		tail := s[len(s)-n:]
-		for _, m := range []string{toolCallTag, "</tool_call", dsmlMarker, "</｜｜DSML｜｜", "<||", "<｜", "</｜", "</|"} {
+		for _, m := range []string{toolCallTag, "</tool_call", dsmlMarker, dsmlCloseMark, "<||", "<" + dsmlBar, "</" + dsmlBar, "</|"} {
 			if strings.HasPrefix(m, tail) {
 				return s[:len(s)-n]
 			}

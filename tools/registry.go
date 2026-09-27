@@ -162,11 +162,24 @@ func (r *Registry) Registered() []string {
 }
 
 // Defs 返回已注册工具的定义（内置按 spec 顺序，自定义按字典序），
-// 随请求发送给 API。
+// 随请求发送给 API。单次持锁完成收集（不借道 Registered 避免双重加锁）。
 func (r *Registry) Defs() []llm.Tool {
-	names := r.Registered()
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	var names []string
+	for _, n := range SpecNames() {
+		if _, ok := r.handlers[n]; ok && !r.off(n) {
+			names = append(names, n)
+		}
+	}
+	var custom []string
+	for n := range r.custom {
+		if _, ok := r.handlers[n]; ok && !r.off(n) {
+			custom = append(custom, n)
+		}
+	}
+	sort.Strings(custom)
+	names = append(names, custom...)
 	defs := make([]llm.Tool, 0, len(names))
 	for _, n := range names {
 		if d, ok := SpecDef(n); ok {

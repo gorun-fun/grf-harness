@@ -59,5 +59,9 @@ func runServerCmd(args []string) {
 	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		fatal(err)
 	}
+	// 停止接客后等在跑回合落定（含 background 回合——其 ctx 不随监听
+	// 退出取消，不等会把执行中的回合连同终态快照一起带走，客户端只能
+	// 从 retrieve 的"蒸发 404"推断）。
+	srv.WaitSettled(30 * time.Second)
 	fmt.Println("gh server 已停止")
 }
