@@ -111,6 +111,15 @@ ANSI→验证帧），历史会话输出落在 `.grf/sessions/`。
 
 ## 关键约定与坑
 
+- **同批工具分发的 dsh 语义**（`turn.go` 的 `dispatchBatch`）：连续并行安全
+  工具（`parallelSafeTools` 只读集）入有界池并发（`MaxParallelTools` 默认 8），
+  其余独占串行并构成屏障；结果并入历史的完成顺序与模型顺序无关，请求快照由
+  `canonicalizeToolResults` 按发起顺序重排闭合——改分组逻辑时勿破坏该不变式。
+  循环层横切件：结果裁剪网 `pruneResultText`（>8192 保头 4096+尾 1024）、
+  回合取消未开始调用的 aborted-before-dispatch 合成结果、崩溃残留未闭合调用
+  的 outcome-unknown 占位、取消流的已交付前缀入历史（interrupted 标记）、
+  连续相同调用 3/5/8 次递进提醒。前台 bash 超时晋升后台 job
+  （`bash.go` promoteOnTimeout；晋升后命令归 job 所有，不随回合取消死）。
 - **TUI 单 goroutine 规则**：`tui/chat.go` 的所有状态（blocks/todos/popups）
   只能在事件循环 goroutine 上改。后台 goroutine（agent 回调/Host）必须经
   `c.events` 通道投递（见 `onEvent`/`eventMsg`），直接改状态会 data race。

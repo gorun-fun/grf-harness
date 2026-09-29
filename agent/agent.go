@@ -24,6 +24,29 @@ import (
 // DefaultMaxSteps 工具调用循环默认轮次上限。
 const DefaultMaxSteps = 100
 
+// DefaultMaxParallelTools 同批并行安全工具调用的默认并发上限
+//（dsh maxParallelToolCalls 语义；1 为严格串行）。
+const DefaultMaxParallelTools = 8
+
+// SetMaxParallelTools 设置同批并行安全工具的并发上限（≥1）。
+func (a *Agent) SetMaxParallelTools(n int) {
+	if n >= 1 {
+		a.mu.Lock()
+		a.maxParallel = n
+		a.mu.Unlock()
+	}
+}
+
+// MaxParallelTools 当前并发上限（未设置回退默认）。
+func (a *Agent) MaxParallelTools() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.maxParallel <= 0 {
+		return DefaultMaxParallelTools
+	}
+	return a.maxParallel
+}
+
 // Agent 单个 agent 实例（根会话或子代理共用同一结构）。
 type Agent struct {
 	ID    string
@@ -55,6 +78,9 @@ type Agent struct {
 	toolTime    time.Duration   // 工具执行累计耗时
 	bgReminded  bool            // 已发过后台作业收割提醒（每会话至多一次；仅回合 goroutine 访问，不加锁）
 	pausedSteps int             // 暂停时已消耗的工具循环步数（Resume 续用，见 pause.go）
+	maxParallel int             // 同批并行安全工具的并发上限（dispatchBatch）
+	repeatKey   string          // 连续相同调用（名+参数）的 streak 键（仅回合 goroutine 访问）
+	repeatCount int             // 该键的连续次数（仅回合 goroutine 访问）
 
 	mgr        *Manager
 	goals      *GoalState
@@ -72,14 +98,15 @@ type Agent struct {
 // NewAgent 创建根 agent（工具链由 BuildRegistry 组装完成后注入）。
 func NewAgent(id string, client *llm.Client, reg *tools.Registry, system string) *Agent {
 	a := &Agent{
-		ID:        id,
-		Label:     "main",
-		client:    client,
-		reg:       reg,
-		system:    system,
-		maxSteps:  DefaultMaxSteps,
-		Jobs:      tools.NewJobManager(),
-		humanTurn: true,
+		ID:          id,
+		Label:       "main",
+		client:      client,
+		reg:         reg,
+		system:      system,
+		maxSteps:    DefaultMaxSteps,
+		maxParallel: DefaultMaxParallelTools,
+		Jobs:        tools.NewJobManager(),
+		humanTurn:   true,
 	}
 	a.history = []llm.Message{{Role: "system", Content: system}}
 	return a

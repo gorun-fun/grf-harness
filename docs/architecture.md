@@ -51,10 +51,24 @@
 ### 3.1 回合循环（agent/turn.go）
 
 `runTurn` 是唯一的工具循环实现：并入 user 输入（或恢复处置）→ LLM 请求 →
-逐个执行工具调用 → 结果回传 → 循环，直至产生最终回复或命中暂停点。所有
+执行工具调用 → 结果回传 → 循环，直至产生最终回复或命中暂停点。所有
 入口（`Run/RunAs/RunWithImages`、`RunTurn/RunTurnParts/Resume`、
 `RunAutoGoal`）都是它的薄委托。MaxSteps 兜底循环上限；输出被 token 上限
 截断时不结束回合、注入通知提醒模型重发。
+
+同批工具调用经 `dispatchBatch` 分发（dsh 语义拟合）：连续的**并行安全**
+工具（`parallelSafeTools`：read/read_image/glob/grep/web_search/skill/
+job_list/list_agents/get_goal 等纯只读集）入有界并发池（`MaxParallelTools`，
+默认 8）；其余（副作用类、暂停类、自定义/插件/client 工具）单独串行执行并
+构成排序屏障。结果并入历史的完成顺序与模型顺序无关——请求快照经
+`canonicalizeToolResults` 按发起 assistant 的 tool_calls 顺序重排闭合，线
+格式恒合法。回合取消时尚未开始的调用由 `execToolCall` 合成
+aborted-before-dispatch 结果闭合（未运行、可重发）；崩溃/中断残留的未闭合
+调用在请求快照中以 outcome-unknown 占位闭合（只重试幂等操作）。取消中断的
+流式回复把已投递给宿主的前缀作为 interrupted assistant 消息并入历史（下次
+请求包含用户看到的内容）。所有工具结果过统一裁剪网 `pruneResultText`
+（>8192 字节保头 4096+尾 1024，UTF-8 边界对齐；工具自身的截断+落盘先行）。
+连续完全相同（名+参数）的调用在 3/5/8 次阈值注入递进提醒（防空转）。
 
 ### 3.2 暂停/恢复协议（agent/pause.go）
 
@@ -89,6 +103,10 @@ weixin 的 agentPool）。
   `[sandbox: file access denied]` 标记，一次性升级重试协议
   （`sandbox_permissions` + `justification` → `Host.ApproveEscalation`）。
 - 路径解析：文件工具的相对路径相对**工作区**，不是进程 CWD。
+- 前台 bash 超时晋升（promoteOnTimeout）：超时未结束不杀进程，转后台
+  job 继续跑并交接（一次性带回已产出输出 + job id，job_output 从读取
+  游标接续）；晋升后命令归 job 所有，不随本回合取消终止。无 JobManager
+  时退回旧语义（到期 SIGINT）。
 
 ### 3.5 事件流
 

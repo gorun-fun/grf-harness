@@ -153,8 +153,11 @@ func canonicalizeToolResults(h []llm.Message) []llm.Message {
 			if r, ok := results[c.ID]; ok {
 				out = append(out, r)
 			} else {
+				// 未闭合调用（崩溃/中断残留）的合成占位：outcome 未知
+				//（dsh TOOL_OUTCOME_UNKNOWN 语义）——该调用可能已执行、
+				// 也可能从未运行，无从区分，引导模型只重试幂等操作。
 				out = append(out, llm.Message{
-					Role: "tool", Content: "(tool result omitted)", ToolCallID: c.ID, Name: c.Name(),
+					Role: "tool", Content: "(tool outcome unknown: the session was interrupted before this call's result was recorded — it may or may not have run. Retry only read-only or idempotent operations; when side effects are possible, verify the external state or ask the user before retrying)", ToolCallID: c.ID, Name: c.Name(),
 				})
 			}
 		}
