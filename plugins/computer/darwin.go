@@ -150,10 +150,29 @@ func (d darwinPlatform) Scroll(ctx context.Context, x, y int, hasPos bool, dir s
 }
 
 func (d darwinPlatform) Type(ctx context.Context, text string) error {
-	// 纯 ASCII 走 keystroke；含非 ASCII（如中文）时 IME 会拦截按键把内容打乱
-	// （拉丁键进候选、空格变选词提交），改走剪贴板粘贴，事后恢复原剪贴板。
-	if isASCII(text) {
-		script := "on run argv\ntell application \"System Events\" to keystroke (item 1 of argv)\nend run"
+	// 输入源是拼音等 IME 时，合成键击会被输入法拦截重组——ASCII 也逃不掉
+	// （实测 "echo D2_OK" 被搜狗转成中文、enter 变成空提交）。检测到 IME
+	// 输入源即整体改走剪贴板粘贴（IME 不拦粘贴），事后恢复原剪贴板；
+	// 非 IME 输入源的纯 ASCII 仍走 keystroke（更快且不动剪贴板）。
+	// 含非 ASCII（如中文）时同样必须粘贴：IME 会把拉丁键进候选、空格变选词。
+	if isASCII(text) && !d.imeActive(ctx) {
+		// 分块键入：单次 keystroke 打长串，应用事件队列忙时会出现丢字/错序
+		// （实测 "echo" 落成 "ec ho"）。按 30 字符一块、块间 40ms 间隔放慢
+		// 节奏；收尾再停 150ms 让应用排空队列——紧随其后的 computer_key
+		// enter 才不会抢在字符前面。
+		script := `on run argv
+	set t to item 1 of argv
+	set n to count of t
+	set i to 1
+	repeat while i < n + 1
+		set j to i + 29
+		if j > n then set j to n
+		tell application "System Events" to keystroke (text i thru j of t)
+		delay 0.04
+		set i to j + 1
+	end repeat
+	delay 0.15
+end run`
 		_, err := run(ctx, "osascript", "-e", script, text)
 		return d.wrap(err)
 	}
@@ -184,6 +203,25 @@ func isASCII(s string) bool {
 		}
 	}
 	return true
+}
+
+// imeActive 当前输入源是否为 IME（拼音/注音等组合输入法）。IME 输入源的
+// bundle id 形如 com.sogou.inputmethod.sogou.pinyin / com.apple.inputmethod.
+// SCIM.ITABC（含 ".inputmethod"）。读 HIToolbox 的当前输入源 id，失败按
+// 非 IME 处理（退回键击路径，不比旧行为差）。注意：输入法状态按应用记忆，
+// 此键未必实时反映目标应用的输入源——尽力检测。
+func (d darwinPlatform) imeActive(ctx context.Context) bool {
+	out, err := runT(ctx, 3*time.Second, "defaults", "read",
+		"com.apple.HIToolbox", "AppleCurrentKeyboardLayoutInputSourceID")
+	if err != nil {
+		return false
+	}
+	return looksLikeIME(out)
+}
+
+// looksLikeIME 输入源 id 是否 IME 形态（纯字符串判定，可单测）。
+func looksLikeIME(sourceID string) bool {
+	return strings.Contains(sourceID, ".inputmethod")
 }
 
 // darwinKeyCodes AppleScript key code 表。

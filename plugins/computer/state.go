@@ -15,6 +15,7 @@ import (
 type AppInfo struct {
 	PID       int
 	Name      string // 应用名（进程名）
+	BundleID  string // bundle 标识（macOS 如 com.apple.Safari；其余平台可空）
 	Frontmost bool
 }
 
@@ -48,11 +49,12 @@ type Node struct {
 
 // State 一次观察的快照。
 type State struct {
-	ID   string
-	PID  int
-	App  string
-	At   time.Time
-	Nodes []*Node
+	ID       string
+	PID      int
+	App      string
+	BundleID string // 应用 bundle 标识（可空），终端类应用识别用
+	At       time.Time
+	Nodes    []*Node
 }
 
 // stateTTL 快照过期时间；stateMax 最多保留的快照个数。
@@ -69,13 +71,13 @@ type stateStore struct {
 var states = &stateStore{m: map[string]*State{}}
 
 // put 记录一次快照，生成新 state_id（递增序号 + 时间戳）。
-func (s *stateStore) put(pid int, app string, nodes []*Node) *State {
+func (s *stateStore) put(pid int, app, bundle string, nodes []*Node) *State {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.seq++
 	st := &State{
-		ID:    fmt.Sprintf("s%d-%d", time.Now().Unix(), s.seq),
-		PID:   pid, App: app, At: time.Now(), Nodes: nodes,
+		ID:  fmt.Sprintf("s%d-%d", time.Now().Unix(), s.seq),
+		PID: pid, App: app, BundleID: bundle, At: time.Now(), Nodes: nodes,
 	}
 	s.m[st.ID] = st
 	s.order = append(s.order, st.ID)

@@ -64,7 +64,7 @@ func TestSmokeDarwinActions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DumpElements: %v", err)
 	}
-	st := states.put(pid, "文本编辑", nodes)
+	st := states.put(pid, "文本编辑", "", nodes)
 	t.Log("\n" + renderState(st))
 
 	// 找文本区设值
@@ -147,7 +147,7 @@ func TestSmokeSafariType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DumpElements: %v", err)
 	}
-	st := states.put(pid, "Safari", nodes)
+	st := states.put(pid, "Safari", "", nodes)
 	var addr *Node
 	for _, n := range nodes {
 		if n.Role == "AXTextField" || n.Role == "AXComboBox" {

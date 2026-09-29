@@ -46,7 +46,7 @@ func TestSmokeDarwinAX(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DumpElements: %v", err)
 	}
-	st := states.put(front.PID, front.Name, nodes)
+	st := states.put(front.PID, front.Name, "", nodes)
 	t.Log("\n" + renderState(st))
 
 	// 找一个可点的按钮/具名元素做 locate

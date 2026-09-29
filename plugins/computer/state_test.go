@@ -10,8 +10,8 @@ import (
 
 func TestStateStorePutGet(t *testing.T) {
 	st := &stateStore{m: map[string]*State{}}
-	s1 := st.put(100, "App", []*Node{{Depth: 0, Path: "1", Role: "AXWindow"}})
-	s2 := st.put(200, "Other", []*Node{{Depth: 0, Path: "1", Role: "AXWindow"}})
+	s1 := st.put(100, "App", "", []*Node{{Depth: 0, Path: "1", Role: "AXWindow"}})
+	s2 := st.put(200, "Other", "", []*Node{{Depth: 0, Path: "1", Role: "AXWindow"}})
 	if got, ok := st.get(s1.ID); !ok || got.PID != 100 {
 		t.Fatalf("get(s1) = %v, %v", got, ok)
 	}
@@ -30,7 +30,7 @@ func TestStateStoreEviction(t *testing.T) {
 	st := &stateStore{m: map[string]*State{}}
 	var first string
 	for i := 0; i < 10; i++ {
-		s := st.put(i, "App", nil)
+		s := st.put(i, "App", "", nil)
 		if i == 0 {
 			first = s.ID
 		}

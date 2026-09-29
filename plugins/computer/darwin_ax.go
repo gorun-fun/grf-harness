@@ -167,7 +167,14 @@ on run argv
 				set focused of r to true
 			end try
 			set value of r to (item 6 of argv)
-			return "set"
+			-- 回读确认：AX 接受不等于应用落地（滑杆被钳制回 0、终端文本区只改回显不进输入）
+			delay 0.2
+			set got to ""
+			try
+				set got to (value of r) as text
+				if got is "missing value" then set got to ""
+			end try
+			return "set:" & got
 		else if act is "locate" then
 			set p to position of r
 			set s to size of r
@@ -177,14 +184,17 @@ on run argv
 	end tell
 end run`
 
-// appsJXA NSWorkspace 枚举运行中 GUI 应用（pid/名称/是否前台）。
+// appsJXA NSWorkspace 枚举运行中 GUI 应用（pid/名称/bundle id/是否前台）。
+// 名称是本地化名（中文系统下 Finder 叫"访达"），跨语言稳定定位靠 bundle id。
 const appsJXA = `ObjC.import('AppKit');
 const apps = $.NSWorkspace.sharedWorkspace.runningApplications;
 const res = [];
 for (let i = 0; i < apps.count; i++) {
   const a = apps.objectAtIndex(i);
   const pid = a.processIdentifier;
-  res.push({pid: pid, name: a.localizedName.js, front: a.isActive});
+  let bundle = '';
+  try { bundle = a.bundleIdentifier.js; } catch (e) {}
+  res.push({pid: pid, name: a.localizedName.js, bundle: bundle, front: a.isActive});
 }
 JSON.stringify(res);`
 
@@ -259,9 +269,10 @@ func (d darwinPlatform) Apps(ctx context.Context) ([]AppInfo, error) {
 		return nil, d.wrap(err)
 	}
 	var arr []struct {
-		PID   int    `json:"pid"`
-		Name  string `json:"name"`
-		Front bool   `json:"front"`
+		PID    int    `json:"pid"`
+		Name   string `json:"name"`
+		Bundle string `json:"bundle"`
+		Front  bool   `json:"front"`
 	}
 	if err := parseJSONLoose(out, &arr); err != nil {
 		return nil, fmt.Errorf("解析应用列表: %w", err)
@@ -275,7 +286,7 @@ func (d darwinPlatform) Apps(ctx context.Context) ([]AppInfo, error) {
 			continue
 		}
 		seen[a.Name] = true
-		apps = append(apps, AppInfo{PID: a.PID, Name: a.Name, Frontmost: a.Front})
+		apps = append(apps, AppInfo{PID: a.PID, Name: a.Name, BundleID: a.Bundle, Frontmost: a.Front})
 	}
 	return apps, nil
 }
@@ -393,10 +404,43 @@ func (d darwinPlatform) ElementAction(ctx context.Context, pid int, path, wantRo
 	return ElemActionResult{Text: out}, nil
 }
 
+// ActivateApp 启动/聚焦应用。两段式：先在运行中的应用里按 名称/bundle id
+// （精确优先，包含式兜底）解析出 pid，经 System Events 按 unix id 置前——
+// pid 定位不受本地化名影响（中文系统"访达" ↔ 英文名两套命名的坑）；
+// 未运行时按 bundle id 形态走 open -b（跨语言最稳），否则 open -a。
 func (d darwinPlatform) ActivateApp(ctx context.Context, name string) error {
-	// open -a 对运行中应用等效激活、未运行则拉起；应用名单参数传递无注入
+	if apps, err := d.Apps(ctx); err == nil {
+		lower := strings.ToLower(name)
+		var hit *AppInfo
+		for i := range apps {
+			a := &apps[i]
+			al := strings.ToLower(a.Name)
+			bl := strings.ToLower(a.BundleID)
+			if al == lower || (a.BundleID != "" && bl == lower) {
+				hit = a
+				break
+			}
+			if hit == nil && a.BundleID != "" && (strings.Contains(al, lower) || strings.Contains(bl, lower)) {
+				hit = a
+			}
+		}
+		if hit != nil {
+			script := fmt.Sprintf(
+				`tell application "System Events" to set frontmost of first application process whose unix id is %d to true`, hit.PID)
+			if _, err := run(ctx, "osascript", "-e", script); err == nil {
+				return nil
+			}
+			// 置前失败（辅助功能受限等）：落到 open 路径再试
+		}
+	}
+	if strings.Contains(name, ".") && !strings.Contains(name, " ") {
+		if _, err := run(ctx, "open", "-b", name); err != nil {
+			return fmt.Errorf("无法启动应用（bundle id %q）: %w", name, err)
+		}
+		return nil
+	}
 	if _, err := run(ctx, "open", "-a", name); err != nil {
-		return fmt.Errorf("无法启动/聚焦应用 %q（检查名称，可用 computer_list_apps 查询）: %w", name, err)
+		return fmt.Errorf("无法启动/聚焦应用 %q（检查名称，可用 computer_list_apps 查询名称与 bundle id）: %w", name, err)
 	}
 	return nil
 }
