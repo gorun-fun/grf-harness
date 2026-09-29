@@ -482,9 +482,18 @@ func (c *Chat) finishStream(err error) {
 		c.emitBlock(block{kind: blkErr, text: "错误: " + err.Error()})
 	}
 	c.paint(true)
-	// 回合结束仍在排队的插话（回合尾部/中断后到达）：转为下一回合输入
-	//（dsh inbox 的 nextTurn 语义），丢给模型前先展示并入内容
-	if texts := c.app.Root().DrainSteer(); len(texts) > 0 {
+	// 回合结束仍在排队的插话（回合尾部到达）：转为下一回合输入（dsh
+	// inbox 的 nextTurn 语义），丢给模型前先展示并入内容；被中断的回合
+	// 不续跑——残留排队消息一并丢弃，保证 Ctrl+C 是完全停下（interruptKey
+	// 已在按键时丢弃过，此处兜底取消后才排入的竞态）
+	texts := c.app.Root().DrainSteer()
+	if isCanceledErr(err) {
+		if len(texts) > 0 {
+			c.emitBlock(block{kind: blkDim, text: fmt.Sprintf("· 已丢弃 %d 条排队消息（回合被中断）", len(texts))})
+		}
+		return
+	}
+	if len(texts) > 0 {
 		c.emitBlock(block{kind: blkDim, text: "· 排队消息转入新一轮"})
 		c.startRun(strings.Join(texts, "\n\n"))
 	}

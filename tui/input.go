@@ -1,6 +1,7 @@
 // input.go 按键/鼠标分发与斜杠指令：模态（ask/计划/升审批/弹窗）优先
 // 捕获按键；编辑键交给输入框；PgUp/PgDn/滚轮滚动内容区；Ctrl+C 中断
-// 当前执行（空闲时顶栏提示后 3 秒内再按一次退出）；Ctrl+O 展开思考/工具块。
+// 当前执行并丢弃排队插话（空闲时顶栏提示后 3 秒内再按一次退出）；
+// Ctrl+O 展开思考/工具块。
 package tui
 
 import (
@@ -124,10 +125,14 @@ func (c *Chat) controlKey(k term.KeyEv) (quit, handled bool) {
 	return false, false
 }
 
-// interruptKey Ctrl+C：执行中中断当前回合；空闲时顶栏提示后需在时限内
-// 再按一次才退出。
+// interruptKey Ctrl+C：执行中中断当前回合并丢弃未注入的排队插话（中断是
+// 完全停下，排队消息不得触发续跑）；空闲时顶栏提示后需在时限内再按一次
+// 才退出。
 func (c *Chat) interruptKey() bool {
 	if c.running {
+		if n := len(c.app.Root().DrainSteer()); n > 0 {
+			c.emitBlock(block{kind: blkDim, text: fmt.Sprintf("· 已丢弃 %d 条排队消息", n)})
+		}
 		if c.cancel != nil {
 			c.cancel()
 		}
@@ -478,7 +483,7 @@ func (c *Chat) handleSlash(input string) (handled, quit bool) {
 /compact 压缩会话历史为摘要（历史过长时也会在回合开始自动压缩）
 /new    保存当前会话并清屏开新会话（/clear 同效）
 /exit   退出（/quit 同效；Ctrl+C 空闲时按两次退出，Ctrl+D 同）
-运行中输入消息回车 = 并入当前任务（当前步骤后生效，不打断在跑的工具）
+运行中输入消息回车 = 并入当前任务（当前步骤后生效，不打断在跑的工具；Ctrl+C 中断会丢弃未生效的排队消息）
 快捷键：Ctrl+O 展开/折叠思考与工具块 · Tab 补全/切换模式（auto→计划→审批） · Shift+Tab 切换鼠标 · PgUp/PgDn 翻页
 鼠标：滚轮滚动 · 单击展开 · 拖选复制`})
 		return true, false
