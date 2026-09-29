@@ -81,6 +81,7 @@ type Agent struct {
 	maxParallel int             // 同批并行安全工具的并发上限（dispatchBatch）
 	repeatKey   string          // 连续相同调用（名+参数）的 streak 键（仅回合 goroutine 访问）
 	repeatCount int             // 该键的连续次数（仅回合 goroutine 访问）
+	steer       []string        // 运行中插话队列（steer.go；步骤边界/回合开头注入）
 
 	mgr        *Manager
 	goals      *GoalState

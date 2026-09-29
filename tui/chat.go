@@ -455,6 +455,12 @@ func (c *Chat) finishStream(err error) {
 		c.emitBlock(block{kind: blkErr, text: "错误: " + err.Error()})
 	}
 	c.paint(true)
+	// 回合结束仍在排队的插话（回合尾部/中断后到达）：转为下一回合输入
+	//（dsh inbox 的 nextTurn 语义），丢给模型前先展示并入内容
+	if texts := c.app.Root().DrainSteer(); len(texts) > 0 {
+		c.emitBlock(block{kind: blkDim, text: "· 排队消息转入新一轮"})
+		c.startRun(strings.Join(texts, "\n\n"))
+	}
 }
 
 func isCanceledErr(err error) bool {

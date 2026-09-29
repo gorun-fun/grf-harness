@@ -143,11 +143,9 @@ func (c *Chat) interruptKey() bool {
 }
 
 // enterKey 回车提交：命令模式下输入整体作为命令直执行；普通模式在指令
-// 提示可见时先把选中的完整指令同步到输入框再执行。
+// 提示可见时先把选中的完整指令同步到输入框再执行。运行中同样提交——
+// 纯文本经 submit 转为运行中插话（steer），指令各自有运行态守卫。
 func (c *Chat) enterKey() bool {
-	if c.running {
-		return false
-	}
 	if c.bang {
 		// 命令模式：输入整体作为命令直执行；执行后留在模式内
 		// 便于连发命令，仅空输入框再按 ! 退出
@@ -432,6 +430,18 @@ func (c *Chat) submit(raw string) bool {
 		c.emitBlock(block{kind: blkErr, text: "未知指令 " + input + "（/help 查看可用指令）"})
 		return false
 	}
+	if c.running {
+		// 运行中插话（steer）：排队到下一个步骤边界注入，不打断在跑的
+		// 工具；回合结束时仍未注入的由 finishStream 转为下一回合输入
+		c.app.Root().Steer(input)
+		if c.app.Root().IsRunning() {
+			c.emitBlock(block{kind: blkDim, text: "· 已并入当前任务（当前步骤后生效）"})
+		} else {
+			c.emitBlock(block{kind: blkDim, text: "· 已排队（收尾中，稍后生效）"})
+		}
+		c.paint(true)
+		return false
+	}
 	c.startRun(input)
 	return false
 }
@@ -466,6 +476,7 @@ func (c *Chat) handleSlash(input string) (handled, quit bool) {
 /goal   查看当前 goal 状态
 /new    保存当前会话并清屏开新会话（/clear 同效）
 /exit   退出（/quit 同效；Ctrl+C 空闲时按两次退出，Ctrl+D 同）
+运行中输入消息回车 = 并入当前任务（当前步骤后生效，不打断在跑的工具）
 快捷键：Ctrl+O 展开/折叠思考与工具块 · Tab 补全/切换模式（auto→计划→审批） · Shift+Tab 切换鼠标 · PgUp/PgDn 翻页
 鼠标：滚轮滚动 · 单击展开 · 拖选复制`})
 		return true, false

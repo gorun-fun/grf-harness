@@ -85,6 +85,10 @@ func (a *Agent) runTurn(ctx context.Context, userMsg *llm.Message, human bool, r
 	}
 
 	for step := step0; step < a.MaxSteps(); step++ {
+		// 插话并入（用户运行中输入，普通 user 消息；与通知同一注入点），
+		// 步骤边界 = 上一轮 tool 结果已闭合、下一请求未发——OpenAI 协议
+		// 要求 user 消息不得插进未闭合的 tool_call 序列
+		a.injectSteer()
 		// 通知并入（在 LLM 请求前，此时 tool 结果均已闭合）
 		for _, n := range a.drainNotices() {
 			a.mu.Lock()

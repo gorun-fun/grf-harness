@@ -138,7 +138,7 @@ func (m *userMux) userLoop(ch chan *inboundPiece) {
 				return
 			}
 		}
-		runTurn(m.ctx, m.bot, m.pool, batch)
+		runTurn(m.ctx, m.bot, m.pool, batch, ch, func(p *inboundPiece) { m.push(p) })
 	}
 }
 
@@ -223,9 +223,18 @@ func (p *inboundPiece) resolveMedia(ctx context.Context, workspace string) {
 	}
 }
 
+// isNewCmd 会话重开命令（/new 与中文别名）。
+func isNewCmd(text string) bool {
+	t := strings.TrimSpace(text)
+	return t == "/new" || t == "新会话"
+}
+
 // runTurn 把一批 piece 合并成一轮:媒体下载解密、文本拼接、图片汇总,
-// 跑一次 agent，用最后一条消息的 context_token 回复。
-func runTurn(ctx context.Context, bot *Client, pool *agentPool, batch []*inboundPiece) {
+// 跑一次 agent，用最后一条消息的 context_token 回复。ch 为该用户的
+// 入站通道、requeue 为回队回调：回合运行中到达的后续消息经它们分流——
+// 纯文本 Steer 注入当前回合（步骤边界，不打断在跑的工具）并回执，
+// 带图片/文件或会话命令的消息攒回队列由下一轮按原路径处理。
+func runTurn(ctx context.Context, bot *Client, pool *agentPool, batch []*inboundPiece, ch <-chan *inboundPiece, requeue func(*inboundPiece)) {
 	// 媒体解析（CDN 下载 + 解密 + 落盘）在此执行：这里已是用户
 	// goroutine，一个慢下载不再阻塞其他用户。全部失败且无文本的 piece
 	// 整条丢弃（与旧 extractPiece"无有效载荷返回 nil"语义一致）。
@@ -261,7 +270,7 @@ func runTurn(ctx context.Context, bot *Client, pool *agentPool, batch []*inbound
 	fmt.Printf("📩 收到消息: %s\n", displayText(text, len(images)))
 
 	// /new 重开会话:清空该用户的 agent 历史
-	if cmd := strings.TrimSpace(text); cmd == "/new" || cmd == "新会话" {
+	if isNewCmd(text) {
 		pool.drop(fromID)
 		_ = bot.SendMessage(ctx, fromID, contextToken, "🆕 已开启新会话")
 		return
@@ -275,10 +284,55 @@ func runTurn(ctx context.Context, bot *Client, pool *agentPool, batch []*inbound
 	}
 	// ask_user 的回复要用本轮的 context_token 关联微信对话
 	host.setTurnToken(contextToken)
+	// 回合运行中的后续消息分流（见函数头注释）：Steer 注入当前回合的
+	// 是纯文本；其余攒入 leftover，回合结束后经 requeue 回到该用户队列
+	// 由下一轮处理。exited 保证回读 leftover 前分类已结束（无竞态）。
+	steerOver := make(chan struct{})
+	exited := make(chan struct{})
+	var leftover []*inboundPiece
+	var lmu sync.Mutex
+	go func() {
+		defer close(exited)
+		classify := func(p *inboundPiece) {
+			if t := strings.TrimSpace(p.text); t != "" && p.mediaMsg == nil && !isNewCmd(t) {
+				a.Steer(t)
+				// 回执异步发：SendMessage 的网络耗时不阻塞分类退出
+				go bot.SendMessage(ctx, fromID, p.contextToken, "⏩ 已并入当前任务（当前步骤后生效）")
+			} else {
+				lmu.Lock()
+				leftover = append(leftover, p)
+				lmu.Unlock()
+			}
+		}
+		for {
+			select {
+			case p := <-ch:
+				classify(p)
+			case <-steerOver:
+				for { // 通道内已排队消息全部归类后退出，避免丢失
+					select {
+					case p := <-ch:
+						classify(p)
+					default:
+						return
+					}
+				}
+			}
+		}
+	}()
 	// agent 一轮可能跑很久(多步工具调用),给足超时
 	qctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	reply, err := a.RunWithImages(qctx, text, images)
 	cancel()
+	close(steerOver)
+	<-exited
+	lmu.Lock()
+	pending := leftover
+	leftover = nil
+	lmu.Unlock()
+	for _, p := range pending {
+		requeue(p)
+	}
 	if err != nil {
 		fmt.Printf("agent 执行失败: %v\n(已重置该用户会话,下条消息从新会话开始)\n", err)
 		pool.drop(fromID)

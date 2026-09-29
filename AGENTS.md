@@ -120,6 +120,10 @@ ANSI→验证帧），历史会话输出落在 `.grf/sessions/`。
   的 outcome-unknown 占位、取消流的已交付前缀入历史（interrupted 标记）、
   连续相同调用 3/5/8 次递进提醒。前台 bash 超时晋升后台 job
   （`bash.go` promoteOnTimeout；晋升后命令归 job 所有，不随回合取消死）。
+  运行中插话（`steer.go`）：`Agent.Steer` 在步骤边界以普通 user 消息并入
+  （注入点必须保持"tool 结果已闭合"约束）；TUI 运行中回车即插话（回合
+  结束由 finishStream 的 DrainSteer 转下一回合），weixin 运行中纯文本
+  Steer、媒体/命令回队。
 - **TUI 单 goroutine 规则**：`tui/chat.go` 的所有状态（blocks/todos/popups）
   只能在事件循环 goroutine 上改。后台 goroutine（agent 回调/Host）必须经
   `c.events` 通道投递（见 `onEvent`/`eventMsg`），直接改状态会 data race。

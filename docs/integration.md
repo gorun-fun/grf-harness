@@ -251,6 +251,11 @@ func installSkills(workspace string, skills map[string]string) error {
 - **注入通知与自动续跑**：`Agent.EnqueueNotice(text)` 向会话注入系统
   通知；agent 空闲时触发 `Agent.OnIdleNotice` 回调——宿主注册它即可实现
   "后台事件到了自动让 agent 续跑"（消息渠道/机器人场景）。
+- **运行中插话（steer）**：`Agent.Steer(text)` 在回合运行中排队一条
+  用户插话，下一个步骤边界（tool 结果闭合后）以普通 user 消息并入——
+  不打断在跑的工具，模型下一个请求即见。空闲时排队留待下一次 `Run` 的
+  回合开头；`Agent.DrainSteer()` 取空队列（宿主在回合结束时把未注入的
+  插话转为下一回合输入）。内存队列不持久化。TUI 与微信渠道已内置接线。
 - **goal 续跑与后台收尾**：`Agent.RunAutoGoal(ctx, input)` 执行一轮并按
   goal 状态自动续跑；一轮结束后 `Agent.RunAndWaitBackground(dur)` 等待
   后台子代理落定并取回通知（`app.RunTask` 即此组合）。
