@@ -102,6 +102,73 @@ func TestGlobOrderAndBasename(t *testing.T) {
 	}
 }
 
+func TestGlobBraceExpansion(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "docs", "deep"), 0o755)
+	os.WriteFile(filepath.Join(dir, "index.html"), []byte("1"), 0o644)
+	os.WriteFile(filepath.Join(dir, "docs", "readme.md"), []byte("1"), 0o644)
+	os.WriteFile(filepath.Join(dir, "docs", "deep", "note.txt"), []byte("1"), 0o644)
+	os.WriteFile(filepath.Join(dir, "app.ts"), []byte("1"), 0o644)
+	os.WriteFile(filepath.Join(dir, "lit{a,b}.go"), []byte("1"), 0o644)
+
+	// 花括号交替：**/*.{html,md,txt} 命中三种扩展名（含深层）
+	m, err := GlobFiles("**/*.{html,md,txt}", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m) != 3 {
+		t.Fatalf("brace expansion want 3, got %v", m)
+	}
+	joined := strings.Join(m, "\n")
+	for _, want := range []string{"index.html", "readme.md", "note.txt"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("missing %s in %v", want, m)
+		}
+	}
+	if strings.Contains(joined, "app.ts") || strings.Contains(joined, "lit{a,b}.go") {
+		t.Fatalf("unexpected matches: %v", m)
+	}
+	// 花括号在段中间：{docs,other}/*.md
+	m, _ = GlobFiles("{docs,other}/*.md", dir)
+	if len(m) != 1 || !strings.HasSuffix(m[0], "readme.md") {
+		t.Fatalf("mid-segment brace: %v", m)
+	}
+}
+
+func TestExpandBraces(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{"**/*.{html,md,txt}", []string{"**/*.html", "**/*.md", "**/*.txt"}},
+		{"{a,b}/x.ts", []string{"a/x.ts", "b/x.ts"}},
+		// 嵌套：外层无顶层逗号时展开内层，迭代展开到底
+		{"a{b{1,2}}", []string{"ab1", "ab2"}},
+		{"a{b,c{1,2}}", []string{"ab", "ac1", "ac2"}},
+		// 无逗号组展开为组内容（同 bash/grep）；不配对 / 字符类 / 转义保持字面量
+		{"{ab}", []string{"ab"}},
+		{"a{b}", []string{"ab"}},
+		{"{a,b", []string{"{a,b"}},
+		{"[{a,b}]", []string{"[{a,b}]"}},
+		{`\{a,b\}`, []string{`\{a,b\}`}},
+		{"plain/*.ts", []string{"plain/*.ts"}},
+		// 空替代与多组组合
+		{"x{a,,c}", []string{"xa", "x", "xc"}},
+		{"{a,b}{1,2}", []string{"a1", "a2", "b1", "b2"}},
+	}
+	for _, c := range cases {
+		got := expandBraces(c.in)
+		if strings.Join(got, ",") != strings.Join(c.want, ",") {
+			t.Errorf("expandBraces(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+	// 病态展开防爆炸：组合数超上限回退为字面量原样
+	big := strings.Repeat("{1,2}", 9) // 2^9=512 > 128
+	if got := expandBraces(big); len(got) != 1 || got[0] != big {
+		t.Errorf("pathological expansion should fall back to literal, got %v", got)
+	}
+}
+
 func TestGrepCapAndInclude(t *testing.T) {
 	dir := t.TempDir()
 	os.MkdirAll(filepath.Join(dir, ".git"), 0o755)

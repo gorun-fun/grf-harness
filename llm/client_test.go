@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -166,5 +168,45 @@ func TestModelRef(t *testing.T) {
 		if got := NewClient(c.cfg).ModelRef(); got != c.want {
 			t.Errorf("ModelRef(%+v) = %q, want %q", c.cfg, got, c.want)
 		}
+	}
+}
+
+// TestTransientRetry 非流式请求的瞬时错误重试：首个 429/503 后恢复 200
+// 应被有界重试吸收；不可重试的 400（如上下文超限）立即失败不重发。
+func TestTransientRetry(t *testing.T) {
+	var n int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch atomic.AddInt32(&n, 1) {
+		case 1:
+			http.Error(w, `{"error":{"message":"rate limited"}}`, http.StatusTooManyRequests)
+		case 2:
+			http.Error(w, `{"error":{"message":"upstream boom"}}`, http.StatusBadGateway)
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`)
+		}
+	}))
+	defer srv.Close()
+	c := NewClient(Config{BaseURL: srv.URL, APIKey: "t", Model: "m"})
+	msg, err := c.Chat(context.Background(), nil, nil)
+	if err != nil || msg.Content != "ok" {
+		t.Fatalf("429+503 后应重试成功: msg=%+v err=%v", msg, err)
+	}
+	if got := atomic.LoadInt32(&n); got != 3 {
+		t.Fatalf("应发 3 次请求（429、503、成功），实际 %d", got)
+	}
+
+	var m int32
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&m, 1)
+		http.Error(w, `{"error":{"message":"context length exceeded"}}`, http.StatusBadRequest)
+	}))
+	defer srv2.Close()
+	c2 := NewClient(Config{BaseURL: srv2.URL, APIKey: "t", Model: "m"})
+	if _, err := c2.Chat(context.Background(), nil, nil); err == nil {
+		t.Fatal("400 应失败")
+	}
+	if got := atomic.LoadInt32(&m); got != 1 {
+		t.Fatalf("400 不应重试，实际发 %d 次", got)
 	}
 }

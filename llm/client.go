@@ -214,7 +214,22 @@ func parseWhole(data []byte) (Message, error) {
 }
 
 // Chat 发送一次对话请求，返回 assistant 消息（可能携带 ToolCalls）。
+// 瞬时错误（连接失败、429/5xx）按重试策略退避重试（见 retryable）。
 func (c *Client) Chat(ctx context.Context, messages []Message, tools []Tool) (Message, error) {
+	const maxRetry = 3
+	for attempt := 0; ; attempt++ {
+		msg, err := c.chatOnce(ctx, messages, tools)
+		if err == nil {
+			return msg, nil
+		}
+		if ctx.Err() != nil || attempt >= maxRetry || !retryable(err) {
+			return Message{}, err
+		}
+		time.Sleep(time.Duration(attempt+1) * 500 * time.Millisecond)
+	}
+}
+
+func (c *Client) chatOnce(ctx context.Context, messages []Message, tools []Tool) (Message, error) {
 	req := chatRequest{Model: c.cfg.Model, Messages: messages, PromptCacheKey: c.cacheKey, ReasoningEffort: c.effort}
 	for _, t := range tools {
 		req.Tools = append(req.Tools, toolDef{Type: "function", Function: t})
@@ -233,6 +248,19 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []Tool) (Me
 	}
 	fallbackContentToolCalls(&msg)
 	return msg, nil
+}
+
+// retryable 一个请求错误是否值得原样重试：传输层失败（连接拒绝/重置/
+// EOF）可重试；服务端 api error 仅限瞬时类（429 限流、5xx 网关/上游）——
+// 其余 4xx 属请求本身的问题，盲重试会掩盖 agent 的自愈路径（图片降级
+// 重发等）。并发子代理（workflow 等）同端点压出偶发 429 是结构化任务
+// 偶发 null 的根因，必须在此层吸收。
+func retryable(err error) bool {
+	var apiErr *apiError
+	if errors.As(err, &apiErr) {
+		return apiErr.status == 429 || apiErr.status >= 500
+	}
+	return true
 }
 
 // ToolArgsHook 工具调用参数生成增量回调：模型流式生成 tool_call 参数期间
@@ -269,10 +297,12 @@ type streamChunk struct {
 }
 
 // ChatStream 流式请求：连接在产出任何增量之前断开（上游重启/网关掐线，
-// 典型报错 "read stream: unexpected EOF"）时自动重试最多 10 次；已流出
-// 增量的中断不内部重试（会造成 UI 重复输出），交由上层（宿主整回合重发）
-// 处理。服务端明确拒绝（api error，如图片输入不支持）不重试——那属于
-// 请求本身的问题，盲重试会掩盖 agent 的自愈路径（图片降级重发）。
+// 典型报错 "read stream: unexpected EOF"）时自动重试最多 10 次；瞬时
+// 服务端错误（429 限流/5xx，见 retryable）同样退避重试。已流出增量的
+// 中断不内部重试（会造成 UI 重复输出），交由上层（宿主整回合重发）
+// 处理。服务端明确拒绝（其余 4xx api error，如图片输入不支持）不重试
+// ——那属于请求本身的问题，盲重试会掩盖 agent 的自愈路径（图片降级
+// 重发）。
 func (c *Client) ChatStream(ctx context.Context, messages []Message, tools []Tool, hooks StreamHooks) (Message, error) {
 	const maxRetry = 10
 	for attempt := 0; ; attempt++ {
@@ -280,8 +310,7 @@ func (c *Client) ChatStream(ctx context.Context, messages []Message, tools []Too
 		if err == nil {
 			return msg, nil
 		}
-		var apiErr *apiError
-		if ctx.Err() != nil || emitted || attempt >= maxRetry || errors.As(err, &apiErr) {
+		if ctx.Err() != nil || emitted || attempt >= maxRetry || !retryable(err) {
 			return Message{}, err
 		}
 		time.Sleep(time.Duration(attempt+1) * 500 * time.Millisecond)

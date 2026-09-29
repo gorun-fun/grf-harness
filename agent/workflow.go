@@ -212,6 +212,9 @@ func (w *workflowCtx) runAgent(prompt string, opts map[string]any) js.Value {
 	}
 	_, out, err := w.m.Subagent(w.a, label, promptText, false)
 	if err != nil {
+		// null 契约不变（.filter(Boolean) 过滤），但失败原因必须可见——
+		// 静默 null 会把"偶发子代理失败"伪装成"schema 用法问题"
+		w.emitDiag(label, phase, "子代理失败: "+err.Error())
 		return nil // 子代理失败 → null
 	}
 	if schema == nil {
@@ -219,9 +222,18 @@ func (w *workflowCtx) runAgent(prompt string, opts map[string]any) js.Value {
 	}
 	obj, ok := extractJSONForSchema(out, schema)
 	if !ok {
+		w.emitDiag(label, phase, "最终消息未含符合 schema 的 JSON 对象（详见上方输出或重试该子任务）")
 		return nil // 无法产出合法 JSON → 视为失败
 	}
 	return toJSValue(obj)
+}
+
+// emitDiag 子代理失败诊断（进度事件流里的一行，标注 label/phase 便于归因）。
+func (w *workflowCtx) emitDiag(label, phase, reason string) {
+	if phase != "" {
+		label = "[" + phase + "] " + label
+	}
+	w.a.emit("phase", label+" ✗ "+reason)
 }
 
 // panicWorkflow 以钩子错误终止脚本（由外层 RunEval 捕获）。
