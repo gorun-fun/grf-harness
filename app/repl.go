@@ -13,6 +13,7 @@ import (
 
 	"git.gorun.fun/share/grf-harness/agent"
 	"git.gorun.fun/share/grf-harness/config"
+	"git.gorun.fun/share/grf-harness/term"
 )
 
 // SlashCmds 斜杠指令表：两交互表面共用的事实来源（行模式 REPL 的 /help
@@ -26,6 +27,7 @@ var SlashCmds = []struct{ Name, Alias, Desc string }{
 	{Name: "/resume", Desc: "恢复历史会话"},
 	{Name: "/plan", Desc: "进入/退出计划模式"},
 	{Name: "/goal", Desc: "查看当前 goal"},
+	{Name: "/compact", Desc: "压缩会话历史为摘要"},
 	{Name: "/new", Alias: "/clear", Desc: "保存当前会话并开新会话"},
 	{Name: "/exit", Alias: "/quit", Desc: "退出"},
 }
@@ -88,6 +90,16 @@ func (a *App) PlainREPL(ctx context.Context) {
 				fmt.Println(g)
 			} else {
 				fmt.Println("（当前无 goal）")
+			}
+			continue
+		case "/compact":
+			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+			summary, err := a.Root().Compact(ctx)
+			cancel()
+			if err != nil {
+				fmt.Println("压缩失败: " + err.Error())
+			} else {
+				fmt.Println("已压缩会话: " + term.FirstLine(summary, 0))
 			}
 			continue
 		}

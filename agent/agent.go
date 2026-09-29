@@ -25,7 +25,7 @@ import (
 const DefaultMaxSteps = 100
 
 // DefaultMaxParallelTools 同批并行安全工具调用的默认并发上限
-//（dsh maxParallelToolCalls 语义；1 为严格串行）。
+// （dsh maxParallelToolCalls 语义；1 为严格串行）。
 const DefaultMaxParallelTools = 8
 
 // SetMaxParallelTools 设置同批并行安全工具的并发上限（≥1）。
@@ -60,28 +60,29 @@ type Agent struct {
 	mu      sync.Mutex
 	history []llm.Message
 
-	onEvent     OnEvent
-	onToolEvent OnToolEvent
-	onContent   func(string)
-	onReason    func(string)
-	onToolArgs  llm.ToolArgsHook
-	maxSteps    int
-	humanTurn   bool
-	running     bool
-	turnCancel  context.CancelFunc
-	notices     []string
-	planMode    bool
-	approveEach bool
-	planGuard   func() bool     // 子代理生效计划模式判定（指向根；根为 nil 时用自身）
-	planExtra   map[string]bool // 计划模式额外拦截的工具名（未标只读的插件工具）
-	toolCalls   int             // 已执行的工具调用数
-	toolTime    time.Duration   // 工具执行累计耗时
-	bgReminded  bool            // 已发过后台作业收割提醒（每会话至多一次；仅回合 goroutine 访问，不加锁）
-	pausedSteps int             // 暂停时已消耗的工具循环步数（Resume 续用，见 pause.go）
-	maxParallel int             // 同批并行安全工具的并发上限（dispatchBatch）
-	repeatKey   string          // 连续相同调用（名+参数）的 streak 键（仅回合 goroutine 访问）
-	repeatCount int             // 该键的连续次数（仅回合 goroutine 访问）
-	steer       []string        // 运行中插话队列（steer.go；步骤边界/回合开头注入）
+	onEvent          OnEvent
+	onToolEvent      OnToolEvent
+	onContent        func(string)
+	onReason         func(string)
+	onToolArgs       llm.ToolArgsHook
+	maxSteps         int
+	humanTurn        bool
+	running          bool
+	turnCancel       context.CancelFunc
+	notices          []string
+	planMode         bool
+	approveEach      bool
+	planGuard        func() bool     // 子代理生效计划模式判定（指向根；根为 nil 时用自身）
+	planExtra        map[string]bool // 计划模式额外拦截的工具名（未标只读的插件工具）
+	toolCalls        int             // 已执行的工具调用数
+	toolTime         time.Duration   // 工具执行累计耗时
+	bgReminded       bool            // 已发过后台作业收割提醒（每会话至多一次；仅回合 goroutine 访问，不加锁）
+	pausedSteps      int             // 暂停时已消耗的工具循环步数（Resume 续用，见 pause.go）
+	maxParallel      int             // 同批并行安全工具的并发上限（dispatchBatch）
+	repeatKey        string          // 连续相同调用（名+参数）的 streak 键（仅回合 goroutine 访问）
+	repeatCount      int             // 该键的连续次数（仅回合 goroutine 访问）
+	steer            []string        // 运行中插话队列（steer.go；步骤边界/回合开头注入）
+	compactThreshold int             // 自动压缩阈值（compact.go；0 默认 / <0 关闭）
 
 	mgr        *Manager
 	goals      *GoalState

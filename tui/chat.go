@@ -177,6 +177,20 @@ func (c *Chat) Run(ctx context.Context) error {
 
 type noticeMsg struct{ text string }
 
+// compactDoneMsg /compact 压缩落定（后台 goroutine → 事件循环）。
+type compactDoneMsg struct {
+	summary string
+	err     string
+}
+
+// errStr error → 文本（nil 为空串，事件载荷不带 error）。
+func errStr(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
 // updateMsg 自更新探测落定（后台 goroutine → 事件循环）。
 type updateMsg struct{ version string }
 
@@ -228,6 +242,9 @@ func (c *Chat) applyEvent(kind, detail string) {
 		c.goalText = detail
 	case "notice":
 		c.emitBlock(block{kind: blkDim, text: "[info] " + detail})
+	case "compact":
+		// 自动压缩已在后台发生（新回合入口）：展示摘要首行
+		c.emitBlock(block{kind: blkDim, text: "已自动压缩会话: " + detail})
 	case "plan":
 		// 模式提示已在输入框上方状态栏展示，不再打印内容行
 	}
@@ -340,6 +357,16 @@ func (c *Chat) handleMsg(msg any) bool {
 		if !c.running {
 			c.startRun("(background work settled; the runtime sent you notices — collect results with job_output/list_agents as needed and wrap up your answer)")
 		}
+	case compactDoneMsg:
+		// /compact 落定：展示摘要首行并保存（历史已被替换）
+		c.running = false
+		if m.err != "" {
+			c.emitBlock(block{kind: blkErr, text: "压缩失败: " + m.err})
+		} else {
+			c.emitBlock(block{kind: blkDim, text: "已压缩会话: " + term.FirstLine(m.summary, 0)})
+		}
+		c.app.AutoSave()
+		c.paint(true)
 	case updateMsg:
 		c.emitBlock(block{kind: blkDim, text: fmt.Sprintf("✨ 有新版本 %s：退出后运行 gh update 更新", m.version)})
 		// 空闲时一次性到达的消息：绕过 60ms 节流强制重绘，否则启动后

@@ -67,6 +67,11 @@ func estimateMessagesTokens(messages []Message) int64 {
 	return n
 }
 
+// EstimateMessagesTokens 消息 token 估算（导出版，供上层复用——agent 的
+// 自动压缩阈值判定；口径与本包统计一致：CJK 每字 1 token，其余约 4
+// 字符 1 token）。
+func EstimateMessagesTokens(messages []Message) int64 { return estimateMessagesTokens(messages) }
+
 func (s *stats) addRound(dur, first time.Duration, u *usageInfo, promptEst, outEst int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

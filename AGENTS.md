@@ -124,6 +124,11 @@ ANSI→验证帧），历史会话输出落在 `.grf/sessions/`。
   （注入点必须保持"tool 结果已闭合"约束）；TUI 运行中回车即插话（回合
   结束由 finishStream 的 DrainSteer 转下一回合），weixin 运行中纯文本
   Steer、媒体/命令回队。
+- **会话压缩**（`compact.go`）：新回合入口估算 token 超阈值（默认 100k，
+  settings 的 `compact_threshold` 覆盖/负值关闭）或 `/compact` 手动触发，
+  历史收敛为 [system 原文, 摘要消息]；只在回合边界发生（暂停态拒绝），
+  自动失败开放。总结提示词与 server/compact.go 同文（agent 不 import
+  server，改一处须同步另一处）。
 - **TUI 单 goroutine 规则**：`tui/chat.go` 的所有状态（blocks/todos/popups）
   只能在事件循环 goroutine 上改。后台 goroutine（agent 回调/Host）必须经
   `c.events` 通道投递（见 `onEvent`/`eventMsg`），直接改状态会 data race。

@@ -39,6 +39,9 @@ type Settings struct {
 	MaxSteps     int                  `json:"max_steps,omitempty"`
 	Policy       string               `json:"policy,omitempty"`
 	AutoApprove  bool                 `json:"auto_approve,omitempty"` // 非交互时自动批准沙箱升级/计划
+	// CompactThreshold 会话自动压缩阈值（估算 token）：0 用默认
+	// （agent.DefaultCompactThreshold），正数显式覆盖，负数关闭自动压缩。
+	CompactThreshold int `json:"compact_threshold,omitempty"`
 	// Plugins MCP 插件接入配置。nil（配置文件未写 plugins 键）= 自动发现
 	// ~/.grf/plugins 下的可执行文件；[]（显式空数组）= 关闭自动发现；
 	// 非空 = 仅使用列出的插件（本地 command / 远程 url，见 Plugin）。

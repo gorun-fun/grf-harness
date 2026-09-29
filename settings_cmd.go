@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 
 	"git.gorun.fun/share/grf-harness/agent"
@@ -91,6 +92,7 @@ func runConfigCmd(args []string) {
 		printMaxSteps(s)
 		fmt.Printf("策略: %s\n", s.Policy)
 		fmt.Printf("非交互自动批准: %v\n", s.AutoApprove)
+		printCompactThreshold(s)
 		if s.SystemPrompt != "" {
 			fmt.Println("提示词: 自定义（gh config prompt 预览）")
 		} else {
@@ -111,9 +113,33 @@ func runConfigCmd(args []string) {
 			fatal(err)
 		}
 		fmt.Printf("非交互自动批准: %v\n", s.AutoApprove)
+	case "compact":
+		if len(args) >= 2 {
+			n, err := strconv.Atoi(args[1])
+			if err != nil {
+				fatal(fmt.Errorf("阈值须为整数 token 数（正数=阈值，0=默认，负数=关闭）"))
+			}
+			s.CompactThreshold = n
+			if err := s.Save(); err != nil {
+				fatal(err)
+			}
+		}
+		printCompactThreshold(s)
 	default:
 		fmt.Fprintf(os.Stderr, "未知子命令 %q\n", args[0])
 		os.Exit(2)
+	}
+}
+
+// printCompactThreshold 打印自动压缩阈值（gh config 与 gh config compact 共用）。
+func printCompactThreshold(s *config.Settings) {
+	switch {
+	case s.CompactThreshold > 0:
+		fmt.Printf("自动压缩阈值: %d tokens（自定义）\n", s.CompactThreshold)
+	case s.CompactThreshold < 0:
+		fmt.Println("自动压缩: 关闭")
+	default:
+		fmt.Printf("自动压缩阈值: %d tokens（默认；正数覆盖，负数关闭）\n", agent.DefaultCompactThreshold)
 	}
 }
 

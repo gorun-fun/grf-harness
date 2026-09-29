@@ -74,6 +74,14 @@ aborted-before-dispatch 结果闭合（未运行、可重发）；崩溃/中断�
 drain 兜底）；TUI 运行中回车即插话、回合结束收割未注入项转下一回合，
 weixin 回合运行中的纯文本消息 Steer 注入并回执（媒体/命令回队下一轮）。
 
+会话压缩（`agent/compact.go`，dsh compaction-basic + /compact 形态）：
+新回合入口按估算 token 判定（默认阈值 100k，`Settings.CompactThreshold`
+覆盖、负值关闭），超限或 `/compact` 手动触发时用当前模型把既有会话总结
+成一条消息，历史收敛为 [system 原文, `[conversation summary] 摘要]。
+压缩只在回合边界发生（运行中/暂停态拒绝，永不制造孤儿 tool 消息），自动
+路径失败开放；总结输出做规范化（剥 `<summary>` 标签与前缀、reasoning
+兜底——transcript 行风格会诱导部分模型包裹输出）。
+
 ### 3.2 暂停/恢复协议（agent/pause.go）
 
 为跨请求应答交互（gh server）设计。**暂停状态完全落在持久化历史里**：

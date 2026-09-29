@@ -48,10 +48,19 @@ func (a *Agent) runTurn(ctx context.Context, userMsg *llm.Message, human bool, r
 	a.pausedSteps = 0
 	turnCtx, cancel := context.WithCancel(ctx)
 	a.turnCancel = cancel
-	if userMsg != nil {
-		a.history = append(a.history, *userMsg)
-	}
 	a.mu.Unlock()
+
+	// 自动压缩：新回合入口、并入本回合输入之前（总结只覆盖既有会话）；
+	// 仅新回合触发——恢复路径的历史尾部是暂停协议的未闭合 tool_call，
+	// 压缩会破坏恢复语义。失败开放（见 maybeAutoCompact）。
+	if userMsg != nil {
+		a.maybeAutoCompact(turnCtx)
+	}
+	if userMsg != nil {
+		a.mu.Lock()
+		a.history = append(a.history, *userMsg)
+		a.mu.Unlock()
+	}
 
 	defer func() {
 		cancel()
@@ -168,15 +177,15 @@ func (a *Agent) runTurn(ctx context.Context, userMsg *llm.Message, human bool, r
 // 操作、bash/write/edit 有真实副作用，均不在列）。自定义/插件工具与
 // client 工具一律按独占处理（副作用无法静态判断）。
 var parallelSafeTools = map[string]bool{
-	"read":       true,
-	"read_image": true,
-	"glob":       true,
-	"grep":       true,
-	"web_search": true,
-	"skill":      true,
-	"job_list":   true,
+	"read":        true,
+	"read_image":  true,
+	"glob":        true,
+	"grep":        true,
+	"web_search":  true,
+	"skill":       true,
+	"job_list":    true,
 	"list_agents": true,
-	"get_goal":   true,
+	"get_goal":    true,
 }
 
 // dispatchBatch 按模型顺序处理一批 tool_call：连续的并行安全工具成组
@@ -241,7 +250,7 @@ func (a *Agent) dispatchBatch(turnCtx context.Context, calls []llm.ToolCall) []P
 }
 
 // repeatRemindThresholds 连续完全相同（工具名+参数）调用的递进提醒阈值
-//（dsh repeat-tool-reminder：thresholds [3,5,8]）。只在恰好命中阈值时
+// （dsh repeat-tool-reminder：thresholds [3,5,8]）。只在恰好命中阈值时
 // 提醒一次，超过最高阈值不再重复。
 var repeatRemindThresholds = []int{3, 5, 8}
 
@@ -306,12 +315,12 @@ func pruneResultText(s string) string {
 func utf8RuneStart(b byte) bool { return b&0xC0 != 0x80 }
 
 // abortedBeforeDispatchText 回合取消时尚未开始的调用的合成结果文本
-//（dsh ABORTED_BEFORE_DISPATCH）：调用从未运行、无任何效果，可直接
+// （dsh ABORTED_BEFORE_DISPATCH）：调用从未运行、无任何效果，可直接
 // 重发——与 outcome-unknown（见 canonicalizeToolResults 占位）相区分。
 const abortedBeforeDispatchText = "[aborted before dispatch] the turn was cancelled before this tool call started, so it never ran and had no effect; re-issue it now if its outcome is still needed"
 
 // keepDeliveredPrefix 取消中断的流式回复：把已投递给宿主的前缀并入历史
-//（dsh interrupted 锚点语义）。空前缀不并入（sanitizeSnapshot 会剔除空
+// （dsh interrupted 锚点语义）。空前缀不并入（sanitizeSnapshot 会剔除空
 // assistant 残留，这里同样不制造）。
 func (a *Agent) keepDeliveredPrefix(delivered string) {
 	c := strings.TrimRight(delivered, " \n\t")
@@ -381,7 +390,7 @@ func (a *Agent) dispatchCall(turnCtx context.Context, call llm.ToolCall) (PauseC
 
 // execToolCall 执行一次工具调用并入历史（主循环与审批恢复共用）。
 // 回合已取消时不再启动执行：合成 aborted-before-dispatch 结果闭合调用
-//（无效果、可重发），避免"取消后仍真的执行副作用"与含混的 ctx 错误文本。
+// （无效果、可重发），避免"取消后仍真的执行副作用"与含混的 ctx 错误文本。
 func (a *Agent) execToolCall(turnCtx context.Context, call llm.ToolCall, callID string) {
 	t0 := time.Now()
 	var res tools.Result

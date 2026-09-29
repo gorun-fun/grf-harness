@@ -7,13 +7,13 @@
 // 文件时保持「稳定内容靠前、易变内容靠后」的排序，不要在靠前的段里
 // 嵌入更高频变化的字符串：
 //
-//	1. custom 身份/工作方式段 —— 会话级（session meta / 配置文件；空用内置默认）
-//	2. inner prompt 内置工具段 —— 会话级（按本角色可用工具拼装，同会话恒定）
-//	3. 技能段                —— 项目级（SKILL.md 可被编辑）
-//	4. 运行环境(工作区)      —— 项目级（同项目内恒定，会话内根/子代理共享）
-//	5. 插件状态              —— 会话构建级，随每次连接结果变化
-//	6. 子代理身份            —— 每个子代理唯一（同会话内亦变）
-//	7. 模型身份行            —— 最易变：会话内可被 UpdateModelIdentity 改写
+//  1. custom 身份/工作方式段 —— 会话级（session meta / 配置文件；空用内置默认）
+//  2. inner prompt 内置工具段 —— 会话级（按本角色可用工具拼装，同会话恒定）
+//  3. 技能段                —— 项目级（SKILL.md 可被编辑）
+//  4. 运行环境(工作区)      —— 项目级（同项目内恒定，会话内根/子代理共享）
+//  5. 插件状态              —— 会话构建级，随每次连接结果变化
+//  6. 子代理身份            —— 每个子代理唯一（同会话内亦变）
+//  7. 模型身份行            —— 最易变：会话内可被 UpdateModelIdentity 改写
 package agent
 
 import (
@@ -121,10 +121,12 @@ func BuildSystemPrompt(o PromptOptions, custom string) string {
 		b.WriteString("\n")
 	}
 
-	// 子代理身份：每个子代理唯一（label 不同）。
+	// 子代理身份：每个子代理唯一（label 不同）。委派范围声明（dsh 对齐）：
+	// 子代理的交互宿主是 NoopHost——越权升级构造性必拒且不可从内部扩宽，
+	// 明说出来让模型被拒后带限制回报而非反复重试。
 	if o.Subagent {
 		b.WriteString("\n## 子代理身份\n")
-		fmt.Fprintf(&b, "You are running as a background subagent (label %q). You do not see the parent conversation; rely only on the prompt you were given and the workspace. Complete the self-contained task and reply with the final result — not your intermediate steps. You may not ask the user questions and may not create session goals.\n", o.Label)
+		fmt.Fprintf(&b, "You are running as a background subagent (label %q). You do not see the parent conversation; rely only on the prompt you were given and the workspace. Complete the self-contained task and reply with the final result — not your intermediate steps. You may not ask the user questions and may not create session goals. You are a delegated subagent: your permission scope was fixed when you were started and cannot be widened from inside this session — operations that require approval are rejected automatically. When the job needs access beyond that scope, do not retry the denied operation; state the limitation in your reply so the delegating agent can handle it.\n", o.Label)
 	}
 
 	// 模型身份行：最易变（会话内可切换模型被改写），恒在末尾。

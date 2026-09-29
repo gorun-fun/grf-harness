@@ -136,6 +136,9 @@ func Build(opts Options) (*Harness, error) {
 	} else if st.MaxSteps > 0 {
 		root.SetMaxSteps(st.MaxSteps)
 	}
+	// 自动压缩阈值：会话级配置（0=默认 / 正数覆盖 / 负数关闭），仅根
+	// agent——子代理历史短生命周期，压缩收益不抵风险
+	root.SetCompactThreshold(st.CompactThreshold)
 
 	depth := opts.DepthLimit
 	if depth <= 0 {

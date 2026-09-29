@@ -12,6 +12,13 @@ import (
 	"git.gorun.fun/share/grf-harness/tools"
 )
 
+// callsCount 已发生的模型请求数。
+func (m *multiLLM) callsCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.calls
+}
+
 // request 取第 i 次模型请求的消息（multiLLM 记录并发保护）。
 func (m *multiLLM) request(i int) []llm.Message {
 	m.mu.Lock()

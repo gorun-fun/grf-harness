@@ -4,6 +4,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -474,6 +475,7 @@ func (c *Chat) handleSlash(input string) (handled, quit bool) {
 /resume 弹窗恢复历史会话；/resume N 按序号恢复
 /plan   进入/退出计划模式（F2 同效）
 /goal   查看当前 goal 状态
+/compact 压缩会话历史为摘要（历史过长时也会在回合开始自动压缩）
 /new    保存当前会话并清屏开新会话（/clear 同效）
 /exit   退出（/quit 同效；Ctrl+C 空闲时按两次退出，Ctrl+D 同）
 运行中输入消息回车 = 并入当前任务（当前步骤后生效，不打断在跑的工具）
@@ -501,6 +503,23 @@ func (c *Chat) handleSlash(input string) (handled, quit bool) {
 		} else {
 			c.emitBlock(block{kind: blkDim, text: "（当前无 goal）"})
 		}
+		return true, false
+	case "/compact":
+		if c.running {
+			c.emitBlock(block{kind: blkErr, text: "当前有任务在执行，等空闲后再压缩"})
+			return true, false
+		}
+		c.running = true
+		c.emitBlock(block{kind: blkDim, text: "（压缩会话历史…）"})
+		go func() {
+			ctx, cancel := context.WithTimeout(c.ctx, 120*time.Second)
+			summary, err := c.app.Root().Compact(ctx)
+			cancel()
+			select {
+			case c.events <- compactDoneMsg{summary: summary, err: errStr(err)}:
+			case <-c.ctx.Done():
+			}
+		}()
 		return true, false
 	}
 	return false, false
