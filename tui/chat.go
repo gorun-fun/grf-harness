@@ -61,7 +61,8 @@ type Chat struct {
 	scrollUp int // 距底部行数（0=钉底）
 	running  bool
 	cancel   context.CancelFunc
-	quitAt   time.Time // 空闲时首次 Ctrl+C 的时间（时限内再按才退出）
+	runDone  chan struct{} // 运行 goroutine 的退出信号（关闭=已落定；finishRun 等它，不等 running 标志）
+	quitAt   time.Time     // 空闲时首次 Ctrl+C 的时间（时限内再按才退出）
 
 	// 弹窗/模态（互斥，非 nil 即捕获按键；沙箱升级/工具/计划审批均复用 ask）
 	pop *popup   // 模型/会话列表选择
@@ -389,11 +390,17 @@ func (c *Chat) startRun(input string) {
 	runCtx, cancel := context.WithCancel(c.ctx)
 	c.cancel = cancel
 	root := c.app.Root()
+	done := make(chan struct{})
+	c.runDone = done
 	go func() {
+		defer close(done) // 落定信号：goroutine 退出即关闭（finishRun 等待）
 		_, err := root.RunAutoGoal(runCtx, input)
-		select { // 事件循环退出后不再投递，避免 goroutine 泄漏
+		select { // 事件循环退出后不再投递，避免 goroutine 泄漏。守卫必须是
+		// c.ctx 而非 runCtx：runCtx 正是 Ctrl+C 取消的，中断后两个 case
+		// 同时就绪会被 select 随机吞掉落定消息，running 永久卡 true，
+		// 之后每次 Ctrl+C 都对已取消的 cancel 空转（中断失效）
 		case c.events <- runDoneMsg{err: err}:
-		case <-runCtx.Done():
+		case <-c.ctx.Done():
 		}
 	}()
 	c.paint(true)
@@ -414,15 +421,18 @@ func (c *Chat) execBang(cmd string) {
 	c.scrollUp = 0
 	runCtx, cancel := context.WithCancel(c.ctx)
 	c.cancel = cancel
+	done := make(chan struct{})
+	c.runDone = done
 	go func() {
+		defer close(done) // 落定信号：goroutine 退出即关闭（finishRun 等待）
 		out, err := c.app.RunBang(runCtx, cmd)
 		es := ""
 		if err != nil {
 			es = err.Error()
 		}
-		select { // 事件循环退出后不再投递，避免 goroutine 泄漏
+		select { // 事件循环退出后不再投递（守卫须用 c.ctx，理由见 startRun）
 		case c.events <- bangDoneMsg{out: out, err: es}:
-		case <-runCtx.Done():
+		case <-c.ctx.Done():
 		}
 	}()
 	c.paint(true)
@@ -503,14 +513,19 @@ func isCanceledErr(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "context canceled")
 }
 
-// finishRun 退出前等待运行中回合结束。
+// finishRun 退出前收尾：取消运行中回合、等运行 goroutine 真正落定（上限
+// 2 秒，防个别工具无视取消），再清理工件目录——避免在工具写入途中删目录。
+// 等待对象是 goroutine 的退出信号而非 running 标志：该标志只由事件循环
+// 复位，而事件循环此刻正阻塞在本函数内，等它必然空转满 2 秒。
 func (c *Chat) finishRun() {
 	if c.cancel != nil {
 		c.cancel()
 	}
-	deadline := time.Now().Add(2 * time.Second)
-	for c.running && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
+	if c.runDone != nil {
+		select {
+		case <-c.runDone:
+		case <-time.After(2 * time.Second):
+		}
 	}
 	c.app.Harness.Artifacts.Cleanup()
 }

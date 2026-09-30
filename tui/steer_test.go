@@ -5,6 +5,9 @@ package tui
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -59,6 +62,84 @@ func TestInterruptDropsQueuedSteer(t *testing.T) {
 	}
 	if got := blocksText(c); !strings.Contains(got, "已丢弃 2 条排队消息") {
 		t.Fatalf("缺少丢弃提示:\n%s", got)
+	}
+}
+
+// TestInterruptDeliversRunDone 运行中 Ctrl+C 的回合落定消息（runDoneMsg）
+// 必须送达事件循环：投递守卫不得用 runCtx（Ctrl+C 恰恰取消它，两个 case
+// 同时就绪时 select 随机吞消息，running 永久卡 true，之后 Ctrl+C 全部
+// 失效）。假 LLM 挂住流模拟模型持续吐字，多轮迭代使竞态必现。
+func TestInterruptDeliversRunDone(t *testing.T) {
+	entered := make(chan struct{}) // 请求到达（模型开始吐字）
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 排干请求体：未读 body 时服务端不启动客户端断连探测，
+		// r.Context() 不会随 Ctrl+C 取消，handler 会挂死拖住 srv.Close
+		io.Copy(io.Discard, r.Body)
+		entered <- struct{}{}
+		<-r.Context().Done() // 挂住直到 Ctrl+C 取消请求
+	}))
+	defer srv.Close()
+	a, err := app.New(app.Options{
+		Workspace: t.TempDir(),
+		Client:    llm.NewClient(llm.Config{BaseURL: srv.URL, APIKey: "t", Model: "m"}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := newSteerChat(t, a)
+	for i := 0; i < 20; i++ {
+		c.startRun("任务")
+		select {
+		case <-entered:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("第 %d 轮未进入 LLM 请求", i+1)
+		}
+		if quit := c.interruptKey(); quit {
+			t.Fatal("运行中 Ctrl+C 不应退出")
+		}
+		deadline := time.After(10 * time.Second)
+		for c.running {
+			select {
+			case msg := <-c.events:
+				c.handleMsg(msg)
+			case <-deadline:
+				t.Fatalf("第 %d 次 Ctrl+C 后回合落定消息丢失（running 卡 true，中断失效）", i+1)
+			}
+		}
+	}
+}
+
+// TestFinishRunWaitsGoroutineNotFlag 运行中退出的收尾等待：等的是运行
+// goroutine 的退出信号（runDone），而非只由事件循环复位的 running 标志
+// ——事件循环此刻正阻塞在 finishRun 里，等它必然空转满 2 秒。
+func TestFinishRunWaitsGoroutineNotFlag(t *testing.T) {
+	entered := make(chan struct{}) // 请求到达（回合在跑）
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
+		entered <- struct{}{}
+		<-r.Context().Done() // 挂住直到取消
+	}))
+	defer srv.Close()
+	a, err := app.New(app.Options{
+		Workspace: t.TempDir(),
+		Client:    llm.NewClient(llm.Config{BaseURL: srv.URL, APIKey: "t", Model: "m"}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := newSteerChat(t, a)
+	c.startRun("任务")
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("未进入 LLM 请求")
+	}
+	t0 := time.Now()
+	c.finishRun()
+	// 旧实现在此恒定白等满 2 秒；取消传播 + goroutine 退出是毫秒级，
+	// 1.5 秒上限留足 CI 余量仍能区分两者
+	if el := time.Since(t0); el >= 1500*time.Millisecond {
+		t.Fatalf("finishRun 耗时 %v：取消后运行 goroutine 毫秒级即应落定", el)
 	}
 }
 
