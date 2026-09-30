@@ -249,6 +249,7 @@ func (h *Harness) systemPromptFor(reg *tools.Registry, subagent bool, label, ove
 		PluginWarnings: h.plugWarn, // 构建期取好，根与子代理同一份
 		Tools:          names,
 		DefaultSkill:   h.defSkill,
+		ShellNote:      tools.ShellNote(), // 进程级恒定：windows 无 bash 时告知 PowerShell 语法
 	}, override)
 }
 

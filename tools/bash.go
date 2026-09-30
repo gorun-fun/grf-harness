@@ -70,6 +70,82 @@ var sandboxExecPath = func() string {
 	return p
 }()
 
+// shellSpec bash 工具的执行载体。契约（spec 描述）是 `bash -c`：unix 与
+// 装有 Git Bash 的 windows 都能原生满足；windows 无 bash.exe 时退回
+// PowerShell（参数包装见 powerShellArgs），并由 ShellNote 告知模型。
+type shellSpec struct {
+	name string // "bash" / "powershell"（提示词与诊断用）
+	exe  string
+	args func(command string) []string
+}
+
+var bashShell = shellSpec{
+	name: "bash", exe: "bash",
+	args: func(c string) []string { return []string{"-c", c} },
+}
+
+// powerShellArgs PowerShell 参数包装：-NoProfile 隔离用户配置（保证
+// $LASTEXITCODE 初始为 null）；脚本前导统一输出编码为 UTF-8（默认 OEM
+// 码页会把中文输出成乱码）；尾部把最后一条原生命令的退出码透传为进程
+// 退出码——PowerShell 默认不透传，bash 契约的 [exit code: N] 会错报 0。
+// 命令内的 exit N 直接生效（尾部不再执行），语义与 bash 一致。
+func powerShellArgs(command string) []string {
+	script := "$OutputEncoding=[Console]::OutputEncoding=[System.Text.Encoding]::UTF8\n" +
+		command +
+		"\nif ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }" +
+		"\nif (-not $?) { exit 1 }"
+	return []string{"-NoProfile", "-Command", script}
+}
+
+// isWSLShim 判断 bash.exe 是否 System32 的 WSL 启动器：它把命令跑在
+// Linux 侧（工作区经 /mnt 挂载、$GRF_* 环境变量不透传），与工具契约
+// 的本机语义不符，须跳过。
+func isWSLShim(p string) bool {
+	return strings.Contains(strings.ToLower(p), `\system32\`)
+}
+
+// resolveShell 解析本机 shell（纯函数供跨平台测试）：windows 依次探测
+// Git Bash 常规安装位、PATH 上非 WSL 的 bash.exe，均无则 PowerShell
+// （pwsh 优先于系统自带 powershell）；其余平台恒为 bash。
+// Git Bash 安装位先于 PATH：System32 的 WSL shim 常驻 PATH，PATH 顺序
+// 不可控。
+func resolveShell(goos string, lookPath func(string) (string, error), env func(string) string) shellSpec {
+	if goos != "windows" {
+		return bashShell
+	}
+	for _, key := range []string{"ProgramFiles", "ProgramFiles(x86)"} {
+		if dir := env(key); dir != "" {
+			p := filepath.Join(dir, "Git", "bin", "bash.exe")
+			if _, err := os.Stat(p); err == nil {
+				return shellSpec{name: "bash", exe: p, args: bashShell.args}
+			}
+		}
+	}
+	if p, err := lookPath("bash"); err == nil && !isWSLShim(p) {
+		return shellSpec{name: "bash", exe: p, args: bashShell.args}
+	}
+	if p, err := lookPath("pwsh"); err == nil {
+		return shellSpec{name: "powershell", exe: p, args: powerShellArgs}
+	}
+	return shellSpec{name: "powershell", exe: "powershell", args: powerShellArgs}
+}
+
+// activeShell 本机实际使用的 shell（进程级缓存：PATH/安装态在一次运行
+// 内视为不变）。
+var activeShell = sync.OnceValue(func() shellSpec {
+	return resolveShell(runtime.GOOS, exec.LookPath, os.Getenv)
+})
+
+// ShellNote 系统提示词的 shell 事实行：bash 时为空（与 spec 契约一致，
+// 无需说明）；windows 退回 PowerShell 时告知模型写对应语法，避免按
+// bash 语法构造命令（&&、$(...)、2>/dev/null 等在 PowerShell 不通）。
+func ShellNote() string {
+	if activeShell().name == "bash" {
+		return ""
+	}
+	return "The bash tool finds no bash.exe on this Windows machine and executes commands through PowerShell: compose PowerShell-compatible syntax — single quotes for strings, backtick escapes, $env:NAME for environment variables — not POSIX shell syntax (no $(...), 2>/dev/null, or && chains in Windows PowerShell 5.1).\n"
+}
+
 // sandboxProfile 生成工作区沙箱 profile：写侧默认拒绝一切写，只放行工作区
 // （含符号链接展开后的真实路径）、临时目录与 /dev/null；不能写成
 // "默认允许 + 枚举系统目录拒绝"——那样家目录等其余路径的写/删不受控。
@@ -161,12 +237,13 @@ func RegisterBash(r *Registry, d BashDeps) {
 		}
 
 		build := func(runCtx context.Context, unconfined bool) *exec.Cmd {
+			sh := activeShell()
 			var cmd *exec.Cmd
 			observe, readLimit := d.fsLimits()
 			if !unconfined && observe && sandboxExecPath != "" {
 				cmd = exec.CommandContext(runCtx, sandboxExecPath, "-p", sandboxProfile(d.Workspace, readLimit), "/bin/bash", "-c", a.Command)
 			} else {
-				cmd = exec.CommandContext(runCtx, "bash", "-c", a.Command)
+				cmd = exec.CommandContext(runCtx, sh.exe, sh.args(a.Command)...)
 			}
 			cmd.Dir = a.Workdir
 			env := os.Environ()
@@ -175,6 +252,9 @@ func RegisterBash(r *Registry, d BashDeps) {
 			}
 			cmd.Env = env
 			cmd.WaitDelay = 5 * time.Second
+			// 停止语义集中在此（前台/后台共用）：unix 先 SIGINT 给清理机会，
+			// 强杀由 WaitDelay 兜底；windows 无跨进程信号，taskkill 终止进程树
+			cmd.Cancel = func() error { return stopProcess(cmd) }
 			return cmd
 		}
 
@@ -182,10 +262,9 @@ func RegisterBash(r *Registry, d BashDeps) {
 		if a.RunInBackground {
 			id := d.Jobs.StartStream("stream", firstNonEmpty(a.Description, a.Command), func(jctx context.Context, emit func(string)) error {
 				cmd := build(jctx, unconfined)
-				// job_kill 经 ctx 取消：先 SIGINT 给清理机会，5s 后由
-				// WaitDelay 兜底 SIGKILL 并关闭管道——置 nil 会让进程
-				// 永不停止（ctx 完成后仅等管道，作业僵尸运行）。
-				cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
+				// job_kill 经 ctx 取消 → build 已装 Cancel（停止语义见彼处注
+				// 释）；WaitDelay 兜底强杀并关闭管道——置 nil 会让进程永不
+				// 停止（ctx 完成后仅等管道，作业僵尸运行）。
 				var buf bytes.Buffer
 				cmd.Stdout = writerFunc(func(p []byte) (int, error) {
 					buf.Write(p)
@@ -258,7 +337,6 @@ func RegisterBash(r *Registry, d BashDeps) {
 			jobEmit = nil
 			mu.Unlock()
 			cmd := build(runCtx, unconf)
-			cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) } // 停止先 SIGINT，给清理机会
 			cmd.Stdout = w
 			cmd.Stderr = w
 			done := make(chan error, 1)

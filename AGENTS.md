@@ -195,4 +195,10 @@ Windows 用 Console API 提供同套能力（`term/tty_windows.go`：VT 输入�
 平台回退非交互（`term/tty_other.go`）。resize 监听平台化（`term/resize_*.go`）：
 unix 走 SIGWINCH，Windows 无等价信号改轮询。守护进程平台差异在根目录
 `daemon_unix.go`/`daemon_other.go`。全屏交互要求 stdin+stdout 均为 TTY，
-否则自动回退纯文本行模式。
+否则自动回退纯文本行模式。bash 工具的执行载体平台化（`tools/bash.go` 的
+`resolveShell`）：windows 依次探测 Git Bash 常规安装位与 PATH 上非
+System32 的 bash.exe（`System32\bash.exe` 是 WSL 启动器、命令跑在 Linux
+侧，须跳过），均无退回 PowerShell（`-NoProfile` + UTF-8 输出编码 + 原生
+退出码透传包装；`tools.ShellNote()` 经系统提示词"运行环境"段告知模型写
+PowerShell 语法）。命令停止语义同平台化：unix 先 SIGINT 优雅退出、
+windows `taskkill /T /F` 终止进程树（`tools/bash_stop_*.go`）。

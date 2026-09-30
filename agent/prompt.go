@@ -42,6 +42,10 @@ type PromptOptions struct {
 	// 拼说明段；nil 视为全部内置工具可用（调用方负责按角色裁剪，gh 内部
 	// systemPromptFor 一律传 registry 实况）。
 	Tools []string
+	// ShellNote bash 工具的 shell 事实行（tools.ShellNote()）：bash 时为
+	// 空；windows 无 bash.exe 退回 PowerShell 时告知模型写对应语法。与
+	// 工作区同属项目级稳定事实，拼在运行环境段。
+	ShellNote string
 }
 
 // 模型身份行（全文唯一，位于提示词末尾——最易变段）：会话构建期按当时
@@ -112,6 +116,11 @@ func BuildSystemPrompt(o PromptOptions, custom string) string {
 	// 前置到插件状态等更易变段之前，最大化公共前缀。
 	b.WriteString("\n## 运行环境\n")
 	fmt.Fprintf(&b, "Your working directory is %s. Use pwd via the bash tool to confirm the current working directory when path precision matters.\n", o.Workspace)
+	// shell 事实（仅 windows 退回 PowerShell 时非空）：bash 工具的命令
+	// 语法随执行载体变化，模型须知道实际 shell 才能写出可执行命令
+	if o.ShellNote != "" {
+		b.WriteString(o.ShellNote)
+	}
 
 	// 插件状态：会话构建级（随每次构建的连接结果变化；根与子代理都拼
 	// ——子代理同样注册了插件工具，需要知道哪些插件不可用）。
