@@ -586,16 +586,21 @@ func (sess *session) endTurn(gen uint64) {
 	}
 }
 
-// cancelTurn 取消当前回合（无在跑回合返回 false）。
+// cancelTurn 取消当前回合（无在跑回合返回 false）。除回合 ctx 外，同时
+// 打断整棵子代理树：前台子代理曾跑在 context.Background() 上、阻塞父
+// 回合的等待，c() 无法波及——会话陷入"取消恒不落定"的僵尸运行；后台
+// 子代理脱离父回合 ctx，同样只有全树打断才是「停止会话」的完整语义。
 func (sess *session) cancelTurn() bool {
 	sess.mu.Lock()
 	c := sess.cancel
 	sess.mu.Unlock()
-	if c == nil {
-		return false
+	if c != nil {
+		c()
 	}
-	c()
-	return true
+	if sess.h != nil && sess.h.Manager != nil {
+		sess.h.Manager.InterruptAll()
+	}
+	return c != nil
 }
 
 // waitTurn 等待回合结束（无在跑回合立即 true）。

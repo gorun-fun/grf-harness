@@ -40,9 +40,9 @@ func RegisterAgentTools(r *tools.Registry, a *Agent, m *Manager) {
 				err     error
 			)
 			if fork {
-				id, out, err = m.Fork(a, oneLine(p.Description, 60), p.Prompt, bg)
+				id, out, err = m.Fork(ctx, a, oneLine(p.Description, 60), p.Prompt, bg)
 			} else {
-				id, out, err = m.Subagent(a, oneLine(p.Description, 60), p.Prompt, bg)
+				id, out, err = m.Subagent(ctx, a, oneLine(p.Description, 60), p.Prompt, bg)
 			}
 			if err != nil {
 				return tools.Result{}, err

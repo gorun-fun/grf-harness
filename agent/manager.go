@@ -76,20 +76,26 @@ func (m *Manager) register(parent *Agent, label string, seed []llm.Message) (*Ha
 	return h, nil
 }
 
-// Subagent 启动一个子代理。bg=true 后台（返回 id 即刻），否则前台等结果。
-func (m *Manager) Subagent(parent *Agent, label, prompt string, bg bool) (string, string, error) {
-	return m.start(parent, label, prompt, bg, nil)
+// Subagent 启动一个子代理。bg=true 后台（返回 id 即刻，脱离父回合、
+// 落定经通知回流，ctx 被忽略），否则前台等结果——ctx 为取消链，须派生
+// 自调用方的回合 ctx：父回合取消时前台子代理随之中止。历史缺陷：曾跑
+// 在 context.Background() 上，父回合阻塞等一个不理会取消的子代理，
+// 会话陷入"点停止永远停不下"的僵尸运行。
+func (m *Manager) Subagent(ctx context.Context, parent *Agent, label, prompt string, bg bool) (string, string, error) {
+	return m.start(ctx, parent, label, prompt, bg, nil)
 }
 
 // Fork 启动一个继承父会话已完成轮次的子代理（不含父当前进行中的回合）。
-func (m *Manager) Fork(parent *Agent, label, prompt string, bg bool) (string, string, error) {
-	return m.start(parent, label, prompt, bg, m.completedTurns(parent))
+// ctx 语义同 Subagent（前台取消链 / 后台忽略）。
+func (m *Manager) Fork(ctx context.Context, parent *Agent, label, prompt string, bg bool) (string, string, error) {
+	return m.start(ctx, parent, label, prompt, bg, m.completedTurns(parent))
 }
 
 // start 注册并启动子代理的公共路径（Subagent/Fork 的差异只在 seed：
 // 前者空历史，后者父已完成轮次副本）。bg=true 后台执行（返回 id 即刻，
-// 落定后经 settle 通知父会话），否则前台等结果。
-func (m *Manager) start(parent *Agent, label, prompt string, bg bool, seed []llm.Message) (string, string, error) {
+// 落定后经 settle 通知父会话，ctx 不参与），否则前台等结果——回合跑在
+// ctx 的派生链上，父回合取消即随之中止。
+func (m *Manager) start(ctx context.Context, parent *Agent, label, prompt string, bg bool, seed []llm.Message) (string, string, error) {
 	h, err := m.register(parent, label, seed)
 	if err != nil {
 		return "", "", err
@@ -98,7 +104,7 @@ func (m *Manager) start(parent *Agent, label, prompt string, bg bool, seed []llm
 		go m.runAndSettle(h, prompt)
 		return h.ID, "", nil
 	}
-	out, rerr := m.runOne(h.Ag, prompt)
+	out, rerr := m.runOne(ctx, h.Ag, prompt)
 	return h.ID, out, rerr
 }
 
@@ -125,15 +131,15 @@ func (m *Manager) completedTurns(parent *Agent) []llm.Message {
 // （与 Agent.runTurn 刻意不同名——那是回合循环本体，这里是"跑完并
 // 落定"的后台包装，仅包内使用。）
 func (m *Manager) runAndSettle(h *Handle, prompt string) {
-	out, err := m.runOne(h.Ag, prompt)
+	out, err := m.runOne(context.Background(), h.Ag, prompt)
 	m.settle(h, out, err)
 }
 
-func (m *Manager) runOne(ag *Agent, prompt string) (string, error) {
+func (m *Manager) runOne(ctx context.Context, ag *Agent, prompt string) (string, error) {
 	ag.mu.Lock()
 	ag.humanTurn = false
 	ag.mu.Unlock()
-	return ag.Run(context.Background(), prompt)
+	return ag.Run(ctx, prompt)
 }
 
 // settle 落定通知：后台子代理回合结束 → 父会话通知。
@@ -223,6 +229,30 @@ func (m *Manager) Interrupt(caller *Agent, targetID string) error {
 		cancel()
 	}
 	return nil
+}
+
+// InterruptAll 打断树内（根 + 全部子代理）正在运行的回合。会话级停止/
+// 归档用：前台子代理阻塞父回合的等待（除 ctx 派生外这里是双保险，覆盖
+// turnCancel 尚未登记的起跑窗口），后台子代理脱离父回合 ctx、c() 波及
+// 不到——用户「停止整个会话」的完整语义是整棵树停下。
+func (m *Manager) InterruptAll() {
+	m.mu.Lock()
+	targets := make([]*Agent, 0, len(m.agents)+1)
+	targets = append(targets, m.root)
+	for _, h := range m.agents {
+		if h.Ag != nil {
+			targets = append(targets, h.Ag)
+		}
+	}
+	m.mu.Unlock()
+	for _, ag := range targets {
+		ag.mu.Lock()
+		cancel := ag.turnCancel
+		ag.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+	}
 }
 
 // SendMessage 向直接子代理投递消息：运行中排队（当前回合结束后开始），

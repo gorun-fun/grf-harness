@@ -48,6 +48,10 @@ func (s *Server) handleRetrieve(w http.ResponseWriter, r *http.Request) {
 	writeError(w, 404, errNotFound, "response not found (it was never completed, or the server restarted while it was running)", "")
 }
 
+// cancelSettleTimeout cancel 端点等待回合落定的期限（包级变量供测试缩短，
+// 避免回归测试真等 5 秒）。
+var cancelSettleTimeout = 5 * time.Second
+
 // handleCancel POST /v1/responses/{id}/cancel：取消在跑回合（幂等）。
 func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -67,10 +71,23 @@ func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
 	}
 	running := sess.cancelTurn()
 	if running {
-		sess.waitTurn(5 * time.Second) // 等执行路径落终态快照
+		sess.waitTurn(cancelSettleTimeout) // 等执行路径落终态快照
 	}
 	if snap, err := sess.loadSnap(seq); err == nil {
 		writeJSON(w, 200, snap)
+		return
+	}
+	// 取消后期限内仍未落定：如实回报未停止，不伪造 cancelled 终态——曾因
+	// 伪造让客户端误信已停（UI 收口、链尾采纳），随后新输入全部 409 却
+	// 无从归因，用户反复点停止也无效果。回合照旧运行，落定后可再 cancel
+	// 或直接续聊。busy 覆盖 claim 已占而回合尚未开跑的窗口（此时取消
+	// 同样未生效，回合随后照跑）。
+	sess.mu.Lock()
+	busy := sess.busy
+	sess.mu.Unlock()
+	if sess.root.IsRunning() || busy {
+		writeError(w, 409, errInvalid,
+			"turn is still running "+cancelSettleTimeout.String()+" after cancel (blocked in a slow or non-interruptible operation); it was NOT stopped — retry cancel after it settles, or wait for the turn to finish", "")
 		return
 	}
 	// 快照尚未落盘（store=false 或竞态）：返回即时构造的终态。

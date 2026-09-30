@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -309,7 +310,7 @@ func TestSubagentToolRestrictions(t *testing.T) {
 	h := buildTestHarness(t, f, ws)
 	defer h.Close()
 
-	_, out, err := h.Manager.Subagent(h.Root, "restricted", "do it", true)
+	_, out, err := h.Manager.Subagent(context.Background(), h.Root, "restricted", "do it", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,6 +327,36 @@ func TestSubagentToolRestrictions(t *testing.T) {
 				t.Fatalf("child should not have %s", banned)
 			}
 		}
+	}
+}
+
+// TestForegroundSubagentCancelChain 回归：前台子代理必须跑在调用方 ctx 的
+// 派生链上。旧实现跑 context.Background()——父回合取消后子代理照跑、
+// 调用方阻塞等待回合落定，会话陷入"点停止永远停不下"的僵尸运行
+// （gh server 取消端点随之恒超时）。
+func TestForegroundSubagentCancelChain(t *testing.T) {
+	f := newFakeLLM([]string{"子代理回复"})
+	defer f.Close()
+	ws := t.TempDir()
+	h := buildTestHarness(t, f, ws)
+	defer h.Close()
+
+	// 进入前已取消的 ctx：前台子代理的首个 LLM 请求应立刻失败返回
+	// context.Canceled，而不是把脚本跑完。
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := h.Manager.Subagent(ctx, h.Root, "取消链", "干活", false)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("前台子代理应随父 ctx 取消，得到: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("前台子代理未随父 ctx 中止（僵尸运行回归）")
 	}
 }
 
@@ -651,7 +682,7 @@ func TestSubagentToolEventsFlowToRoot(t *testing.T) {
 
 	var events []ToolEvent
 	h.Root.SetOnToolEvent(func(e ToolEvent) { events = append(events, e) })
-	if _, _, err := h.Manager.Subagent(h.Root, "检查文件", "读 hello.txt", false); err != nil {
+	if _, _, err := h.Manager.Subagent(context.Background(), h.Root, "检查文件", "读 hello.txt", false); err != nil {
 		t.Fatal(err)
 	}
 	if len(events) < 2 {

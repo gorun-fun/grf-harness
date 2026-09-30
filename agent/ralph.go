@@ -68,8 +68,9 @@ func RegisterRalph(r *tools.Registry, a *Agent, m *Manager) {
 			label := fmt.Sprintf("ralph-r%d", i)
 			prompt := fmt.Sprintf("Ralph round %d of %d.\nObjective (immutable): %s\n%s",
 				i, rounds, strings.TrimSpace(p.Objective), ralphPromptTail)
-			// 新鲜子代理：不注入任何父对话种子
-			_, out, err := m.Subagent(a, label, prompt, false)
+			// 新鲜子代理：不注入任何父对话种子。ctx = 回合取消链：
+			// ralph 每轮都是前台子代理，回合取消必须能中止当前轮。
+			_, out, err := m.Subagent(ctx, a, label, prompt, false)
 			if err != nil {
 				return tools.Result{}, fmt.Errorf("ralph round %d failed to start: %w", i, err)
 			}

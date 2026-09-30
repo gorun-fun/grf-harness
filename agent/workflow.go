@@ -27,6 +27,7 @@ type workflowCtx struct {
 	used    int
 	a       *Agent
 	m       *Manager
+	ctx     context.Context // 回合取消链：agent() 的前台子代理跑在它的派生上
 	failErr error
 }
 
@@ -53,6 +54,7 @@ func RegisterWorkflow(r *tools.Registry, a *Agent, m *Manager) {
 			sem: make(chan struct{}, workflowConcurrency),
 			a:   a,
 			m:   m,
+			ctx: ctx,
 		}
 
 		host := map[string]js.HostFn{
@@ -210,7 +212,7 @@ func (w *workflowCtx) runAgent(prompt string, opts map[string]any) js.Value {
 			promptText += "\n\n(End your final message with a single JSON object — no prose around it — satisfying the requested schema.)"
 		}
 	}
-	_, out, err := w.m.Subagent(w.a, label, promptText, false)
+	_, out, err := w.m.Subagent(w.ctx, w.a, label, promptText, false)
 	if err != nil {
 		// null 契约不变（.filter(Boolean) 过滤），但失败原因必须可见——
 		// 静默 null 会把"偶发子代理失败"伪装成"schema 用法问题"

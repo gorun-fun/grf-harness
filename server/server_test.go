@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"git.gorun.fun/share/grf-harness/agent"
 	"git.gorun.fun/share/grf-harness/llm"
 )
 
@@ -631,11 +632,14 @@ func TestArchiveTurnSettleGuard(t *testing.T) {
 	if !sess.root.IsRunning() {
 		t.Fatal("回合未开跑")
 	}
-	// 取消句柄换成 no-op：模拟"取消后仍未及时落定"的回合（真实场景如
-	// 工具深陷不可中断的 IO）——waitTurn 必然超时。
+	// 模拟"取消完全无效、回合未能及时落定"的病态回合（真实场景如工具
+	// 深陷不可中断的 IO）——waitTurn 必然超时。取消有两级：会话级 tctx
+	// 取消句柄换成 no-op；cancelTurn 的全树打断（Manager.InterruptAll，
+	// 含根 agent 自身的 turnCancel）换成空 Manager 中和。
 	sess.mu.Lock()
 	sess.cancel = func() {}
 	sess.mu.Unlock()
+	sess.h.Manager = agent.NewManager(&agent.Agent{}, 1)
 
 	doDelete := func() int {
 		req, _ := http.NewRequest("DELETE", ts.URL+"/v1/conversations/"+r.SessionID, nil)
@@ -673,6 +677,75 @@ func TestArchiveTurnSettleGuard(t *testing.T) {
 	})
 	if code != 404 {
 		t.Fatalf("归档后续发应 404: %d", code)
+	}
+}
+
+// 取消诚实回报（回归）：取消无法落定时必须 409 如实告知"未停止"，
+// 不得伪造 200 cancelled——旧实现伪造成功让客户端误信已停（UI 收口、
+// 链尾采纳），随后新输入全部 409 "a turn is already running"、反复点
+// 停止无效。busy=true 而终态快照不存在（claim 已占、回合未落定的窗口）
+// 与"工具深陷不可中断执行导致 waitTurn 超时"到达同一分支；落定后
+// cancel 幂等返回真实终态快照。
+func TestCancelHonestStillRunning(t *testing.T) {
+	f := newFakeLLM([]string{`完成`})
+	defer f.Close()
+	t.Setenv("GRF_HOME", t.TempDir())
+	s, err := New(t.TempDir(), "test-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.clientFactory = func() (*llm.Client, error) {
+		return llm.NewClient(llm.Config{BaseURL: f.URL(), APIKey: "t", Model: "m"}), nil
+	}
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+
+	code, body := post(t, ts, "/v1/responses", map[string]any{
+		"model": "m", "input": "跑一个回合",
+	})
+	if code != 200 {
+		t.Fatalf("create status %d: %s", code, body)
+	}
+	var r ResponseResource
+	_ = json.Unmarshal(body, &r)
+
+	// 回合已落定：cancel 幂等返回真实终态快照（completed），非伪造 cancelled
+	c, b := post(t, ts, "/v1/responses/"+r.ID+"/cancel", map[string]any{})
+	if c != 200 {
+		t.Fatalf("落定后取消应 200: %d %s", c, b)
+	}
+	var snap ResponseResource
+	_ = json.Unmarshal(b, &snap)
+	if snap.Status != statusCompleted {
+		t.Fatalf("落定后取消应返回真实终态(completed): %s", snap.Status)
+	}
+
+	// 占用位真、终态未落：cancel 必须 409（旧实现伪造 200 cancelled）
+	s.mu.Lock()
+	sess := s.sessions[r.SessionID]
+	s.mu.Unlock()
+	if sess == nil {
+		t.Fatal("会话不在缓存")
+	}
+	sess.mu.Lock()
+	sess.busy = true
+	sess.curSeq++
+	next := respID(r.SessionID, sess.curSeq)
+	sess.mu.Unlock()
+	t.Cleanup(func() {
+		sess.mu.Lock()
+		sess.busy = false
+		sess.mu.Unlock()
+	})
+	if c, b := post(t, ts, "/v1/responses/"+next+"/cancel", map[string]any{}); c != 409 {
+		t.Fatalf("未落定时取消应 409: %d %s", c, b)
+	}
+	// 409 不得有副作用：占用位原样保留
+	sess.mu.Lock()
+	busy := sess.busy
+	sess.mu.Unlock()
+	if !busy {
+		t.Fatal("409 后占用位不应被释放")
 	}
 }
 
