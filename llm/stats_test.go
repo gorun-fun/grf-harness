@@ -39,6 +39,9 @@ func TestStreamUsageStats(t *testing.T) {
 	if s.PromptTokens != 1000 || s.CompletionTokens != 50 {
 		t.Fatalf("tokens: prompt=%d completion=%d", s.PromptTokens, s.CompletionTokens)
 	}
+	if s.LastPromptTokens != 1000 || s.LastCompletionTokens != 50 {
+		t.Fatalf("last tokens: prompt=%d completion=%d", s.LastPromptTokens, s.LastCompletionTokens)
+	}
 	if s.CachePct != 97 {
 		t.Fatalf("cachePct = %d", s.CachePct)
 	}

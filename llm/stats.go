@@ -28,6 +28,12 @@ type StatsSnapshot struct {
 	CachedTokens     int64
 	UsageSeen        bool // 服务端是否返回过 usage
 	CachePct         int  // 缓存命中率 0-100；<0 表示未知
+	// LastPromptTokens/LastCompletionTokens 最后一次 LLM 调用的服务端
+	// 精确 usage（prompt 为该次全量上下文，含缓存命中部分）。累计值
+	// （PromptTokens 等）把回合内每次工具循环调用的全量 prompt 都加一遍，
+	// 不能当上下文长度用；上下文占用展示一律取 Last*（无 usage 回报时为 0）。
+	LastPromptTokens     int64
+	LastCompletionTokens int64
 }
 
 type stats struct {
@@ -41,6 +47,8 @@ type stats struct {
 	cachedTok     int64
 	completionTok int64
 	usageSeen     bool
+	lastPromptTok int64 // 最后一次 usage 精确回报的 prompt（=该次上下文长度）
+	lastComplTok  int64
 }
 
 // estimateTokens 字符启发式：CJK 字按 1 token，其余约 4 字符 1 token。
@@ -85,6 +93,8 @@ func (s *stats) addRound(dur, first time.Duration, u *usageInfo, promptEst, outE
 		s.promptTok += u.PromptTokens
 		s.promptUsage += u.PromptTokens
 		s.completionTok += u.CompletionTokens
+		s.lastPromptTok = u.PromptTokens
+		s.lastComplTok = u.CompletionTokens
 		if u.PromptTokensDetails != nil {
 			s.cachedTok += u.PromptTokensDetails.CachedTokens
 		}
@@ -107,13 +117,15 @@ func (s *stats) snapshot() StatsSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	snap := StatsSnapshot{
-		Rounds:           s.rounds,
-		LLMTime:          s.llmTime,
-		PromptTokens:     s.promptTok,
-		CompletionTokens: s.completionTok,
-		CachedTokens:     s.cachedTok,
-		UsageSeen:        s.usageSeen,
-		CachePct:         -1,
+		Rounds:               s.rounds,
+		LLMTime:              s.llmTime,
+		PromptTokens:         s.promptTok,
+		CompletionTokens:     s.completionTok,
+		CachedTokens:         s.cachedTok,
+		UsageSeen:            s.usageSeen,
+		LastPromptTokens:     s.lastPromptTok,
+		LastCompletionTokens: s.lastComplTok,
+		CachePct:             -1,
 	}
 	if s.firstN > 0 {
 		snap.FirstTokenAvg = s.firstTotal / time.Duration(s.firstN)
