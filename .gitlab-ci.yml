@@ -33,14 +33,6 @@ variables:
   GOMODCACHE: $CI_PROJECT_DIR/.gomodcache
   GOPROXY: https://goproxy.cn,direct
 
-cache:
-  # 固定 key:缓存跨版本 tag 累积复用;Go 版本升级后需换 key(如 go-build-1.27)
-  # 迫使重建,防旧标准库缓存与新工具链混用
-  key: go-build-1.26
-  paths:
-    - .gocache/
-    - .gomodcache/
-
 stages:
   - build
   - publish
@@ -51,6 +43,14 @@ build:
   stage: build
   tags:
     - docker
+  cache:
+    # 固定 key:缓存跨版本 tag 累积复用;Go 版本升级后需换 key(如 go-build-1.27)
+    # 迫使重建,防旧标准库缓存与新工具链混用。仅挂在 build job——cache 写在
+    # 全局会让 publish 也拉取+回传数百 MB 缓存归档,而它根本用不到
+    key: go-build-1.26
+    paths:
+      - .gocache/
+      - .gomodcache/
   before_script:
     # 使用国内 Alpine 源加速;upx 在 community 仓库,统一补一行再安装
     # (darwin 与 windows/arm64 产物不经 upx——会破坏 adhoc 签名/不支持
