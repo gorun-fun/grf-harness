@@ -12,8 +12,9 @@
 //     enter_plan_mode/memory 的实现文件（plan.go/memory.go）按约定冻结
 //     不改，同样以清单维护。
 //
-// 只比对 properties 键集，不比对 required——bash 的 spec required 含
-// description 而实现只硬校验 command，属已知轻微漂移。
+// 只比对 properties 键集，不比对 required（实现侧对各参数是否硬校验没有
+// 统一可反射的口径；bash 的 spec required 已收敛为仅 command，与其执行器
+// 的实际校验一致）。
 package tools
 
 import (
