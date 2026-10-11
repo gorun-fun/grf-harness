@@ -43,6 +43,7 @@ type Harness struct {
 	cacheKey string   // 会话级 prompt_cache_key；随会话文件持久化，resume 复用
 	disabled []string // 按场景禁用的工具名（Options.DisabledTools）
 	defSkill string   // 默认技能名（Options.DefaultSkill；空 = 不注入默认技能，gh CLI 终端形态配 grf-usage）
+	hostCtx  string   // 宿主环境简报（Options.HostContext；独立段拼在 custom 身份段后，根与子代理共享）
 	plugWarn []string // 插件状态警告（构建期取一次；子代理提示词复用）
 }
 
@@ -54,6 +55,7 @@ type Options struct {
 	Host          tools.Host       // 交互宿主；nil 用 NoopHost
 	MaxSteps      int
 	SystemPrompt  string              // 用户自定义 custom 段（身份/工作方式）；空用内置默认。inner prompt（内置工具说明）恒定拼装，不被它替换
+	HostContext   string              // 宿主环境简报（嵌入方注入的运行环境事实）；独立段拼在 custom 段之后、inner prompt 之前，与 SystemPrompt 叠加而非替换
 	DepthLimit    int                 // 子代理深度上限；0 用默认
 	DisabledTools []string            // 按场景禁用的工具名（根与子代理统一剔除）
 	Skills        *tools.SkillCatalog // 技能目录；nil 自动加载两级默认目录，非 nil 完全替换（空目录即关闭技能）
@@ -117,6 +119,7 @@ func Build(opts Options) (*Harness, error) {
 		cacheKey:  newCacheKey(),
 		disabled:  opts.DisabledTools,
 		defSkill:  opts.DefaultSkill,
+		hostCtx:   opts.HostContext,
 	}
 	h.bindClient(opts.Client)
 	h.Fs = h.newFsPolicy(host)
@@ -249,6 +252,7 @@ func (h *Harness) systemPromptFor(reg *tools.Registry, subagent bool, label, ove
 		PluginWarnings: h.plugWarn, // 构建期取好，根与子代理同一份
 		Tools:          names,
 		DefaultSkill:   h.defSkill,
+		HostContext:    h.hostCtx, // 宿主环境简报：根与子代理共享（子代理同样需要知道宿主环境）
 		ShellNote:      tools.ShellNote(), // 进程级恒定：windows 无 bash 时告知 PowerShell 语法
 	}, override)
 }

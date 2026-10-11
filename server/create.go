@@ -168,6 +168,13 @@ func (s *Server) execute(ctx context.Context, sess *session, req *createRequest,
 	text string, images []tools.Image, resume []agent.ResumeInput, store bool,
 	sink func(*event), onStart func(base *ResponseResource)) (*ResponseResource, error) {
 
+	// 供应商同步热生效：未显式指定 model 的会话在回合边界跟随
+	// settings.json 的新默认——宿主（openos AISyncer 等）直接落盘改配置，
+	// 存量会话与常驻进程无需重启/空闲回收即可生效（旧口径"gh 仅启动时
+	// 读盘"的竞态消除）。显式 model 由 handleCreate 的 trySwitchModel
+	// 处理（本就即时读盘）。
+	s.refreshDefaultClient(sess, req.Model)
+
 	base := s.buildResource(sess, req, respID)
 	if onStart != nil {
 		onStart(base)
@@ -346,6 +353,8 @@ func (s *Server) runBackground(w http.ResponseWriter, sess *session,
 			res.Error = &ErrorPayload{Type: errInvalid, Message: execErr.Error(), Param: "input"}
 			sess.saveSnap(res)
 		}
+		// 回合终态事件外发（宿主无头编排：事件驱动收尾，轮询降级为兜底）。
+		s.hook.postTurn(res)
 	}()
 }
 
@@ -480,6 +489,10 @@ func (s *Server) applyTools(sess *session, req *createRequest) error {
 
 // trySwitchModel model 参数 best-effort：provider/model 匹配配置则切换，
 // 否则沿用当前（保证任意 model 值可跑，ORS 合规测试语义）。
+// 裸模型名（无 provider/ 前缀）按供应商表解析：默认供应商含该模型即用
+// 默认供应商；否则恰有一个供应商提供时用它；多供应商同名且默认供应商
+// 不在其中则维持旧语义忽略（不静默换到非预期供应商）——宿主（如
+// openos 的 resolveModel shim、会话模型继承）不再需要自行补全限定名。
 func (s *Server) trySwitchModel(sess *session, model string) {
 	cfg, err := config.LoadFileForUpdate()
 	if err != nil || cfg == nil {
@@ -487,7 +500,10 @@ func (s *Server) trySwitchModel(sess *session, model string) {
 	}
 	provider, name := config.SplitDefault(model)
 	if provider == "" {
-		return
+		provider, name = resolveBareModel(cfg, model)
+		if provider == "" {
+			return
+		}
 	}
 	p, ok := cfg.Providers[provider]
 	if !ok || name == "" {
@@ -506,6 +522,65 @@ func (s *Server) trySwitchModel(sess *session, model string) {
 	// 缓存键迁移 + 子代理 client + 系统提示词身份行重写（身份行是会话构建期
 	// 烘焙的，切换须同步，否则模型以旧身份自我认知、自称旧模型名）。
 	sess.h.SwitchClient(nc)
+	// 切换即读盘：client 与最新 settings.json 对齐，同步指纹避免下一回合
+	// 被 refreshDefaultClient 误判"配置又变了"再切回默认。
+	sess.clientFP = settingsFingerprint()
+}
+
+// resolveBareModel 裸模型名 → (provider, model)：默认供应商（settings
+// 的 Default 指向）含该模型优先；否则全表恰一家提供时用它；零命中或
+// 歧义返回空（调用方维持旧语义忽略）。
+func resolveBareModel(cfg *config.Settings, name string) (string, string) {
+	if name == "" {
+		return "", ""
+	}
+	var defProvider string
+	if pn, _ := config.SplitDefault(cfg.Default); pn != "" {
+		defProvider = pn
+	}
+	if p, ok := cfg.Providers[defProvider]; ok {
+		for _, m := range p.Models {
+			if m == name {
+				return defProvider, name
+			}
+		}
+	}
+	single := ""
+	for _, pn := range cfg.SortedProviderNames() {
+		for _, m := range cfg.Providers[pn].Models {
+			if m == name {
+				if single != "" {
+					return "", "" // 多供应商同名且默认供应商不含：歧义，放弃
+				}
+				single = pn
+			}
+		}
+	}
+	if single == "" {
+		return "", "" // 零命中
+	}
+	return single, name
+}
+
+// refreshDefaultClient settings.json 变更后让未显式指定模型的会话跟随
+// 新默认配置（client 重建 + 身份行重写走 SwitchClient）。指纹相同/文件
+// 缺失/配置读失败均不动。只在回合边界调用（execute 开头），回合内并发
+// 不会被换 client。
+func (s *Server) refreshDefaultClient(sess *session, requestedModel string) {
+	if requestedModel != "" {
+		return // 显式模型路径由 trySwitchModel 即时读盘处理
+	}
+	fp := settingsFingerprint()
+	if fp == 0 || fp == sess.clientFP {
+		return
+	}
+	eff, err := config.Load()
+	if err != nil {
+		return
+	}
+	nc := llm.NewClient(llm.Config{Provider: eff.Provider, BaseURL: eff.BaseURL, APIKey: eff.APIKey, Model: eff.Model})
+	sess.h.SwitchClient(nc)
+	sess.clientFP = fp
 }
 
 // parseInput 解析 input（string 或 item 数组）：

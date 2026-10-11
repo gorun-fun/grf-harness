@@ -159,6 +159,9 @@ func (s *Server) handleGetConversation(w http.ResponseWriter, r *http.Request) {
 		"paused":  sess.root.HasPausedCalls(),
 		"running": sess.root.IsRunning(),
 		"policy":  sess.h.Policy(),
+		// 宿主环境简报回显（grf:session.host_context 落定值；宿主核验
+		// 注入是否生效用）。
+		"host_context": sess.meta.HostContext,
 		"stats": map[string]any{
 			"llm":   sess.root.LLMStats(),
 			"tools": map[string]any{"calls": calls, "time_ms": dur.Milliseconds()},

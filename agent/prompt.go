@@ -8,6 +8,7 @@
 // 嵌入更高频变化的字符串：
 //
 //  1. custom 身份/工作方式段 —— 会话级（session meta / 配置文件；空用内置默认）
+//  1.5 宿主环境简报段       —— 会话级（嵌入方注入的运行环境事实，custom 之后）
 //  2. inner prompt 内置工具段 —— 会话级（按本角色可用工具拼装，同会话恒定）
 //  3. 技能段                —— 项目级（SKILL.md 可被编辑）
 //  4. 运行环境(工作区)      —— 项目级（同项目内恒定，会话内根/子代理共享）
@@ -26,8 +27,13 @@ import (
 
 // PromptOptions 系统提示词的运行时事实。
 type PromptOptions struct {
-	Workspace      string
-	Model          string
+	Workspace string
+	Model     string
+	// HostContext 宿主环境简报：嵌入方（goder/openos 等宿主平台）注入的
+	// 运行环境事实，作为独立段拼在 custom 身份段之后。会话级稳定事实
+	// （不随回合变化），排序上紧贴 custom；根与子代理共享同一份——
+	// 子代理同样需要知道"自己运行在哪个宿主里"。空值不拼段。
+	HostContext    string
 	Skills         *tools.SkillCatalog // 可为 nil
 	Subagent       bool                // 子代理身份（附加说明）
 	Label          string              // 子代理标签
@@ -86,6 +92,14 @@ func BuildSystemPrompt(o PromptOptions, custom string) string {
 		b.WriteString(strings.TrimRight(custom, "\n"))
 	} else {
 		b.WriteString(strings.TrimRight(defaultCustomBody(), "\n"))
+	}
+	// 宿主环境简报（段序 1.5）：嵌入方传达"你运行在哪个宿主里、用户是
+	// 谁、有哪些宿主专属能力"。不替代 custom 身份段——宿主只需描述环境，
+	// 不必接管整段提示词。空值不拼段（非嵌入形态无此段，缓存前缀不变）。
+	if o.HostContext != "" {
+		b.WriteString("\n\n## 宿主环境简报\n")
+		b.WriteString(strings.TrimRight(o.HostContext, "\n"))
+		b.WriteString("\n")
 	}
 	if inner := innerPromptBody(o.Tools); inner != "" {
 		b.WriteString("\n\n")

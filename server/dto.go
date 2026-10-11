@@ -94,6 +94,12 @@ type grfSessionConfig struct {
 	Policy       string `json:"policy,omitempty"` // write-workspace|read-workspace 组合 | off（默认）
 	AutoApprove  *bool  `json:"auto_approve,omitempty"`
 	SystemPrompt string `json:"system_prompt,omitempty"`
+	// HostContext 宿主环境简报：嵌入方（goder/openos 等宿主平台）注入的
+	// 运行环境事实（"你运行在 OpenOS 桌面，当前用户是 X、角色 Y，可用
+	// os_* 工具操作桌面"之类）。作为独立段拼在 custom 身份段之后，
+	// 与 system_prompt 叠加而非替换——宿主不需要（也不应该）为了传达
+	// 环境信息接管整段身份提示词。仅会话首建生效，随 meta.json 持久化。
+	HostContext string `json:"host_context,omitempty"`
 	// DefaultSkill 默认技能名（技能目录中存在该名字时，其 SKILL.md 全文
 	// 注入系统提示词，无需模型调 skill 工具）；空 = 不注入任何默认技能
 	// （grf-usage 终端用法技能不服务集成方）。集成方用它指定自己的默认

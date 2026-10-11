@@ -62,7 +62,7 @@ gh server [-addr 127.0.0.1:7400] [-data ~/.grf/server] [-token <t>]
 | `instructions` | 会话系统提示词（每请求生效；变更使提示词缓存失效） |
 | `tools`（function） | 注册为**客户端执行**工具：模型调用时回合暂停、产出 `function_call` item，接入方执行后在下轮 input 里带 `function_call_output` 续交。缺省时沿用上轮注册；显式空数组清空 |
 | `tool_choice` | `"none"` 禁全部；`{"type":"allowed_tools","tools":[...]}` 仅留列出的（保缓存语义） |
-| `model` | best-effort：`provider/model` 命中配置则切换，否则沿用当前（任意值可跑） |
+| `model` | best-effort：`provider/model` 命中配置则切换，否则沿用当前（任意值可跑）。裸模型名按供应商表解析：默认供应商含该模型优先，否则全表恰一家提供时用它，歧义/零命中沿用当前（宿主不再需要自行补全限定名） |
 | `max_tool_calls` | 工具循环轮次上限 |
 | `prompt_cache_key` | 透传会话缓存键 |
 | `store: false` | 不落存档、不写快照（注意：重启后无法续接） |
@@ -82,6 +82,13 @@ gh server [-addr 127.0.0.1:7400] [-data ~/.grf/server] [-token <t>]
   "policy": "write-workspace|read-workspace",  // 统一规则串，空值默认 off | write-workspace | read-workspace
   "auto_approve": true,        // 沙箱升级/计划审批的默认值（见 §7）
   "system_prompt": "…",        // 会话级 custom 段（身份/工作方式）；内置工具说明段恒定追加，不被它替换
+  "host_context": "你运行在 XX 宿主平台，当前用户 …", // 宿主环境简报：嵌入方注入的
+                               // 运行环境事实，独立段拼在 system_prompt 之后、
+                               // 内置工具说明之前（叠加而非替换）；根与子代理
+                               // 共享；GET /v1/conversations/{id} 的 host_context
+                               // 字段回显落定值。宿主（如 goder/openos）用它让
+                               // 会话知道自己运行在哪个平台里，不必为环境信息
+                               // 接管整段身份提示词。
   "default_skill": "grf-start", // 默认技能名（目录中存在该名字时 SKILL.md 全文注入系统提示词）；缺省不注入任何默认技能
   "max_steps": 100,
   "disabled_tools": ["ralph"]
@@ -149,6 +156,21 @@ exit_plan_mode 计划审批、enter_plan_mode 进入申请经 `Host.AskUser`
 | 历史分叉（previous 非链尾） | 409 |
 | 归档会话的任何请求 | 404 |
 | store:false 的回合 | 重启后 404，无法续接 |
+
+## 8.5 宿主集成钩子（环境变量）
+
+| 变量 | 作用 |
+|------|------|
+| `GRF_TURN_WEBHOOK_URL` | 后台（`background:true`）回合落定即 POST `turn.settled` 事件（`type/session_id/response_id/status/model/usage/ts`）给宿主；同步/SSE 回合不外发。投递尽力而为（5s 超时、不重试），幂等键 `response_id`，轮询 retrieve 仍是兜底 |
+| `GRF_TURN_WEBHOOK_SECRET` | 事件体 HMAC-SHA256 签名密钥；配置后附 `X-GRF-Signature: sha256=<hex(body)>` 头，接收方应常量时间校验后再信任事件体 |
+
+两项均启动期读取（goder-serve 等宿主网关经子进程 env 注入，见其
+`GODER_GH_ENV_<KEY>` 透传通道）。
+
+**settings.json 热跟随**：回合边界检测配置文件变更（mtime+size 指纹），
+未显式指定 `model` 的存量会话在下一回合自动跟随新默认供应商/模型
+（宿主 AISyncer 类集成直接落盘改配置即可生效，无需重启/空闲回收进程）。
+显式 `model` 走 trySwitchModel，本就即时读盘。
 
 ## 9. ORS 合规对照（17 项浏览器/CLI 套件 → gh 实现）
 

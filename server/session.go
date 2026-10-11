@@ -35,6 +35,7 @@ type sessionMeta struct {
 	Archived      bool      `json:"archived,omitempty"`
 	Workspace     string    `json:"workspace"`
 	SystemPrompt  string    `json:"system_prompt,omitempty"`
+	HostContext   string    `json:"host_context,omitempty"`
 	DefaultSkill  string    `json:"default_skill,omitempty"`
 	Policy        string    `json:"policy,omitempty"`
 	AutoApprove   bool      `json:"auto_approve,omitempty"`
@@ -75,6 +76,10 @@ type session struct {
 	// clientTools 本会话已注册的客户端函数工具（每请求重置前先清理）。
 	clientTools []string
 	turnDone    chan struct{} // 当前回合结束信号（close 于回合收尾）
+	// clientFP 构建当前 client 时的 settings.json 指纹（mtime^size）；
+	// 回合边界检测配置变更，未显式指定 model 的会话跟随新默认（宿主
+	// 供应商同步热生效，见 execute 的 refreshDefaultClient）。
+	clientFP int64
 }
 
 // nextSeq 会话级 sequence_number（跨回合单调）。
@@ -96,6 +101,8 @@ type Server struct {
 	// clientFactory 构建每会话的 LLM 客户端（默认读 ~/.grf 配置；测试注入
 	// fakeLLM）。
 	clientFactory func() (*llm.Client, error)
+	// hook 回合终态事件外发（GRF_TURN_WEBHOOK_URL；未配置时 no-op）。
+	hook turnWebhook
 }
 
 // New 构建 Server。token 为空时自动生成并写入 <data>/token（0600）。
@@ -116,6 +123,7 @@ func New(dataDir, token string) (*Server, error) {
 		sessions:      map[string]*session{},
 		loadLocks:     map[string]*sync.Mutex{},
 		clientFactory: defaultClient,
+		hook:          turnWebhookFromEnv(),
 	}, nil
 }
 
@@ -132,6 +140,17 @@ func defaultClient() (*llm.Client, error) {
 		return nil, err
 	}
 	return llm.NewClient(llm.Config{Provider: eff.Provider, BaseURL: eff.BaseURL, APIKey: eff.APIKey, Model: eff.Model}), nil
+}
+
+// settingsFingerprint settings.json 的轻量指纹（mtime^size），供回合边界
+// 检测"宿主改写了配置"（openos AISyncer 等供应商同步集成直接落盘
+// settings.json）。文件不存在返回 0。
+func settingsFingerprint() int64 {
+	fi, err := os.Stat(config.Path())
+	if err != nil {
+		return 0
+	}
+	return fi.ModTime().UnixNano() ^ fi.Size()
 }
 
 // loadOrCreateToken 读取或生成持久令牌。
@@ -188,6 +207,7 @@ func (s *Server) newSession(cfg *grfSessionConfig) (*session, error) {
 	}
 	if cfg != nil {
 		meta.SystemPrompt = cfg.SystemPrompt
+		meta.HostContext = cfg.HostContext
 		meta.DefaultSkill = cfg.DefaultSkill
 		meta.Policy = cfg.Policy
 		meta.MaxSteps = cfg.MaxSteps
@@ -231,6 +251,7 @@ func (s *Server) buildSession(meta *sessionMeta) (*session, error) {
 		Settings:      settings,
 		Host:          host,
 		SystemPrompt:  meta.SystemPrompt,
+		HostContext:   meta.HostContext,
 		DefaultSkill:  meta.DefaultSkill,
 		MaxSteps:      meta.MaxSteps,
 		DisabledTools: meta.DisabledTools,
@@ -239,7 +260,7 @@ func (s *Server) buildSession(meta *sessionMeta) (*session, error) {
 	if err != nil {
 		return nil, err
 	}
-	sess := &session{srv: s, meta: meta, h: h, root: h.Root}
+	sess := &session{srv: s, meta: meta, h: h, root: h.Root, clientFP: settingsFingerprint()}
 	// 恢复客户端函数工具注册（暂停类别判定依赖）。
 	for _, td := range meta.ClientTools {
 		h.Root.Reg().RegisterClient(llm.Tool{Name: td.Name, Description: td.Description, Parameters: td.Parameters})
