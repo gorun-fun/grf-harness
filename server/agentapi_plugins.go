@@ -10,13 +10,14 @@ import (
 	"sort"
 	"strings"
 
+	"git.gorun.fun/share/grf-harness/config"
 	"git.gorun.fun/share/grf-harness/plugin"
 )
 
 // handleAgentPluginsGet GET /v1/agent/plugins。
 func (s *Server) handleAgentPluginsGet(w http.ResponseWriter, r *http.Request) {
-	path, _ := settingsPath()
-	dir := filepath.Join(configHome(), "plugins")
+	path := config.Path()
+	dir := filepath.Join(config.Home(), "plugins")
 	out := pluginsDTO{
 		Path: path, Dir: dir,
 		Plugins: []pluginDTO{}, Discovered: []string{},

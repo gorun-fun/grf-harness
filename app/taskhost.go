@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"git.gorun.fun/share/grf-harness/term"
@@ -75,11 +74,12 @@ func (h *TaskHost) AskUser(ctx context.Context, qs []tools.Question) (map[string
 
 // optionAnswer 把选项题的一行输入解析成答案：合法序号映射为选项标签，
 // 其余非空内容视作用户自定义文字（多选时两者可混用），空输入默认第一项。
+// 序号映射与多选拆分用 tools 公共件（OptionByIndex/SplitOptionParts）。
 func optionAnswer(q tools.Question, line string) any {
 	if !q.MultiSelect {
 		t := strings.TrimSpace(line)
-		if n, err := strconv.Atoi(t); err == nil && n >= 1 && n <= len(q.Options) {
-			return q.Options[n-1].Label
+		if l := tools.OptionByIndex(q.Options, t); l != "" {
+			return l
 		}
 		if t != "" {
 			return t
@@ -88,11 +88,9 @@ func optionAnswer(q tools.Question, line string) any {
 	}
 	var labels []string
 	hasNum := false
-	for _, f := range strings.FieldsFunc(line, func(r rune) bool {
-		return r == ',' || r == '，' || r == ' ' || r == '\n'
-	}) {
-		if n, err := strconv.Atoi(f); err == nil && n >= 1 && n <= len(q.Options) {
-			labels = append(labels, q.Options[n-1].Label)
+	for _, f := range tools.SplitOptionParts(line) {
+		if l := tools.OptionByIndex(q.Options, f); l != "" {
+			labels = append(labels, l)
 			hasNum = true
 		} else if t := strings.TrimSpace(f); t != "" {
 			labels = append(labels, t)

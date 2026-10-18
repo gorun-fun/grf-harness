@@ -449,8 +449,6 @@ func TestNoticesInjected(t *testing.T) {
 	}
 }
 
-func timeoutChan() <-chan time.Time { return time.After(2 * time.Second) }
-
 // TestRestoreFullPrefersStoredSystem resume 优先回放文件里的 system 原文，
 // 请求前缀与上一场逐字一致（即使构建期提示词已变化）。
 func TestRestoreFullPrefersStoredSystem(t *testing.T) {

@@ -9,10 +9,13 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"git.gorun.fun/share/grf-harness/config"
+	"git.gorun.fun/share/grf-harness/term"
 )
 
 func skillsDir() string {
-	return filepath.Join(configHome(), "skills")
+	return filepath.Join(config.Home(), "skills")
 }
 
 // handleAgentSkillsGet GET /v1/agent/skills。
@@ -178,7 +181,7 @@ func skillDescription(md string) string {
 				inFront = false
 			} else if v, ok := strings.CutPrefix(t, "description:"); ok {
 				if s := strings.Trim(strings.TrimSpace(v), `"'`); s != "" {
-					return truncateRunes(s, 80)
+					return term.ClipRunes(s, 80)
 				}
 			}
 			continue
@@ -186,7 +189,7 @@ func skillDescription(md string) string {
 		if t == "" || strings.HasPrefix(t, "#") {
 			continue
 		}
-		return truncateRunes(t, 80)
+		return term.ClipRunes(t, 80)
 	}
 	return ""
 }

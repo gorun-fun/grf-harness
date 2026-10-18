@@ -174,12 +174,6 @@ func (s *Store) LatestSessionFull() (Session, error) {
 	return LoadSessionFull(path)
 }
 
-// LatestSession 最近一次会话的消息；无会话返回 nil。
-func (s *Store) LatestSession() ([]llm.Message, error) {
-	sess, err := s.LatestSessionFull()
-	return sess.Messages, err
-}
-
 // latestPath 最新会话文件路径；无返回空串。
 func (s *Store) latestPath() string {
 	entries, err := os.ReadDir(s.dir())

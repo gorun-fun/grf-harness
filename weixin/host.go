@@ -5,7 +5,6 @@ package weixin
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -115,16 +114,15 @@ func formatQuestion(q tools.Question) string {
 	return b.String()
 }
 
-// matchAnswer 把用户的回复匹配成工具答案。
+// matchAnswer 把用户的回复匹配成工具答案（序号映射与多选拆分用 tools
+// 公共件，标签模糊匹配是消息渠道的口语回复语义）。
 func matchAnswer(q tools.Question, reply string) any {
 	if len(q.Options) == 0 {
 		return reply
 	}
 	if q.MultiSelect {
 		var out []string
-		for _, part := range strings.FieldsFunc(reply, func(r rune) bool {
-			return r == ',' || r == '，' || r == '、' || r == ';' || r == '；' || r == ' '
-		}) {
+		for _, part := range tools.SplitOptionParts(reply) {
 			if l := matchOption(q.Options, part); l != "" {
 				out = append(out, l)
 			}
@@ -143,8 +141,8 @@ func matchAnswer(q tools.Question, reply string) any {
 // matchOption 编号精确匹配 → 标签全等(忽略大小写) → 包含匹配。
 func matchOption(opts []tools.Option, s string) string {
 	s = strings.TrimSpace(s)
-	if n, err := strconv.Atoi(s); err == nil && n >= 1 && n <= len(opts) {
-		return opts[n-1].Label
+	if l := tools.OptionByIndex(opts, s); l != "" {
+		return l
 	}
 	for _, o := range opts {
 		if strings.EqualFold(o.Label, s) {

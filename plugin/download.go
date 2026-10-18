@@ -90,13 +90,20 @@ func ProbePlugins(ctx context.Context, base, version string) (*PluginRelease, er
 }
 
 // Download 把插件下载到自动发现目录 PluginDir()（已存在则原子覆盖）。
-// names 为空下载全部；名称匹配宽松——"browser"、"grf-browser"、
-// "grf-browser.exe" 视为同一个。progress 可为 nil（file 为远端文件名）。
-// 返回落盘路径清单（含部分成功：出错时已完成的仍在其中）。
+// names 为空下载全部；名称匹配见 Resolve（CLI 与 /plugin 指令同一语义）。
+// progress 可为 nil（file 为远端文件名）。返回落盘路径清单（含部分成功：
+// 出错时已完成的仍在其中）。
 func (r *PluginRelease) Download(ctx context.Context, names []string, progress func(file string, done, total int64)) ([]string, error) {
-	files, err := r.pick(names)
-	if err != nil {
-		return nil, err
+	var files []string
+	for _, want := range names {
+		hits, err := r.Resolve(want)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, hits...)
+	}
+	if len(names) == 0 {
+		files = append([]string(nil), r.Files...)
 	}
 	if err := os.MkdirAll(PluginDir(), 0o755); err != nil {
 		return nil, err
@@ -116,26 +123,36 @@ func (r *PluginRelease) Download(ctx context.Context, names []string, progress f
 	return saved, nil
 }
 
-// pick 按用户参数挑选待下载文件（空 = 全部），未知名称报错并列出可用项。
-func (r *PluginRelease) pick(names []string) ([]string, error) {
-	if len(names) == 0 {
+// Resolve 按用户输入解析待下载插件：归一比较（去 grf- 前缀、.exe 后缀、
+// 忽略大小写——"browser"、"grf-browser"、"grf-browser.exe" 同一），先
+// 精确命中，再唯一子串命中；零命中/歧义报错并列出可用项。gh plugins
+// download 与 server 的 /plugin 指令共用同一语义。
+func (r *PluginRelease) Resolve(query string) ([]string, error) {
+	q := strings.ToLower(normPluginName(query))
+	if q == "" {
 		return append([]string(nil), r.Files...), nil
 	}
-	var out []string
-	for _, want := range names {
-		found := ""
+	var hits []string
+	for _, f := range r.Files {
+		if strings.ToLower(normPluginName(f)) == q {
+			hits = []string{f}
+			break
+		}
+	}
+	if len(hits) == 0 {
 		for _, f := range r.Files {
-			if normPluginName(f) == normPluginName(want) {
-				found = f
-				break
+			if strings.Contains(strings.ToLower(normPluginName(f)), q) {
+				hits = append(hits, f)
 			}
 		}
-		if found == "" {
-			return nil, fmt.Errorf("没有名为 %q 的插件（可下载: %s）", want, strings.Join(r.Files, "、"))
-		}
-		out = append(out, found)
 	}
-	return out, nil
+	switch {
+	case len(hits) == 0:
+		return nil, fmt.Errorf("没有名为 %q 的插件（可下载: %s）", query, strings.Join(r.Files, "、"))
+	case len(hits) > 1:
+		return nil, fmt.Errorf("%q 匹配到多个插件：%s，请用完整名称", query, strings.Join(hits, "、"))
+	}
+	return hits, nil
 }
 
 // normPluginName 名称归一：去 grf- 前缀与 .exe 后缀，宽松匹配用户输入。

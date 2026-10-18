@@ -42,12 +42,6 @@ func TestStripANSI(t *testing.T) {
 	}
 }
 
-func TestTruncateWidth(t *testing.T) {
-	if got := Truncate("你好世界", 5); got != "你好" {
-		t.Fatalf("got %q", got)
-	}
-}
-
 func TestParseKeySequences(t *testing.T) {
 	cases := []struct {
 		in    string

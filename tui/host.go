@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"git.gorun.fun/share/grf-harness/config"
+	"git.gorun.fun/share/grf-harness/term"
 	"git.gorun.fun/share/grf-harness/store"
 	"git.gorun.fun/share/grf-harness/tools"
 )
@@ -165,7 +166,7 @@ func (c *Chat) hostRequest(m any) {
 		var b strings.Builder
 		b.WriteString("工具 " + req.tool + " 申请越权（模式 " + req.mode + "）")
 		if req.key != "" {
-			b.WriteString("\n参数:\n" + clipRunesT(req.key, 2000))
+			b.WriteString("\n参数:\n" + term.ClipRunes(req.key, 2000))
 		}
 		if req.justification != "" {
 			b.WriteString("\n理由: " + req.justification)
@@ -203,7 +204,7 @@ func (c *Chat) hostRequest(m any) {
 		c.ask.head = "沙箱升级审批"
 	case *toolApproveRequest:
 		q := tools.Question{ID: "approve",
-			Question: "工具 " + req.name + " · 参数:\n" + clipRunesT(req.args, 2000),
+			Question: "工具 " + req.name + " · 参数:\n" + term.ClipRunes(req.args, 2000),
 			Options: []tools.Option{
 				{Label: "批准执行"}, // picked = 0
 				{Label: "拒绝"},   // picked = 1

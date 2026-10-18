@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -276,6 +277,16 @@ type StreamHooks struct {
 	ToolArgs  ToolArgsHook
 }
 
+// streamToolCallDelta 流式 tool_call 分片（OpenAI 按 index 分片投递）。
+type streamToolCallDelta struct {
+	Index    int    `json:"index"`
+	ID       string `json:"id"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
 type streamChunk struct {
 	Choices []struct {
 		FinishReason string `json:"finish_reason"`
@@ -283,14 +294,7 @@ type streamChunk struct {
 			Content   string `json:"content"`
 			Reasoning string `json:"reasoning_content"`
 			ReasonAlt string `json:"reasoning"`
-			ToolCalls []struct {
-				Index    int    `json:"index"`
-				ID       string `json:"id"`
-				Function struct {
-					Name      string `json:"name"`
-					Arguments string `json:"arguments"`
-				} `json:"function"`
-			} `json:"tool_calls"`
+			ToolCalls []streamToolCallDelta `json:"tool_calls"`
 		} `json:"delta"`
 	} `json:"choices"`
 	Usage *usageInfo `json:"usage"`
@@ -317,19 +321,15 @@ func (c *Client) ChatStream(ctx context.Context, messages []Message, tools []Too
 	}
 }
 
-// chatStreamOnce 单次流式尝试；emitted 表示是否已向宿主回调过任何增量。
+// chatStreamOnce 单次流式尝试；emitted 表示是否已向宿主回调过任何增量
+// （连接产出增量后中断不内部重试，见 ChatStream 注释）。统计簿记（首
+// token/usage/估算）留在此层，传输形态分流见 wholeFallback/consumeSSE。
 func (c *Client) chatStreamOnce(ctx context.Context, messages []Message, tools []Tool, hooks StreamHooks) (_ Message, emitted bool, _ error) {
 	start := time.Now()
 	var first time.Duration // 首 token 延迟
 	var u *usageInfo
 	var outEst int64 // 输出 token 估算（无 usage 时兜底）
 	promptEst := estimateMessagesTokens(messages)
-	firstMark := func() {
-		if first == 0 {
-			first = time.Since(start)
-		}
-		emitted = true
-	}
 	ok := false
 	defer func() {
 		if !ok {
@@ -356,35 +356,82 @@ func (c *Client) chatStreamOnce(ctx context.Context, messages []Message, tools [
 
 	if !strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
 		first = time.Since(start)
-		data, err := readCheckedBody(resp, 32<<20)
+		msg, uu, est, err := wholeFallback(resp, hooks)
 		if err != nil {
 			return Message{}, false, err
 		}
-		var whole chatResponse
-		if json.Unmarshal(data, &whole) == nil && whole.Usage != nil {
-			u = whole.Usage
-		}
-		msg, err := parseWhole(data)
-		if err != nil {
-			return Message{}, false, err
-		}
-		fallbackContentToolCalls(&msg)
-		outEst = estimateTokens(msg.Content) + estimateTokens(msg.Reasoning)
-		if msg.Content != "" && hooks.Content != nil {
-			hooks.Content(msg.Content)
-		}
-		if msg.Reasoning != "" && hooks.Reasoning != nil {
-			hooks.Reasoning(msg.Reasoning)
-		}
+		u, outEst = uu, est
 		ok = true
 		return msg, true, nil
 	}
 
-	msg := Message{Role: "assistant"}
-	calls := map[int]*ToolCall{}
-	// 流式增量先过显示过滤，剔除 DSML/<tool_call> 标签文本再送 UI
+	acc, err := consumeSSE(ctx, resp.Body, hooks)
+	if err != nil {
+		// 取消：不得把半截消息当成功返回；emitted 透传（重试语义判定）
+		return Message{}, acc.emitted, err
+	}
+	u, outEst = acc.usage, acc.outEst
+	if acc.firstDelta > 0 {
+		first = acc.firstDelta
+	}
+	fallbackContentToolCalls(&acc.msg)
+	ok = true
+	return acc.msg, true, nil
+}
+
+// wholeFallback 非 SSE 应答（部分网关对 stream 请求仍回整包 JSON）：读
+// 全量、解析、回退工具调用解析，正文/思考整段一次性播给宿主。返回
+// 消息、usage 与输出 token 估算。
+func wholeFallback(resp *http.Response, hooks StreamHooks) (Message, *usageInfo, int64, error) {
+	data, err := readCheckedBody(resp, 32<<20)
+	if err != nil {
+		return Message{}, nil, 0, err
+	}
+	var whole chatResponse
+	var u *usageInfo
+	if json.Unmarshal(data, &whole) == nil && whole.Usage != nil {
+		u = whole.Usage
+	}
+	msg, err := parseWhole(data)
+	if err != nil {
+		return Message{}, nil, 0, err
+	}
+	fallbackContentToolCalls(&msg)
+	est := estimateTokens(msg.Content) + estimateTokens(msg.Reasoning)
+	if msg.Content != "" && hooks.Content != nil {
+		hooks.Content(msg.Content)
+	}
+	if msg.Reasoning != "" && hooks.Reasoning != nil {
+		hooks.Reasoning(msg.Reasoning)
+	}
+	return msg, u, est, nil
+}
+
+// streamAccum SSE 流消费的累积结果。
+type streamAccum struct {
+	msg        Message
+	usage      *usageInfo
+	outEst     int64
+	firstDelta time.Duration // 首 token 延迟（0 = 无增量）
+	emitted    bool          // 是否已向宿主流出增量（重试语义据此判定）
+}
+
+// consumeSSE 消费 SSE 流：data: 行解析、usage / finish_reason / 正文与
+// 思考增量（过显示过滤剔除 DSML/<tool_call> 标签文本再送 UI）/ tool_call
+// 分片聚合（即时回调）四路累积。ctx 取消时返回已流出前缀的 emitted。
+func consumeSSE(ctx context.Context, body io.Reader, hooks StreamHooks) (streamAccum, error) {
+	var acc streamAccum
+	acc.msg = Message{Role: "assistant"}
+	start := time.Now()
+	firstMark := func() {
+		if acc.firstDelta == 0 {
+			acc.firstDelta = time.Since(start)
+		}
+		acc.emitted = true
+	}
+	collector := newToolCallCollector(hooks)
 	var cf, rf displayFilter
-	scanner := bufio.NewScanner(resp.Body)
+	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 8<<20)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -400,105 +447,174 @@ func (c *Client) chatStreamOnce(ctx context.Context, messages []Message, tools [
 			continue
 		}
 		if chunk.Usage != nil {
-			u = chunk.Usage
+			acc.usage = chunk.Usage
 		}
 		if len(chunk.Choices) == 0 {
 			continue
 		}
 		if fr := chunk.Choices[0].FinishReason; fr != "" {
-			msg.FinishReason = fr
+			acc.msg.FinishReason = fr
 		}
 		delta := chunk.Choices[0].Delta
 		if d := delta.Reasoning + delta.ReasonAlt + delta.Content; d != "" {
 			firstMark()
-			outEst += estimateTokens(d)
+			acc.outEst += estimateTokens(d)
 		}
 		for _, tc := range delta.ToolCalls {
 			if tc.Function.Name != "" || tc.Function.Arguments != "" {
 				firstMark()
-				outEst += estimateTokens(tc.Function.Name) + estimateTokens(tc.Function.Arguments)
+				acc.outEst += estimateTokens(tc.Function.Name) + estimateTokens(tc.Function.Arguments)
 			}
 		}
 		if reasoning := delta.Reasoning + delta.ReasonAlt; reasoning != "" {
-			msg.Reasoning += reasoning
+			acc.msg.Reasoning += reasoning
 			if hooks.Reasoning != nil {
-				if d := rf.delta(msg.Reasoning); d != "" {
+				if d := rf.delta(acc.msg.Reasoning); d != "" {
 					hooks.Reasoning(d)
 				}
 			}
 		}
 		if delta.Content != "" {
-			msg.Content += delta.Content
+			acc.msg.Content += delta.Content
 			if hooks.Content != nil {
-				if d := cf.delta(msg.Content); d != "" {
+				if d := cf.delta(acc.msg.Content); d != "" {
 					hooks.Content(d)
 				}
 			}
 		}
-		for _, tc := range delta.ToolCalls {
-			cur, ok := calls[tc.Index]
-			if !ok {
-				cur = &ToolCall{Type: "function"}
-				calls[tc.Index] = cur
-			}
-			if tc.ID != "" {
-				cur.ID = tc.ID
-			}
-			cur.Function.Name += tc.Function.Name
-			cur.Function.Arguments += tc.Function.Arguments
-			// 工具调用头(name/id 先到、参数为空)与参数增量都即时报给宿主
-			// ——头片一到宿主就能建卡(工具名先显示,不再干等参数)。
-			if hooks.ToolArgs != nil &&
-				(tc.ID != "" || tc.Function.Name != "" || tc.Function.Arguments != "") {
-				hooks.ToolArgs(tc.Index, cur.ID, cur.Function.Name, tc.Function.Arguments)
-			}
-		}
+		collector.addAll(delta.ToolCalls)
 	}
 	if err := scanner.Err(); err != nil {
 		if ctx.Err() != nil {
-			return Message{}, emitted, ctx.Err() // 取消：不得把半截消息当成功返回
+			return acc, ctx.Err()
 		}
-		return Message{}, emitted, fmt.Errorf("read stream: %w", err)
+		return acc, fmt.Errorf("read stream: %w", err)
 	}
-	if len(calls) > 0 {
-		idxs := make([]int, 0, len(calls))
-		for i := range calls {
-			idxs = append(idxs, i)
-		}
-		sort.Ints(idxs)
-		for _, i := range idxs {
-			msg.ToolCalls = append(msg.ToolCalls, *calls[i])
-		}
-	}
-	fallbackContentToolCalls(&msg)
-	ok = true
-	return msg, true, nil
+	acc.msg.ToolCalls = collector.finish()
+	return acc, nil
 }
 
-// Models 查询服务端模型列表（GET /models）。
-func (c *Client) Models(ctx context.Context) ([]string, error) {
+// toolCallCollector 流式 tool_call 分片聚合：按 index 合并 id/name/参数
+// 增量；头片（name/id 先到、参数为空）与参数增量都即时报给宿主——头片
+// 一到宿主就能建卡（工具名先显示，不再干等参数）。
+type toolCallCollector struct {
+	calls map[int]*ToolCall
+	hooks StreamHooks
+}
+
+func newToolCallCollector(hooks StreamHooks) *toolCallCollector {
+	return &toolCallCollector{calls: map[int]*ToolCall{}, hooks: hooks}
+}
+
+// addAll 并入一包增量。
+func (c *toolCallCollector) addAll(tcs []streamToolCallDelta) {
+	for _, tc := range tcs {
+		cur, ok := c.calls[tc.Index]
+		if !ok {
+			cur = &ToolCall{Type: "function"}
+			c.calls[tc.Index] = cur
+		}
+		if tc.ID != "" {
+			cur.ID = tc.ID
+		}
+		cur.Function.Name += tc.Function.Name
+		cur.Function.Arguments += tc.Function.Arguments
+		if c.hooks.ToolArgs != nil &&
+			(tc.ID != "" || tc.Function.Name != "" || tc.Function.Arguments != "") {
+			c.hooks.ToolArgs(tc.Index, cur.ID, cur.Function.Name, cur.Function.Arguments)
+		}
+	}
+}
+
+// finish 按 index 升序收尾。
+func (c *toolCallCollector) finish() []ToolCall {
+	if len(c.calls) == 0 {
+		return nil
+	}
+	idxs := make([]int, 0, len(c.calls))
+	for i := range c.calls {
+		idxs = append(idxs, i)
+	}
+	sort.Ints(idxs)
+	out := make([]ToolCall, 0, len(idxs))
+	for _, i := range idxs {
+		out = append(out, *c.calls[i])
+	}
+	return out
+}
+
+// ModelInfo 一条模型信息（GET /models 解析）。
+type ModelInfo struct {
+	ID     string
+	CtxLen int // 上下文窗口（按社区常见字段名探测，未提供为 0）
+}
+
+// ModelsRich 查询模型列表（含上下文窗口）：data[].id 与裸数组 [{id}]
+// 两种应答形态都兼容；上下文窗口按社区常见字段名依次尝试（token-hub
+// 三者同值；OpenRouter/SiliconFlow 用 context_length，vLLM 用
+// max_model_len）。按 id 字典序返回。
+func (c *Client) ModelsRich(ctx context.Context) ([]ModelInfo, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		strings.TrimSuffix(c.cfg.BaseURL, "/")+"/models", nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
+	if c.cfg.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
+	}
 	data, err := c.postJSON(req, 4<<20)
 	if err != nil {
 		return nil, err
 	}
-	var out struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
+	var wrapped struct {
+		Data []map[string]any `json:"data"`
 	}
-	if err := json.Unmarshal(data, &out); err != nil {
+	var bare []map[string]any
+	if err := json.Unmarshal(data, &wrapped); err == nil && len(wrapped.Data) > 0 {
+		bare = wrapped.Data
+	} else if err := json.Unmarshal(data, &bare); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
-	models := make([]string, 0, len(out.Data))
-	for _, m := range out.Data {
+	out := make([]ModelInfo, 0, len(bare))
+	for _, item := range bare {
+		id, _ := item["id"].(string)
+		if id == "" {
+			continue
+		}
+		out = append(out, ModelInfo{ID: id, CtxLen: modelCtxLen(item)})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+// modelCtxLen 从模型对象里取上下文窗口，数字或数字字符串均可，取首个
+// >0 的值。
+func modelCtxLen(item map[string]any) int {
+	for _, key := range []string{"context_length", "context_window", "max_model_len"} {
+		switch v := item[key].(type) {
+		case float64:
+			if v > 0 {
+				return int(v)
+			}
+		case string:
+			if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+				return n
+			}
+		}
+	}
+	return 0
+}
+
+// Models 查询服务端模型列表（GET /models，纯 id 数组——ModelsRich 的
+// 薄包装）。
+func (c *Client) Models(ctx context.Context) ([]string, error) {
+	infos, err := c.ModelsRich(ctx)
+	if err != nil {
+		return nil, err
+	}
+	models := make([]string, 0, len(infos))
+	for _, m := range infos {
 		models = append(models, m.ID)
 	}
-	sort.Strings(models)
 	return models, nil
 }

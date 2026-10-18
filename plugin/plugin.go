@@ -13,7 +13,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
-	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -272,18 +271,6 @@ func (m *Manager) Conns() []*Conn {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]*Conn(nil), m.conns...)
-}
-
-// ToolNames 已登记的插件工具名（字典序）。
-func (m *Manager) ToolNames() []string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	names := make([]string, 0, len(m.tools))
-	for n := range m.tools {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	return names
 }
 
 // ToolInfo 单个插件工具的归属与只读标记（展示用）。

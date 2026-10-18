@@ -7,8 +7,26 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 )
+
+// OptionByIndex 合法序号 → 选项标签；非序号或越界返回空串。两个交互
+// 表面（终端提示符 / 消息渠道）的选项答案解析共用。
+func OptionByIndex(opts []Option, s string) string {
+	if n, err := strconv.Atoi(strings.TrimSpace(s)); err == nil && n >= 1 && n <= len(opts) {
+		return opts[n-1].Label
+	}
+	return ""
+}
+
+// SplitOptionParts 多选输入拆分：半/全角逗号、顿号、分号与空白（含
+// 换行）——各表面分隔符集的并集。
+func SplitOptionParts(line string) []string {
+	return strings.FieldsFunc(line, func(r rune) bool {
+		return r == ',' || r == '，' || r == '、' || r == ';' || r == '；' || r == ' ' || r == '\n'
+	})
+}
 
 // askUserArgs ask_user_question 工具参数（具名类型供 spec 交叉校验测试
 // 反射 json tag）。

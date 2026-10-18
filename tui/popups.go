@@ -58,9 +58,9 @@ func (p *popup) render(w, maxH int) []string {
 			name += " ✓"
 		}
 		if i == p.sel {
-			lines = append(lines, cyan("❯ ")+bold(clipRunesT(name, w-4)))
+			lines = append(lines, cyan("❯ ")+bold(term.ClipRunes(name, w-4)))
 		} else {
-			lines = append(lines, "  "+clipRunesT(name, w-4))
+			lines = append(lines, "  "+term.ClipRunes(name, w-4))
 		}
 	}
 	if vis < n && p.top+vis < n {
@@ -143,14 +143,14 @@ func (f *askForm) render(w int) []string {
 			label = "  " + label
 		}
 		if opt.Description != "" {
-			label += dim(" — " + clipRunesT(opt.Description, w-term.StringWidth(opt.Label)-10))
+			label += dim(" — " + term.ClipRunes(opt.Description, w-term.StringWidth(opt.Label)-10))
 		}
-		lines = append(lines, clipRunesT(label, w))
+		lines = append(lines, term.ClipRunes(label, w))
 	}
 	if f.sel == len(f.q().Options) {
-		lines = append(lines, clipRunesT(cyan("❯ ")+bold(customRow), w))
+		lines = append(lines, term.ClipRunes(cyan("❯ ")+bold(customRow), w))
 	} else {
-		lines = append(lines, clipRunesT("  "+customRow, w))
+		lines = append(lines, term.ClipRunes("  "+customRow, w))
 	}
 	hint := "↑↓ 选择 · 回车确认 · ✎ 行改手输"
 	if f.q().MultiSelect {

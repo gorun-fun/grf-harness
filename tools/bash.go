@@ -199,254 +199,341 @@ type bashArgs struct {
 
 // RegisterBash 注册 bash 工具。
 func RegisterBash(r *Registry, d BashDeps) {
-	var deniedBash atomic.Value // string：最近一次被拒的命令（升级重试校验）
+	t := &bashTool{deps: d}
+	r.Register("bash", t.handle)
+}
 
-	r.Register("bash", func(ctx context.Context, args string) (Result, error) {
-		var a bashArgs
-		if err := decodeArgs(args, &a); err != nil {
-			return Result{}, err
-		}
-		if strings.TrimSpace(a.Command) == "" {
-			return Result{}, fmt.Errorf("command is required")
-		}
-		if a.Workdir == "" {
-			a.Workdir = d.Workspace
-		} else if !filepath.IsAbs(a.Workdir) {
-			a.Workdir = filepath.Join(d.Workspace, a.Workdir)
-		}
+// bashTool bash 工具实例：deps 之外只多一个跨调用共享的升级记录。
+type bashTool struct {
+	deps   BashDeps
+	denied atomic.Value // string：最近一次被拒的命令（升级重试校验）
+}
 
-		// 升级重试协议
-		unconfined := false
-		if a.SandboxPermissions != "" {
-			if strings.TrimSpace(a.Justification) == "" {
-				return Result{}, fmt.Errorf("sandbox_permissions requires a one-sentence justification")
-			}
-			prev, _ := deniedBash.Load().(string)
-			if prev != a.Command {
-				return Result{}, fmt.Errorf("sandbox_permissions is only valid as a one-shot retry of a command the sandbox just denied; there is no recorded denial for this exact command — run it without sandbox_permissions first and read the denial marker")
-			}
-			var host Host
-			if d.Host != nil {
-				host = d.Host()
-			}
-			if host == nil || !host.ApproveEscalation(ctx, "bash", a.Command, a.SandboxPermissions, a.Justification).Approved {
-				return Result{}, fmt.Errorf("the escalation was rejected (or no host is available to approve it) — this is final for this command: stop and explain; other commands may still be attempted")
-			}
-			deniedBash.Store("")
-			unconfined = true
-		}
+// handle 工具入口：参数解析 → 一次性升级协议 → 前台/后台分发。
+func (t *bashTool) handle(ctx context.Context, args string) (Result, error) {
+	a, err := t.parseArgs(args)
+	if err != nil {
+		return Result{}, err
+	}
+	unconfined, err := t.authorizeEscalation(ctx, a)
+	if err != nil {
+		return Result{}, err
+	}
+	if a.RunInBackground {
+		return t.runBackground(a, unconfined), nil
+	}
+	return t.runForeground(ctx, a, unconfined)
+}
 
-		build := func(runCtx context.Context, unconfined bool) *exec.Cmd {
-			sh := activeShell()
-			var cmd *exec.Cmd
-			observe, readLimit := d.fsLimits()
-			if !unconfined && observe && sandboxExecPath != "" {
-				cmd = exec.CommandContext(runCtx, sandboxExecPath, "-p", sandboxProfile(d.Workspace, readLimit), "/bin/bash", "-c", a.Command)
-			} else {
-				cmd = exec.CommandContext(runCtx, sh.exe, sh.args(a.Command)...)
-			}
-			cmd.Dir = a.Workdir
-			env := os.Environ()
-			if d.Env != nil {
-				env = append(env, d.Env()...)
-			}
-			cmd.Env = env
-			cmd.WaitDelay = 5 * time.Second
-			// 停止语义集中在此（前台/后台共用）：unix 先 SIGINT 给清理机会，
-			// 强杀由 WaitDelay 兜底；windows 无跨进程信号，taskkill 终止进程树
-			cmd.Cancel = func() error { return stopProcess(cmd) }
-			return cmd
-		}
+// parseArgs 解码参数并归一 workdir（相对路径相对工作区）。
+func (t *bashTool) parseArgs(args string) (bashArgs, error) {
+	var a bashArgs
+	if err := decodeArgs(args, &a); err != nil {
+		return a, err
+	}
+	if strings.TrimSpace(a.Command) == "" {
+		return a, fmt.Errorf("command is required")
+	}
+	if a.Workdir == "" {
+		a.Workdir = t.deps.Workspace
+	} else if !filepath.IsAbs(a.Workdir) {
+		a.Workdir = filepath.Join(t.deps.Workspace, a.Workdir)
+	}
+	return a, nil
+}
 
-		// 后台作业：立即返回 job id
-		if a.RunInBackground {
-			id := d.Jobs.StartStream("stream", firstNonEmpty(a.Description, a.Command), func(jctx context.Context, emit func(string)) error {
-				cmd := build(jctx, unconfined)
-				// job_kill 经 ctx 取消 → build 已装 Cancel（停止语义见彼处注
-				// 释）；WaitDelay 兜底强杀并关闭管道——置 nil 会让进程永不
-				// 停止（ctx 完成后仅等管道，作业僵尸运行）。
-				var buf bytes.Buffer
-				cmd.Stdout = writerFunc(func(p []byte) (int, error) {
-					buf.Write(p)
-					emit(string(p))
-					return len(p), nil
-				})
-				cmd.Stderr = cmd.Stdout.(writerFunc)
-				err := cmd.Run()
-				if ee, ok := err.(*exec.ExitError); ok {
-					emit(fmt.Sprintf("\n[exit code: %d]\n", ee.ExitCode()))
-				}
-				return err
-			})
-			return TextResult(fmt.Sprintf("background job started: %s (read with job_output, stop with job_kill)", id)), nil
-		}
+// authorizeEscalation sandbox_permissions 一次性升级重试协议：须携带
+// 理由、精确匹配最近被拒的命令、宿主批准后本次脱沙箱执行。
+func (t *bashTool) authorizeEscalation(ctx context.Context, a bashArgs) (bool, error) {
+	if a.SandboxPermissions == "" {
+		return false, nil
+	}
+	if strings.TrimSpace(a.Justification) == "" {
+		return false, fmt.Errorf("sandbox_permissions requires a one-sentence justification")
+	}
+	prev, _ := t.denied.Load().(string)
+	if prev != a.Command {
+		return false, fmt.Errorf("sandbox_permissions is only valid as a one-shot retry of a command the sandbox just denied; there is no recorded denial for this exact command — run it without sandbox_permissions first and read the denial marker")
+	}
+	var host Host
+	if t.deps.Host != nil {
+		host = t.deps.Host()
+	}
+	if host == nil || !host.ApproveEscalation(ctx, "bash", a.Command, a.SandboxPermissions, a.Justification).Approved {
+		return false, fmt.Errorf("the escalation was rejected (or no host is available to approve it) — this is final for this command: stop and explain; other commands may still be attempted")
+	}
+	t.denied.Store("")
+	return true, nil
+}
 
-		// 前台执行（promoteOnTimeout 语义，对齐 dsh）：命令超时仍未结束
-		// 时不杀进程——转入后台 job 继续跑，本次调用一次性带回已产出
-		// 输出与 job id，job_output 从读取游标接续、job_kill 停止。无
-		// JobManager 可晋升时退回旧语义（到期 SIGINT，WaitDelay 兜底
-		// SIGKILL）。
-		timeout := time.Duration(clamp(a.TimeoutMS, bashDefaultTimeoutMS, bashMaxTimeoutMS)) * time.Millisecond
-		// 命令运行在独立 ctx（非回合 ctx 派生）：晋升为后台 job 后命令归
-		// job 所有，须存活到 job_kill/自然结束，不随本回合取消而死；晋升
-		// 之前的回合取消仍要终止命令（看护 goroutine），未晋升时随调用
-		// 返回回收。
-		runCtx, cancel := context.WithCancel(context.Background())
-		promoted := make(chan struct{})
-		var promoteOnce sync.Once
-		markPromoted := func() { promoteOnce.Do(func() { close(promoted) }) }
-		defer func() {
-			select {
-			case <-promoted:
-				// 已晋升：命令归 job 所有，不随调用返回终止
-			default:
-				cancel()
-				markPromoted() // 看护 goroutine 退出
-			}
-		}()
-		watchDone := make(chan struct{})
-		defer close(watchDone)
-		go func() {
-			select {
-			case <-ctx.Done(): // 晋升前回合取消：终止命令
-				cancel()
-			case <-promoted: // 晋升后归 job 所有：不再随回合取消
-			case <-watchDone:
-			}
-		}()
+// build 构造执行命令（沙箱 profile 或裸 shell；前台/后台共用）。
+func (t *bashTool) build(runCtx context.Context, a bashArgs, unconfined bool) *exec.Cmd {
+	sh := activeShell()
+	var cmd *exec.Cmd
+	observe, readLimit := t.deps.fsLimits()
+	if !unconfined && observe && sandboxExecPath != "" {
+		cmd = exec.CommandContext(runCtx, sandboxExecPath, "-p", sandboxProfile(t.deps.Workspace, readLimit), "/bin/bash", "-c", a.Command)
+	} else {
+		cmd = exec.CommandContext(runCtx, sh.exe, sh.args(a.Command)...)
+	}
+	cmd.Dir = a.Workdir
+	env := os.Environ()
+	if t.deps.Env != nil {
+		env = append(env, t.deps.Env()...)
+	}
+	cmd.Env = env
+	cmd.WaitDelay = 5 * time.Second
+	// 停止语义集中在此（前台/后台共用）：unix 先 SIGINT 给清理机会，
+	// 强杀由 WaitDelay 兜底；windows 无跨进程信号，taskkill 终止进程树
+	cmd.Cancel = func() error { return stopProcess(cmd) }
+	return cmd
+}
 
-		// 交接锁：晋升时把 job 的 emit 安装到进程输出写路径上——既有
-		// 缓冲内容一次性转发（前缀恰好一次），此后增量由写路径直发 job。
-		var mu sync.Mutex
+// runBackground 后台作业路径：立即返回 job id。
+func (t *bashTool) runBackground(a bashArgs, unconfined bool) Result {
+	id := t.deps.Jobs.StartStream("stream", firstNonEmpty(a.Description, a.Command), func(jctx context.Context, emit func(string)) error {
+		cmd := t.build(jctx, a, unconfined)
+		// job_kill 经 ctx 取消 → build 已装 Cancel（停止语义见彼处注
+		// 释）；WaitDelay 兜底强杀并关闭管道——置 nil 会让进程永不
+		// 停止（ctx 完成后仅等管道，作业僵尸运行）。
 		var buf bytes.Buffer
-		var jobEmit func(string)
-		w := writerFunc(func(p []byte) (int, error) {
-			mu.Lock()
+		cmd.Stdout = writerFunc(func(p []byte) (int, error) {
 			buf.Write(p)
-			emit := jobEmit
-			mu.Unlock()
-			if emit != nil {
-				emit(string(p))
-			}
+			emit(string(p))
 			return len(p), nil
 		})
-
-		runOnce := func(unconf bool) (out, handoff string, timedOut bool, err error) {
-			mu.Lock()
-			buf.Reset()
-			jobEmit = nil
-			mu.Unlock()
-			cmd := build(runCtx, unconf)
-			cmd.Stdout = w
-			cmd.Stderr = w
-			done := make(chan error, 1)
-			go func() { done <- cmd.Run() }()
-			timer := time.NewTimer(timeout)
-			defer timer.Stop()
-			select {
-			case err = <-done:
-				return buf.String(), "", false, err
-			case <-timer.C:
-			}
-			if d.Jobs == nil {
-				cancel() // 无 job 注册表可晋升：到期终止（旧超时语义）
-				err = <-done
-				return "", "", true, err
-			}
-			ready := make(chan struct{})
-			markPromoted() // 命令自此归 job 所有，看护不再随回合取消终止它
-			id := d.Jobs.StartStream("stream", firstNonEmpty(a.Description, a.Command), func(jctx context.Context, emit func(string)) error {
-				go func() {
-					<-jctx.Done() // job_kill → 终止真进程（SIGINT，WaitDelay 兜底）
-					cancel()
-				}()
-				mu.Lock()
-				prefix := buf.String()
-				jobEmit = emit
-				mu.Unlock()
-				emit(prefix)
-				close(ready) // 前缀已入 job 缓冲，交接读取可消费
-				rerr := <-done
-				if ee, ok := rerr.(*exec.ExitError); ok {
-					emit(fmt.Sprintf("\n[exit code: %d]\n", ee.ExitCode()))
-				}
-				return rerr
-			})
-			select {
-			case <-ready:
-			case <-time.After(2 * time.Second): // 兜底：交接信号异常时不卡死调用
-			}
-			// 一次性消费读取：把目前为止的输出带回（job 读取游标随之前
-			// 移，job_output 只返回其后的新增，与交接文本不重复）。
-			preview, perr := d.Jobs.Output(ctx, id, false, 0)
-			preview = strings.TrimSuffix(strings.TrimRight(preview, "\n"), "[status: running]")
-			if perr != nil {
-				preview = ""
-			}
-			return "", fmt.Sprintf("[still running after %s; moved to background job %s]\n%s\nfollow with job_output(job_id=%q) — set wait: true to block until it settles; job_kill stops it",
-				timeout, id, preview, id), false, nil
+		cmd.Stderr = cmd.Stdout.(writerFunc)
+		err := cmd.Run()
+		if ee, ok := err.(*exec.ExitError); ok {
+			emit(fmt.Sprintf("\n[exit code: %d]\n", ee.ExitCode()))
 		}
-
-		out, handoff, timedOut, err := runOnce(unconfined)
-		if handoff != "" {
-			return TextResult(handoff), nil
-		}
-
-		// 沙箱拒绝检测：非零退出 + 权限拒绝特征。越权即问：挂起征求宿主
-		// 批准（UI 交互，不随工具调用取消），批准则脱沙箱重跑同一命令，
-		// 拒绝（或无宿主）则终局返回——不依赖模型配合 sandbox_permissions
-		// 重试协议。
-		if err != nil && d.fsLimitsOn() && !unconfined &&
-			(strings.Contains(out, "Operation not permitted") || isSignalTrapped(err)) {
-			deniedBash.Store(a.Command)
-			approved := false
-			var host Host
-			if d.Host != nil {
-				host = d.Host()
-			}
-			if host != nil {
-				just := firstNonEmpty(a.Description, a.Command)
-				approved = host.ApproveEscalation(context.Background(), "bash", a.Command, "danger-full-access", just).Approved
-			}
-			if approved {
-				deniedBash.Store("")
-				out, handoff, timedOut, err = runOnce(true)
-				if handoff != "" {
-					return TextResult(handoff), nil
-				}
-			} else {
-				deniedBash.Store("") // 拒绝即终局：消费记录，重试不再询问
-				trunc := tailBytes(out, bashOutputLimit)
-				return TextResult(fmt.Sprintf("%s\n%s\n\nthe command was blocked by the file sandbox and the user declined to grant it wider access — this is final for this command: stop and explain; do not try other ways around it (other commands may still be attempted)",
-					trunc, deniedMarker)), nil
-			}
-		}
-
-		if timedOut {
-			return Result{}, fmt.Errorf("command timed out after %s (kill after SIGINT grace)", timeout)
-		}
-		if len(out) > bashOutputLimit {
-			full := ""
-			if path, serr := d.Artifacts.Save("bash", out); serr == nil {
-				full = fmt.Sprintf("full output saved to %s\n", path)
-			}
-			out = full + "…(truncated to tail)\n" + tailBytes(out, bashOutputLimit)
-		}
-		if err != nil {
-			if ctx.Err() != nil {
-				return Result{}, ctx.Err()
-			}
-			if ee, ok := err.(*exec.ExitError); ok {
-				out += fmt.Sprintf("\n[exit code: %d]", ee.ExitCode())
-				return TextResult(out), nil
-			}
-			return TextResult(fmt.Sprintf("[exit code: -1] %v\n%s", err, out)), nil
-		}
-		if strings.TrimSpace(out) == "" {
-			return TextResult("(no output) [exit code: 0]"), nil
-		}
-		return TextResult(out + "\n[exit code: 0]"), nil
+		return err
 	})
+	return TextResult(fmt.Sprintf("background job started: %s (read with job_output, stop with job_kill)", id))
+}
+
+// runForeground 前台执行（promoteOnTimeout 语义，对齐 dsh）：命令超时
+// 仍未结束时不杀进程——转入后台 job 继续跑，本次调用一次性带回已产出
+// 输出与 job id，job_output 从读取游标接续、job_kill 停止。无 JobManager
+// 可晋升时退回旧语义（到期 SIGINT，WaitDelay 兜底 SIGKILL）。
+func (t *bashTool) runForeground(ctx context.Context, a bashArgs, unconfined bool) (Result, error) {
+	f := newForeState(t, a)
+	defer f.release()          // 已晋升则命令归 job 所有，未晋升则终止回收
+	watchDone := make(chan struct{})
+	defer close(watchDone)     // 先于 release 关闭：看护 goroutine 退出
+	go f.watch(ctx, watchDone) // 晋升前的回合取消仍要终止命令
+
+	out, handoff, timedOut, err := f.runOnce(ctx, unconfined)
+	if handoff != "" {
+		return TextResult(handoff), nil
+	}
+
+	res, out, timedOut, err, handled := t.handleDenial(ctx, f, out, timedOut, err, unconfined)
+	if handled {
+		return res, nil
+	}
+	return t.formatResult(ctx, a, out, timedOut, err)
+}
+
+// handleDenial 沙箱拒绝检测与越权即问：非零退出 + 权限拒绝特征
+// （"Operation not permitted" 或 sandbox-exec 的 SIGTRAP）时挂起征求
+// 宿主批准（UI 交互，不随工具调用取消），批准则脱沙箱重跑同一命令
+// （结果经 out/timedOut/err 带回、handled=false 继续走格式化），拒绝
+// （或无宿主）则终局返回（handled=true）——不依赖模型配合
+// sandbox_permissions 重试协议。
+func (t *bashTool) handleDenial(ctx context.Context, f *foreState, out string, timedOut bool, err error, unconfined bool) (res Result, out2 string, timedOut2 bool, err2 error, handled bool) {
+	if err == nil || !t.deps.fsLimitsOn() || unconfined ||
+		(!strings.Contains(out, "Operation not permitted") && !isSignalTrapped(err)) {
+		return Result{}, out, timedOut, err, false
+	}
+	t.denied.Store(f.a.Command)
+	approved := false
+	var host Host
+	if t.deps.Host != nil {
+		host = t.deps.Host()
+	}
+	if host != nil {
+		just := firstNonEmpty(f.a.Description, f.a.Command)
+		approved = host.ApproveEscalation(context.Background(), "bash", f.a.Command, "danger-full-access", just).Approved
+	}
+	if !approved {
+		t.denied.Store("") // 拒绝即终局：消费记录，重试不再询问
+		trunc := tailBytes(out, bashOutputLimit)
+		return TextResult(fmt.Sprintf("%s\n%s\n\nthe command was blocked by the file sandbox and the user declined to grant it wider access — this is final for this command: stop and explain; do not try other ways around it (other commands may still be attempted)",
+			trunc, deniedMarker)), out, timedOut, err, true
+	}
+	t.denied.Store("")
+	var handoff string
+	out, handoff, timedOut, err = f.runOnce(ctx, true)
+	if handoff != "" {
+		return TextResult(handoff), out, timedOut, err, true
+	}
+	return Result{}, out, timedOut, err, false
+}
+
+// formatResult 前台结果的统一收尾：超时报错、超长截尾 + 全文落盘、
+// 退出码格式化。
+func (t *bashTool) formatResult(ctx context.Context, a bashArgs, out string, timedOut bool, err error) (Result, error) {
+	timeout := time.Duration(clamp(a.TimeoutMS, bashDefaultTimeoutMS, bashMaxTimeoutMS)) * time.Millisecond
+	if timedOut {
+		return Result{}, fmt.Errorf("command timed out after %s (kill after SIGINT grace)", timeout)
+	}
+	if len(out) > bashOutputLimit {
+		full := ""
+		if path, serr := t.deps.Artifacts.Save("bash", out); serr == nil {
+			full = fmt.Sprintf("full output saved to %s\n", path)
+		}
+		out = full + "…(truncated to tail)\n" + tailBytes(out, bashOutputLimit)
+	}
+	if err != nil {
+		if ctx.Err() != nil {
+			return Result{}, ctx.Err()
+		}
+		if ee, ok := err.(*exec.ExitError); ok {
+			out += fmt.Sprintf("\n[exit code: %d]", ee.ExitCode())
+			return TextResult(out), nil
+		}
+		return TextResult(fmt.Sprintf("[exit code: -1] %v\n%s", err, out)), nil
+	}
+	if strings.TrimSpace(out) == "" {
+		return TextResult("(no output) [exit code: 0]"), nil
+	}
+	return TextResult(out + "\n[exit code: 0]"), nil
+}
+
+// foreState 一次前台执行的运行态：命令的独立 ctx（晋升后归 job 所有，
+// 不随本回合取消而死）、晋升标记与交接锁——promoteOnTimeout 的并发
+// 细节全部集中于此。
+type foreState struct {
+	t       *bashTool
+	a       bashArgs
+	timeout time.Duration
+
+	runCtx   context.Context
+	cancel   context.CancelFunc
+	promoted chan struct{}
+	promote  sync.Once
+
+	// 交接锁：晋升时把 job 的 emit 安装到进程输出写路径上——既有缓冲
+	// 内容一次性转发（前缀恰好一次），此后增量由写路径直发 job。
+	mu      sync.Mutex
+	buf     bytes.Buffer
+	jobEmit func(string)
+}
+
+func newForeState(t *bashTool, a bashArgs) *foreState {
+	runCtx, cancel := context.WithCancel(context.Background())
+	return &foreState{
+		t: t, a: a,
+		timeout: time.Duration(clamp(a.TimeoutMS, bashDefaultTimeoutMS, bashMaxTimeoutMS)) * time.Millisecond,
+		runCtx: runCtx, cancel: cancel,
+		promoted: make(chan struct{}),
+	}
+}
+
+// markPromoted 标记命令已归 job 所有（恰好一次）。
+func (f *foreState) markPromoted() { f.promote.Do(func() { close(f.promoted) }) }
+
+// watch 看护：晋升前的回合取消要终止命令；晋升后归 job 所有、不再随
+// 回合取消；调用返回（watchDone）即退场。
+func (f *foreState) watch(ctx context.Context, done <-chan struct{}) {
+	select {
+	case <-ctx.Done(): // 晋升前回合取消：终止命令
+		f.cancel()
+	case <-f.promoted: // 晋升后归 job 所有：不再随回合取消
+	case <-done:
+	}
+}
+
+// release 调用返回时的回收：未晋升则终止命令并放看护退出。
+func (f *foreState) release() {
+	select {
+	case <-f.promoted:
+		// 已晋升：命令归 job 所有，不随调用返回终止
+	default:
+		f.cancel()
+		f.markPromoted() // 看护 goroutine 退出
+	}
+}
+
+// write 进程输出写路径：先入缓冲；晋升后增量直发 job。
+func (f *foreState) write(p []byte) (int, error) {
+	f.mu.Lock()
+	f.buf.Write(p)
+	emit := f.jobEmit
+	f.mu.Unlock()
+	if emit != nil {
+		emit(string(p))
+	}
+	return len(p), nil
+}
+
+// runOnce 跑一次命令直到完成或超时。超时且可晋升时交接后台 job 并返回
+// 交接回执（handoff 非空即终局）；无 JobManager 时到期终止（旧超时
+// 语义，timedOut=true）。
+func (f *foreState) runOnce(ctx context.Context, unconfined bool) (out, handoff string, timedOut bool, err error) {
+	f.mu.Lock()
+	f.buf.Reset()
+	f.jobEmit = nil
+	f.mu.Unlock()
+	cmd := f.t.build(f.runCtx, f.a, unconfined)
+	w := writerFunc(f.write)
+	cmd.Stdout = w
+	cmd.Stderr = w
+	done := make(chan error, 1)
+	go func() { done <- cmd.Run() }()
+	timer := time.NewTimer(f.timeout)
+	defer timer.Stop()
+	select {
+	case err = <-done:
+		// cmd.Run 返回即输出管道已排干，缓冲无并发写，直接读
+		return f.buf.String(), "", false, err
+	case <-timer.C:
+	}
+	if f.t.deps.Jobs == nil {
+		f.cancel() // 无 job 注册表可晋升：到期终止（旧超时语义）
+		err = <-done
+		return "", "", true, err
+	}
+	return "", f.promoteOnTimeout(ctx, done), false, nil
+}
+
+// promoteOnTimeout 超时晋升：把仍在运行的命令交接给后台 job——job 的
+// emit 安装到写路径（既有缓冲一次性转发，前缀恰好一次），此后 job_kill
+// 经 ctx 取消终止真进程；交接回执带一次性读取的已有输出（job 读取游标
+// 随之前移，job_output 只返回其后的新增，与交接文本不重复）。
+func (f *foreState) promoteOnTimeout(ctx context.Context, done <-chan error) string {
+	ready := make(chan struct{})
+	f.markPromoted() // 命令自此归 job 所有，看护不再随回合取消终止它
+	id := f.t.deps.Jobs.StartStream("stream", firstNonEmpty(f.a.Description, f.a.Command), func(jctx context.Context, emit func(string)) error {
+		go func() {
+			<-jctx.Done() // job_kill → 终止真进程（SIGINT，WaitDelay 兜底）
+			f.cancel()
+		}()
+		f.mu.Lock()
+		prefix := f.buf.String()
+		f.jobEmit = emit
+		f.mu.Unlock()
+		emit(prefix)
+		close(ready) // 前缀已入 job 缓冲，交接读取可消费
+		rerr := <-done
+		if ee, ok := rerr.(*exec.ExitError); ok {
+			emit(fmt.Sprintf("\n[exit code: %d]\n", ee.ExitCode()))
+		}
+		return rerr
+	})
+	select {
+	case <-ready:
+	case <-time.After(2 * time.Second): // 兜底：交接信号异常时不卡死调用
+	}
+	// 一次性消费读取：把目前为止的输出带回。
+	preview, perr := f.t.deps.Jobs.Output(ctx, id, false, 0)
+	preview = strings.TrimSuffix(strings.TrimRight(preview, "\n"), "[status: running]")
+	if perr != nil {
+		preview = ""
+	}
+	return fmt.Sprintf("[still running after %s; moved to background job %s]\n%s\nfollow with job_output(job_id=%q) — set wait: true to block until it settles; job_kill stops it",
+		f.timeout, id, preview, id)
 }
 
 // isSignalTrapped sandbox-exec 拒绝常以 SIGTRAP 终止。

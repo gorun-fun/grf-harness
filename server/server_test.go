@@ -8,6 +8,7 @@ package server
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -765,7 +766,7 @@ func TestAuth(t *testing.T) {
 
 // 合规 #9/#10：compact 端点。
 func TestCompact(t *testing.T) {
-	f := newFakeLLM([]string{`第一轮`, `压缩摘要：用户问了天气`})
+	f := newFakeLLM([]string{`第一轮`, `压缩摘要：用户问了天气`, `<summary>天气问答纪要</summary>`})
 	defer f.Close()
 	ts := newTestServer(t, f)
 
@@ -795,6 +796,25 @@ func TestCompact(t *testing.T) {
 		t.Fatalf("compact output items 不符: %+v", c.Output)
 	}
 	_ = fmt.Sprint() // 保持 import
+
+	// 摘要去壳：模型用 <summary> 标签包裹输出时，端点经 agent.
+	// SummarizeTranscript 剥壳（与 agent 就地压缩同款规范化），明文
+	// item 与 encrypted_content 窗口都应是去壳文本。
+	code, body = post(t, ts, "/v1/responses/compact", map[string]any{
+		"model": "m", "input": "任意压缩素材",
+	})
+	if code != 200 {
+		t.Fatalf("compact(去壳) status %d: %s", code, body)
+	}
+	var c2 CompactResource
+	_ = json.Unmarshal(body, &c2)
+	if got := c2.Output[0].Content[0].Text; got != "天气问答纪要" {
+		t.Fatalf("compact 摘要未去壳: %q", got)
+	}
+	raw, _ := base64.StdEncoding.DecodeString(c2.Output[1].EncryptedContent)
+	if !strings.Contains(string(raw), `"summary":"天气问答纪要"`) {
+		t.Fatalf("encrypted_content 窗口摘要未去壳: %s", raw)
+	}
 }
 
 // 跨"重启"恢复：重建 Server（同 dataDir），凭 previous_response_id 续接

@@ -185,32 +185,3 @@ func wrapLine(line string, width int) []string {
 	return rows
 }
 
-// Truncate 按显示宽度截断（尾部不加省略号），保留行首已有 ANSI。
-func Truncate(s string, width int) string {
-	if StringWidth(s) <= width {
-		return s
-	}
-	var b strings.Builder
-	w := 0
-	forEachRune(s, func(r rune, esc bool) bool {
-		if !esc {
-			rw := RuneWidth(r)
-			if w+rw > width {
-				return false
-			}
-			w += rw
-		}
-		b.WriteRune(r)
-		return true
-	})
-	return b.String()
-}
-
-// Pad 把文本用空格补齐到 width 显示列（超宽时原样返回）。
-func Pad(s string, width int) string {
-	d := width - StringWidth(s)
-	if d <= 0 {
-		return s
-	}
-	return s + strings.Repeat(" ", d)
-}

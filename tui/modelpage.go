@@ -211,7 +211,7 @@ func (m *ModelPage) fetchModels(name string) {
 	ch := make(chan fetchResult, 1)
 	m.fetchDone = ch
 	go func() {
-		client := llm.NewClient(llm.Config{Provider: name, BaseURL: p.BaseURL, APIKey: p.APIKey, Model: ""})
+		client := llm.NewFromProvider(name, *p, "")
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		models, err := client.Models(ctx)
@@ -375,6 +375,30 @@ func (m *ModelPage) formKey(k term.KeyEv) {
 }
 
 // listWindow 计算列表滚动窗口：返回可见下标区间与上/下方是否还有内容。
+// scrollList 滚动列表渲染（providers 与 models 两视图共用）：窗口截取
+// （listWindow）+ "↑/↓ …" 滚动提示 + 选中行 ❯ 前缀。add 为 paint 的
+// 行追加器。
+func scrollList(add func(lines ...string), rows []string, sel, avail, cw int) {
+	scrollable := len(rows) > avail
+	if scrollable {
+		avail-- // 给 "↓ …" 提示行留位置
+	}
+	start, end, up, down := listWindow(len(rows), sel, avail)
+	if scrollable && up {
+		add(dim("  ↑ …"))
+	}
+	for i := start; i < end; i++ {
+		if i == sel {
+			add(cyan("❯ ") + term.ClipRunes(rows[i], cw-4))
+		} else {
+			add("  " + term.ClipRunes(rows[i], cw-4))
+		}
+	}
+	if scrollable && down {
+		add(dim("  ↓ …"))
+	}
+}
+
 func listWindow(total, sel, avail int) (start, end int, up, down bool) {
 	if avail < 1 {
 		avail = 1
@@ -418,24 +442,7 @@ func (m *ModelPage) paint() {
 		add("")
 		rows := m.providerRows()
 		avail := (h - 1) - len(body) - m.statusLines()
-		scrollable := len(rows) > avail
-		if scrollable {
-			avail-- // 给 "↓ …" 提示行留位置
-		}
-		start, end, up, down := listWindow(len(rows), m.sel, avail)
-		if scrollable && up {
-			add(dim("  ↑ …"))
-		}
-		for i := start; i < end; i++ {
-			if i == m.sel {
-				add(cyan("❯ ") + clipRunesT(rows[i], cw-4))
-			} else {
-				add("  " + clipRunesT(rows[i], cw-4))
-			}
-		}
-		if scrollable && down {
-			add(dim("  ↓ …"))
-		}
+		scrollList(add, rows, m.sel, avail, cw)
 	case "models":
 		title := " " + m.curProvider() + " 的模型"
 		add(bold(title))
@@ -443,38 +450,21 @@ func (m *ModelPage) paint() {
 			add(dim(" ⟳ 正在检测服务端模型（GET /models）…"))
 		}
 		if m.loadErr != "" {
-			add(red(" 检测失败: " + clipRunesT(m.loadErr, cw-8)))
+			add(red(" 检测失败: " + term.ClipRunes(m.loadErr, cw-8)))
 		}
 		add(dim(" Enter 设为默认 · r 重新获取 · Esc 返回"))
 		add("")
 		// 模型列表滚动，底部三个操作项固定可见
 		const actions = 3
 		avail := (h - 1) - len(body) - actions - m.statusLines()
-		scrollable := len(m.models) > avail
-		if scrollable {
-			avail--
-		}
-		start, end, up, down := listWindow(len(m.models), m.sel, avail)
-		if scrollable && up {
-			add(dim("  ↑ …"))
-		}
-		for i := start; i < end; i++ {
-			if i == m.sel {
-				add(cyan("❯ ") + clipRunesT(m.models[i], cw-4))
-			} else {
-				add("  " + clipRunesT(m.models[i], cw-4))
-			}
-		}
-		if scrollable && down {
-			add(dim("  ↓ …"))
-		}
+		scrollList(add, m.models, m.sel, avail, cw)
 		actionRows := []string{"⟳ 重新获取（以服务端为准）", "✎ 输入模型名", "🗑 删除这个提供商"}
 		for j, row := range actionRows {
 			i := len(m.models) + j
 			if i == m.sel {
-				add(cyan("❯ ") + clipRunesT(row, cw-4))
+				add(cyan("❯ ") + term.ClipRunes(row, cw-4))
 			} else {
-				add("  " + clipRunesT(row, cw-4))
+				add("  " + term.ClipRunes(row, cw-4))
 			}
 		}
 	case "input-model":
@@ -495,7 +485,7 @@ func (m *ModelPage) paint() {
 				if i == m.form.cur {
 					prefix = cyan("❯ ")
 				}
-				add(prefix + clipRunesT(f.label+": "+t, cw))
+				add(prefix + term.ClipRunes(f.label+": "+t, cw))
 			}
 		}
 	}

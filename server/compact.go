@@ -10,31 +10,14 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
-	"strings"
 	"time"
 
-	"git.gorun.fun/share/grf-harness/llm"
+	"git.gorun.fun/share/grf-harness/agent"
 )
 
-// compactSystemPrompt 总结提示词（/v1/responses/compact 端点与 /compact
-// 斜杠指令就地压缩共用同一份）。
-const compactSystemPrompt = "You compact conversation transcripts. Produce a faithful, information-dense summary in the original language, preserving: task state, decisions made, file paths, commands run and their outcomes, open questions, and the next step. Output only the summary."
-
-// buildTranscript 会话历史 → 压缩用 transcript：跳过 system 首条，逐条
-// "role: 内容" 拼接。返回文本与非 system 消息条数（供 /compact 回显与
-// 空历史判定）。
-func buildTranscript(sess *session) (string, int) {
-	var sb strings.Builder
-	n := 0
-	for _, m := range sess.root.History() {
-		if m.Role == "system" {
-			continue
-		}
-		sb.WriteString(m.Role + ": " + m.String() + "\n")
-		n++
-	}
-	return sb.String(), n
-}
+// 总结生成本体（提示词/transcript 构造/输出规范化）收敛在 agent 包：
+// CompactSystemPrompt / BuildTranscript / SummarizeTranscript，本端点与
+// /compact 斜杠指令共用，改提示词只动 agent。
 
 // compactRequest compact 端点请求体（model 必填，缺失即 400——ORS 合规）。
 type compactRequest struct {
@@ -68,7 +51,7 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, err)
 			return
 		}
-		transcript, _ = buildTranscript(sess)
+		transcript, _ = agent.BuildTranscript(sess.root.History())
 	} else if len(req.Input) > 0 {
 		transcript = string(req.Input)
 	} else {
@@ -82,10 +65,7 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pre := client.Stats()
-	summary, err := client.Chat(r.Context(), []llm.Message{
-		{Role: "system", Content: compactSystemPrompt},
-		{Role: "user", Content: transcript},
-	}, nil)
+	summary, err := agent.SummarizeTranscript(r.Context(), client, transcript)
 	post := client.Stats()
 	if err != nil {
 		writeError(w, 500, errModel, "compaction model call failed: "+err.Error(), "")
@@ -93,7 +73,7 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 	}
 
 	window, _ := json.Marshal(map[string]any{
-		"summary":   summary.Content,
+		"summary":   summary,
 		"compactAt": time.Now().UTC().Format(time.RFC3339),
 	})
 	res := &CompactResource{
@@ -103,7 +83,7 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 		Output: []Item{
 			{
 				Type: itemMessage, ID: "it_1", Status: "completed", Role: "user",
-				Content: []contentPart{{Type: "input_text", Text: summary.Content}},
+				Content: []contentPart{{Type: "input_text", Text: summary}},
 			},
 			{
 				Type: itemCompaction, ID: "it_2", Status: "completed",

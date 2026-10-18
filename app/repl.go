@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"git.gorun.fun/share/grf-harness/agent"
 	"git.gorun.fun/share/grf-harness/config"
 	"git.gorun.fun/share/grf-harness/term"
 )
@@ -192,16 +191,12 @@ func (a *App) ModelCmd(arg string) (string, error) {
 		if m := a.Root().Model(); m != "" {
 			fmt.Fprintf(&b, "当前模型: %s\n", m)
 		}
-		for _, pn := range s.SortedProviderNames() {
-			p := s.Providers[pn]
-			models := append([]string(nil), p.Models...)
-			for _, m := range models {
-				mark := "  "
-				if s.Default == pn+"/"+m {
-					mark = "* "
-				}
-				fmt.Fprintf(&b, "%s%s/%s\n", mark, pn, m)
+		for _, e := range s.ListModels() {
+			mark := "  "
+			if e.Default {
+				mark = "* "
 			}
+			fmt.Fprintf(&b, "%s%s/%s\n", mark, e.Provider, e.Model)
 		}
 		b.WriteString("切换: /model <提供商/模型>")
 		return b.String(), nil
@@ -223,15 +218,9 @@ func (a *App) ListModelChoices() (items []string, cur string, err error) {
 	if name != "" && model != "" {
 		cur = name + "/" + model
 	}
-	for _, pn := range s.SortedProviderNames() {
-		p := s.Providers[pn]
-		models := append([]string(nil), p.Models...)
-		for _, m := range models {
-			items = append(items, pn+"/"+m)
-		}
+	for _, e := range s.ListModels() {
+		items = append(items, e.Provider+"/"+e.Model)
 	}
 	return items, cur, nil
 }
 
-// Agent 别名导出（嵌入方按 agent.Agent 使用）。
-type Agent = agent.Agent

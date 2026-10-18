@@ -90,7 +90,6 @@ type Agent struct {
 	Fs         *tools.FsPolicy
 	Jobs       *tools.JobManager
 	host       tools.Host
-	subThreads int // 并发子代理上限守卫
 
 	// OnIdleNotice：agent 空闲时收到通知（后台子代理落定）——由上层
 	//（TUI/app）注册以触发自动续跑；未注册时通知并入下次请求。
@@ -236,11 +235,7 @@ func firstLine(s string) string {
 // oneLine 压平多行为单行并截断（事件摘要用；n 为 rune 上限，超出加
 // 省略号）。
 func oneLine(s string, n int) string {
-	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
-	if r := []rune(s); len(r) > n {
-		return string(r[:n]) + "…"
-	}
-	return s
+	return term.ClipRunes(strings.TrimSpace(strings.ReplaceAll(s, "\n", " ")), n)
 }
 
 // shortIDSeq shortID 的原子自增计数。

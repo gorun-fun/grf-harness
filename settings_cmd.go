@@ -64,15 +64,12 @@ func runModelCmd(args []string) {
 			fmt.Println("（尚未配置任何提供商，运行 gh model 添加）")
 			return
 		}
-		for _, pn := range s.SortedProviderNames() {
-			p := s.Providers[pn]
-			for _, m := range p.Models {
-				mark := "  "
-				if s.Default == pn+"/"+m {
-					mark = "* "
-				}
-				fmt.Printf("%s%s/%s\n", mark, pn, m)
+		for _, e := range s.ListModels() {
+			mark := "  "
+			if e.Default {
+				mark = "* "
 			}
+			fmt.Printf("%s%s/%s\n", mark, e.Provider, e.Model)
 		}
 	default:
 		fmt.Fprintf(os.Stderr, "未知子命令 %q，可用: set / list（无参数进入配置页）\n", args[0])

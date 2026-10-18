@@ -60,39 +60,7 @@ func (ip *Interp) evalStmt(st Node, env *Env) (Value, error) {
 		}
 		return nil, nil
 	case *ForStmt:
-		child := NewEnv(env)
-		if s.Init != nil {
-			if _, err := ip.evalStmt(s.Init, child); err != nil {
-				return nil, err
-			}
-		}
-		for {
-			if s.Cond != nil {
-				c, err := ip.evalExpr(s.Cond, child)
-				if err != nil {
-					return nil, err
-				}
-				if !Truthy(c) {
-					break
-				}
-			}
-			if _, err := ip.execBody(s.Body, child); err != nil {
-				brk, cont := loopSignal(err)
-				if brk {
-					break
-				}
-				if !cont {
-					return nil, err
-				}
-				// continue：落到 update
-			}
-			if s.Update != nil {
-				if _, err := ip.evalExpr(s.Update, child); err != nil {
-					return nil, err
-				}
-			}
-		}
-		return nil, nil
+		return ip.evalFor(s, env)
 	case *ForOfStmt:
 		iter, err := ip.evalExpr(s.Iter, env)
 		if err != nil {
@@ -105,15 +73,10 @@ func (ip *Interp) evalStmt(st Node, env *Env) (Value, error) {
 		for _, item := range items {
 			child := NewEnv(env)
 			child.declare(s.Name, item)
-			if _, err := ip.execBody(s.Body, child); err != nil {
-				brk, cont := loopSignal(err)
-				if brk {
-					break
-				}
-				if !cont {
-					return nil, err
-				}
-				continue
+			if stop, err := ip.loopBody(s.Body, child); err != nil {
+				return nil, err
+			} else if stop {
+				break
 			}
 		}
 		return nil, nil
@@ -126,15 +89,10 @@ func (ip *Interp) evalStmt(st Node, env *Env) (Value, error) {
 			if !Truthy(c) {
 				break
 			}
-			if _, err := ip.execBody(s.Body, env); err != nil {
-				brk, cont := loopSignal(err)
-				if brk {
-					break
-				}
-				if !cont {
-					return nil, err
-				}
-				continue
+			if stop, err := ip.loopBody(s.Body, env); err != nil {
+				return nil, err
+			} else if stop {
+				break
 			}
 		}
 		return nil, nil
@@ -160,44 +118,95 @@ func (ip *Interp) evalStmt(st Node, env *Env) (Value, error) {
 	case *BlockStmt:
 		return ip.execBody(s.Body, NewEnv(env))
 	case *TryStmt:
-		v, err := ip.execBody(s.Body, NewEnv(env))
-		if err != nil {
-			// return/break/continue 穿透 try，不当异常捕获
-			if ctrlSignal(err) {
-				return v, err
-			}
-			if s.Catch != nil {
-				child := NewEnv(env)
-				if s.CatchVar != "" {
-					msg := err.Error()
-					child.declare(s.CatchVar, msg)
-					child.declare("message", msg)
-				}
-				v2, cerr := ip.execBody(s.Catch, child)
-				if cerr != nil {
-					err = cerr
-				} else {
-					err = nil
-					v = v2
-				}
-			}
-			if s.Finally != nil {
-				if _, ferr := ip.execBody(s.Finally, NewEnv(env)); ferr != nil {
-					return nil, ferr
-				}
-			}
-			return v, err
-		}
-		if s.Finally != nil {
-			if _, ferr := ip.execBody(s.Finally, NewEnv(env)); ferr != nil {
-				return nil, ferr
-			}
-		}
-		return v, nil
+		return ip.evalTry(s, env)
 	case *ExprStmt:
 		return ip.evalExpr(s.X, env)
 	}
 	return nil, rtErr("unsupported statement %T", st)
+}
+
+// loopBody 执行循环体的一轮并消化 break/continue 信号：stop=true 表示
+// break（外层退出循环）；err 非空表示真实错误（向上抛）；两者皆空表示
+// 正常或 continue（外层落到 update / 下一轮）。
+func (ip *Interp) loopBody(body []Node, env *Env) (stop bool, err error) {
+	if _, err = ip.execBody(body, env); err != nil {
+		brk, cont := loopSignal(err)
+		if brk {
+			return true, nil
+		}
+		if !cont {
+			return false, err
+		}
+	}
+	return false, nil
+}
+
+// evalFor 经典三段 for：init 于独立子环境执行，continue 落到 update。
+func (ip *Interp) evalFor(s *ForStmt, env *Env) (Value, error) {
+	child := NewEnv(env)
+	if s.Init != nil {
+		if _, err := ip.evalStmt(s.Init, child); err != nil {
+			return nil, err
+		}
+	}
+	for {
+		if s.Cond != nil {
+			c, err := ip.evalExpr(s.Cond, child)
+			if err != nil {
+				return nil, err
+			}
+			if !Truthy(c) {
+				break
+			}
+		}
+		stop, err := ip.loopBody(s.Body, child)
+		if err != nil {
+			return nil, err
+		}
+		if stop {
+			break
+		}
+		// continue/正常：落到 update
+		if s.Update != nil {
+			if _, err := ip.evalExpr(s.Update, child); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return nil, nil
+}
+
+// evalTry try/catch/finally：return/break/continue 穿透 try 不当异常
+// 捕获；catch 捕获后仍出错则以后者为准；finally 出错优先向上。
+func (ip *Interp) evalTry(s *TryStmt, env *Env) (Value, error) {
+	v, err := ip.execBody(s.Body, NewEnv(env))
+	if err != nil {
+		// return/break/continue 穿透 try，不当异常捕获
+		if ctrlSignal(err) {
+			return v, err
+		}
+		if s.Catch != nil {
+			child := NewEnv(env)
+			if s.CatchVar != "" {
+				msg := err.Error()
+				child.declare(s.CatchVar, msg)
+				child.declare("message", msg)
+			}
+			v2, cerr := ip.execBody(s.Catch, child)
+			if cerr != nil {
+				err = cerr
+			} else {
+				err = nil
+				v = v2
+			}
+		}
+	}
+	if s.Finally != nil {
+		if _, ferr := ip.execBody(s.Finally, NewEnv(env)); ferr != nil {
+			return nil, ferr
+		}
+	}
+	return v, err
 }
 
 // execBody 执行语句序列，控制流信号向上抛。

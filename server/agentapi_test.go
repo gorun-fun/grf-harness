@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"git.gorun.fun/share/grf-harness/config"
 )
 
 // newAgentTestServer 独立 GRF_HOME 的配置 API 测试服务(无需 fake LLM)。
@@ -94,7 +96,7 @@ func TestAgentModelsMaskKeep(t *testing.T) {
 		t.Fatalf("掩码保存失败: %d", code)
 	}
 	// 落盘文件里 Key 保留在改名后的条目上
-	raw, err := os.ReadFile(filepath.Join(configHome(), "settings.json"))
+	raw, err := os.ReadFile(config.Path())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +111,7 @@ func TestAgentModelsMaskKeep(t *testing.T) {
 func TestAgentModelsPreservesUnknownKeys(t *testing.T) {
 	ts := newAgentTestServer(t)
 	// 预置未知键 + providers
-	home := configHome()
+	home := config.Home()
 	if err := os.MkdirAll(home, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +168,7 @@ func TestAgentPluginsTokenKeep(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("掩码保存失败: %d", code)
 	}
-	raw, _ := os.ReadFile(filepath.Join(configHome(), "settings.json"))
+	raw, _ := os.ReadFile(config.Path())
 	if !strings.Contains(string(raw), "tok-secret") {
 		t.Fatalf("token 未按名保留: %s", raw)
 	}
@@ -175,7 +177,7 @@ func TestAgentPluginsTokenKeep(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("删除失败: %d", code)
 	}
-	raw, _ = os.ReadFile(filepath.Join(configHome(), "settings.json"))
+	raw, _ = os.ReadFile(config.Path())
 	if strings.Contains(string(raw), "plugins") {
 		t.Fatalf("explicit=false 应删除 plugins 键: %s", raw)
 	}

@@ -13,6 +13,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"git.gorun.fun/share/grf-harness/term"
 )
 
 var webClient = &http.Client{Timeout: 30 * time.Second}
@@ -233,7 +235,7 @@ func RegisterWebSearch(r *Registry) {
 		for i, h := range hits[:limit] {
 			fmt.Fprintf(&b, "%d. [%s](%s)", i+1, h.Title, h.URL)
 			if h.Snippet != "" {
-				fmt.Fprintf(&b, "\n   %s", clipRunes(h.Snippet, 200))
+				fmt.Fprintf(&b, "\n   %s", term.ClipRunes(h.Snippet, 200))
 			}
 			b.WriteString("\n")
 		}
@@ -242,10 +244,3 @@ func RegisterWebSearch(r *Registry) {
 	})
 }
 
-func clipRunes(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n]) + "…"
-}

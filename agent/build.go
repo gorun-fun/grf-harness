@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"git.gorun.fun/share/grf-harness/config"
@@ -39,7 +38,6 @@ type Harness struct {
 
 	Settings *config.Settings
 	root     string
-	seq      atomic.Int64
 	cacheKey string   // 会话级 prompt_cache_key；随会话文件持久化，resume 复用
 	disabled []string // 按场景禁用的工具名（Options.DisabledTools）
 	defSkill string   // 默认技能名（Options.DefaultSkill；空 = 不注入默认技能，gh CLI 终端形态配 grf-usage）
@@ -366,7 +364,7 @@ func (h *Harness) memoryDeps() tools.MemoryDeps {
 // newChild 构建子代理（独立历史与工具链；goal/ralph/ask_user 不可用）。
 func (h *Harness) newChild(parent *Agent, label string, seed []llm.Message) *Agent {
 	child := NewAgent("pending", h.getClient(), tools.NewRegistry(), "")
-	child.host = &tools.NoopHost{AutoApprove: h.Settings.AutoApprove, OnEvent: nil}
+	child.host = &tools.NoopHost{AutoApprove: h.Settings.AutoApprove}
 	child.Todos = &tools.TodoState{}
 	child.Fs = h.newFsPolicy(child.host)
 	child.Jobs = tools.NewJobManager()

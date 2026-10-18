@@ -201,15 +201,17 @@ func (s *Settings) Active() (string, *Provider, string) {
 			return pn, p, model
 		}
 	}
-	for _, name := range s.SortedProviderNames() {
-		p := s.Providers[name]
-		model := ""
-		if len(p.Models) > 0 {
-			model = p.Models[0]
-		}
-		return name, p, model
+	names := s.SortedProviderNames()
+	if len(names) == 0 {
+		return "default", nil, ""
 	}
-	return "default", nil, ""
+	name := names[0]
+	p := s.Providers[name]
+	model := ""
+	if len(p.Models) > 0 {
+		model = p.Models[0]
+	}
+	return name, p, model
 }
 
 // SplitDefault 拆分 "provider/model"。
@@ -229,6 +231,24 @@ func (s *Settings) SortedProviderNames() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// ModelEntry 一个可选模型条目（列表/切换 UI 共用的规范枚举）。
+type ModelEntry struct {
+	Provider string
+	Model    string
+	Default  bool // settings 的 default 指向该条目
+}
+
+// ListModels 全部可选 provider/model 条目（提供商字典序、模型配置序）。
+func (s *Settings) ListModels() []ModelEntry {
+	var out []ModelEntry
+	for _, pn := range s.SortedProviderNames() {
+		for _, m := range s.Providers[pn].Models {
+			out = append(out, ModelEntry{Provider: pn, Model: m, Default: s.Default == pn+"/"+m})
+		}
+	}
+	return out
 }
 
 // AddModel 向提供商添加模型（去重）。

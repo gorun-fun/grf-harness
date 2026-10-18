@@ -64,7 +64,7 @@ func New(opts Options) (*App, error) {
 		if err != nil {
 			return nil, err
 		}
-		client = llm.NewClient(llm.Config{Provider: eff.Provider, BaseURL: eff.BaseURL, APIKey: eff.APIKey, Model: eff.Model})
+		client = llm.NewFromEffective(eff)
 	}
 	applyPolicyOverrides(settings, opts)
 	// 提示词优先级：Options.SystemPrompt > 配置文件 system_prompt（gh
@@ -226,7 +226,7 @@ func (a *App) SwitchModel(provider, model string) error {
 	} else if !slices.Contains(p.Models, model) {
 		return fmt.Errorf("模型 %q 未配置（%s 可用: %v）", model, provider, p.Models)
 	}
-	nc := llm.NewClient(llm.Config{Provider: provider, BaseURL: p.BaseURL, APIKey: p.APIKey, Model: model})
+	nc := llm.NewFromProvider(provider, *p, model)
 	a.Harness.SwitchClient(nc) // 缓存键迁移 + 子代理 client + 提示词身份行
 	return nil
 }

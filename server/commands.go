@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"git.gorun.fun/share/grf-harness/agent"
 	"git.gorun.fun/share/grf-harness/llm"
 	"git.gorun.fun/share/grf-harness/plugin"
 )
@@ -54,7 +55,7 @@ func (s *Server) runSlashCommand(ctx context.Context, sess *session, text string
 
 	switch name {
 	case "/plan":
-		on := sess.root.InPlanMode()
+		var on bool
 		switch strings.ToLower(arg) {
 		case "", "on", "1", "true":
 			on = true
@@ -121,14 +122,15 @@ func (s *Server) runSlashCommand(ctx context.Context, sess *session, text string
 }
 
 // compactInPlace 就地压缩会话：把当前历史交给模型总结，随后以摘要重建
-// 历史基底（与 /v1/responses/compact 端点共用 buildTranscript 与总结
-// 提示词；区别是端点返回新链输入，这里直接原地替换、链尾不变）。
+// 历史基底（总结生成本体与 /v1/responses/compact 端点同源：agent 包的
+// BuildTranscript/SummarizeTranscript；区别是端点返回新链输入，这里直接
+// 原地替换、链尾不变）。
 func (s *Server) compactInPlace(ctx context.Context, sess *session) (int, error) {
 	model := sess.root.Model()
 	if model == "" {
 		return 0, fmt.Errorf("会话尚无模型（先发一条消息或指定 model）")
 	}
-	transcript, n := buildTranscript(sess)
+	transcript, n := agent.BuildTranscript(sess.root.History())
 	if n == 0 {
 		return 0, fmt.Errorf("会话尚无可压缩的历史")
 	}
@@ -136,16 +138,13 @@ func (s *Server) compactInPlace(ctx context.Context, sess *session) (int, error)
 	if err != nil {
 		return 0, fmt.Errorf("构建客户端: %w", err)
 	}
-	summary, err := client.Chat(ctx, []llm.Message{
-		{Role: "system", Content: compactSystemPrompt},
-		{Role: "user", Content: transcript},
-	}, nil)
+	summary, err := agent.SummarizeTranscript(ctx, client, transcript)
 	if err != nil {
-		return 0, fmt.Errorf("总结模型调用: %w", err)
+		return 0, err
 	}
 	sess.root.RestoreFull([]llm.Message{{
 		Role:    "user",
-		Content: "以下是此前对话的压缩摘要（原始历史已被压缩替换）：\n\n" + summary.Content,
+		Content: "以下是此前对话的压缩摘要（原始历史已被压缩替换）：\n\n" + summary,
 	}}, sess.root.SystemText())
 	return n, nil
 }
@@ -162,28 +161,11 @@ func (s *Server) installPlugin(ctx context.Context, query string) (string, error
 	if rel == nil {
 		return "", fmt.Errorf("下载服务器上没有当前平台的插件产物")
 	}
-	// 名称匹配：允许省略 .exe 后缀做精确/唯一子串匹配。
-	q := strings.ToLower(strings.TrimSuffix(query, ".exe"))
-	var hits []string
-	for _, f := range rel.Files {
-		if strings.ToLower(strings.TrimSuffix(f, ".exe")) == q {
-			hits = []string{f}
-			break
-		}
-	}
-	if len(hits) == 0 {
-		for _, f := range rel.Files {
-			if strings.Contains(strings.ToLower(strings.TrimSuffix(f, ".exe")), q) {
-				hits = append(hits, f)
-			}
-		}
-	}
-	switch {
-	case len(hits) == 0:
-		return "", fmt.Errorf("下载服务器（版本 %s）上没有匹配 %q 的插件，可用：%s",
-			rel.Version, query, strings.Join(rel.Files, "、"))
-	case len(hits) > 1:
-		return "", fmt.Errorf("%q 匹配到多个插件：%s，请用完整名称", query, strings.Join(hits, "、"))
+	// 名称匹配与 gh plugins download 同一语义（plugin.PluginRelease.Resolve：
+	// 归一精确 + 唯一子串）。
+	hits, err := rel.Resolve(query)
+	if err != nil {
+		return "", fmt.Errorf("下载服务器（版本 %s）: %w", rel.Version, err)
 	}
 	saved, err := rel.Download(ctx, hits, nil)
 	if err != nil {

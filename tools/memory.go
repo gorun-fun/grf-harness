@@ -111,23 +111,16 @@ func RegisterMemory(r *Registry, deps MemoryDeps) {
 			if content == "" {
 				return Result{}, errors.New("content is required for add (one concise entry)")
 			}
-			path, err := deps.path(scope)
+			n, cnt, err := mutateMemory(deps, scope, func(entries []memoryEntry) ([]memoryEntry, error) {
+				if indexOfKey(entries, key) >= 0 {
+					return nil, fmt.Errorf("key %q already exists in %s memory; use update to rewrite it", key, scope)
+				}
+				return append(entries, memoryEntry{Key: key, Content: content, Updated: memoryDate()}), nil
+			})
 			if err != nil {
 				return Result{}, err
 			}
-			entries, err := loadMemory(path, scope)
-			if err != nil {
-				return Result{}, err
-			}
-			if indexOfKey(entries, key) >= 0 {
-				return Result{}, fmt.Errorf("key %q already exists in %s memory; use update to rewrite it", key, scope)
-			}
-			entries = append(entries, memoryEntry{Key: key, Content: content, Updated: memoryDate()})
-			n, err := saveMemory(path, scope, entries)
-			if err != nil {
-				return Result{}, err
-			}
-			return TextResult(fmt.Sprintf("added [%s] to %s memory (%d entries, %d bytes)", key, scope, len(entries), n)), nil
+			return TextResult(fmt.Sprintf("added [%s] to %s memory (%d entries, %d bytes)", key, scope, cnt, n)), nil
 		case "update":
 			if strings.TrimSpace(a.Content) == "" {
 				return Result{}, errors.New("content is required for update")
@@ -136,50 +129,57 @@ func RegisterMemory(r *Registry, deps MemoryDeps) {
 			if err != nil {
 				return Result{}, err
 			}
-			path, err := deps.path(scope)
+			n, cnt, err := mutateMemory(deps, scope, func(entries []memoryEntry) ([]memoryEntry, error) {
+				i := indexOfKey(entries, key)
+				if i < 0 {
+					return nil, fmt.Errorf("unknown key %q in %s memory; list it first", key, scope)
+				}
+				entries[i].Content = strings.TrimSpace(a.Content)
+				entries[i].Updated = memoryDate()
+				return entries, nil
+			})
 			if err != nil {
 				return Result{}, err
 			}
-			entries, err := loadMemory(path, scope)
-			if err != nil {
-				return Result{}, err
-			}
-			i := indexOfKey(entries, key)
-			if i < 0 {
-				return Result{}, fmt.Errorf("unknown key %q in %s memory; list it first", key, scope)
-			}
-			entries[i].Content = strings.TrimSpace(a.Content)
-			entries[i].Updated = memoryDate()
-			n, err := saveMemory(path, scope, entries)
-			if err != nil {
-				return Result{}, err
-			}
-			return TextResult(fmt.Sprintf("updated [%s] in %s memory (%d entries, %d bytes)", key, scope, len(entries), n)), nil
+			return TextResult(fmt.Sprintf("updated [%s] in %s memory (%d entries, %d bytes)", key, scope, cnt, n)), nil
 		case "delete":
 			key, err := validMemoryKey(a.Key)
 			if err != nil {
 				return Result{}, err
 			}
-			path, err := deps.path(scope)
+			_, cnt, err := mutateMemory(deps, scope, func(entries []memoryEntry) ([]memoryEntry, error) {
+				i := indexOfKey(entries, key)
+				if i < 0 {
+					return nil, fmt.Errorf("unknown key %q in %s memory; list it first", key, scope)
+				}
+				return append(entries[:i], entries[i+1:]...), nil
+			})
 			if err != nil {
 				return Result{}, err
 			}
-			entries, err := loadMemory(path, scope)
-			if err != nil {
-				return Result{}, err
-			}
-			i := indexOfKey(entries, key)
-			if i < 0 {
-				return Result{}, fmt.Errorf("unknown key %q in %s memory; list it first", key, scope)
-			}
-			entries = append(entries[:i], entries[i+1:]...)
-			if _, err := saveMemory(path, scope, entries); err != nil {
-				return Result{}, err
-			}
-			return TextResult(fmt.Sprintf("deleted [%s] from %s memory (%d entries left)", key, scope, len(entries))), nil
+			return TextResult(fmt.Sprintf("deleted [%s] from %s memory (%d entries left)", key, scope, cnt)), nil
 		}
 		return Result{}, fmt.Errorf("invalid action %q (use list|find|add|update|delete)", a.Action)
 	})
+}
+
+// mutateMemory 写类动作的统一骨架：定位落点 → 读入 → fn 变更（返回
+// 错误即放弃、不落盘）→ 保存。返回落盘字节数与变更后条数。
+func mutateMemory(deps MemoryDeps, scope string, fn func(entries []memoryEntry) ([]memoryEntry, error)) (bytes, count int, err error) {
+	path, err := deps.path(scope)
+	if err != nil {
+		return 0, 0, err
+	}
+	entries, err := loadMemory(path, scope)
+	if err != nil {
+		return 0, 0, err
+	}
+	entries, err = fn(entries)
+	if err != nil {
+		return 0, 0, err
+	}
+	n, err := saveMemory(path, scope, entries)
+	return n, len(entries), err
 }
 
 // memSection list 输出的一个小节（作用域 + 落点）。

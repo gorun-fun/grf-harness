@@ -21,9 +21,6 @@ func init() {
 	}
 }
 
-// SpecDefs 返回 tools.json 中定义的全部工具定义（按文档原始顺序）。
-func SpecDefs() []llm.Tool { return append([]llm.Tool(nil), specDefs...) }
-
 // SpecDef 按名称取单个工具定义。
 func SpecDef(name string) (llm.Tool, bool) {
 	for _, t := range specDefs {

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 
@@ -66,7 +67,11 @@ func TestLoadConfiguredAndExecute(t *testing.T) {
 	m.Load(st)
 
 	// 桩插件提供 stub_echo / stub_get / bash（bash 应被内置重名拦截）
-	names := m.ToolNames()
+	names := make([]string, 0, len(m.Tools()))
+	for n := range m.Tools() {
+		names = append(names, n)
+	}
+	sort.Strings(names)
 	if len(names) != 2 || names[0] != "stub_echo" || names[1] != "stub_get" {
 		t.Fatalf("工具清单 = %v，want [stub_echo stub_get]（bash 应被跳过）\n警告: %v\n连接: %+v",
 			names, m.Warnings(), m.Conns())
@@ -108,7 +113,7 @@ func TestAutoDiscovery(t *testing.T) {
 	m := New()
 	defer m.Close()
 	m.Load(st)
-	if names := m.ToolNames(); len(names) != 2 {
+	if names := m.Tools(); len(names) != 2 {
 		t.Fatalf("自动发现未接入桩插件: %v\n警告: %v\n发现项: %+v", names, m.Warnings(), discoverPlugins())
 	}
 	if c := m.Conns(); len(c) != 1 || c[0].Name != "grf-stub" || c[0].Mode != "stdio" {

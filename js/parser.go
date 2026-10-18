@@ -235,86 +235,15 @@ func (p *parser) statement() (Node, error) {
 			p.consumeSemi()
 			return d, nil
 		case "function":
-			p.pos++
-			name := p.next()
-			if name.Type != TokIdent {
-				return nil, p.errf("function name expected")
-			}
-			params, err := p.paramList()
-			if err != nil {
-				return nil, err
-			}
-			body, err := p.block()
-			if err != nil {
-				return nil, err
-			}
-			return &FuncDecl{Name: name.Val, Params: params, Body: body}, nil
+			return p.funcDeclStmt()
 		case "if":
-			p.pos++
-			if err := p.expectPunct("("); err != nil {
-				return nil, err
-			}
-			cond, err := p.expr(0)
-			if err != nil {
-				return nil, err
-			}
-			if err := p.expectPunct(")"); err != nil {
-				return nil, err
-			}
-			then, err := p.block()
-			if err != nil {
-				return nil, err
-			}
-			st := &IfStmt{Cond: cond, Then: then}
-			if p.isKw("else") {
-				p.pos++
-				if p.isKw("if") {
-					els, err := p.statement()
-					if err != nil {
-						return nil, err
-					}
-					st.Else = []Node{els}
-				} else {
-					els, err := p.block()
-					if err != nil {
-						return nil, err
-					}
-					st.Else = els
-				}
-			}
-			return st, nil
+			return p.ifStmt()
 		case "for":
 			return p.forStmt()
 		case "while":
-			p.pos++
-			if err := p.expectPunct("("); err != nil {
-				return nil, err
-			}
-			cond, err := p.expr(0)
-			if err != nil {
-				return nil, err
-			}
-			if err := p.expectPunct(")"); err != nil {
-				return nil, err
-			}
-			body, err := p.block()
-			if err != nil {
-				return nil, err
-			}
-			return &WhileStmt{Cond: cond, Body: body}, nil
+			return p.whileStmt()
 		case "return":
-			p.pos++
-			// return 后换行 → undefined
-			if p.isPunct(";") || p.isPunct("}") || p.cur().Line > t.Line {
-				p.consumeSemi()
-				return &ReturnStmt{}, nil
-			}
-			v, err := p.expr(0)
-			if err != nil {
-				return nil, err
-			}
-			p.consumeSemi()
-			return &ReturnStmt{Val: v}, nil
+			return p.returnStmt(t.Line)
 		case "break":
 			p.pos++
 			p.consumeSemi()
@@ -416,6 +345,98 @@ func (p *parser) tryStmt() (Node, error) {
 		return nil, p.errf("try requires catch or finally")
 	}
 	return st, nil
+}
+
+// funcDeclStmt 函数声明（function name(params) { ... }）。
+func (p *parser) funcDeclStmt() (Node, error) {
+	p.pos++ // function
+	name := p.next()
+	if name.Type != TokIdent {
+		return nil, p.errf("function name expected")
+	}
+	params, err := p.paramList()
+	if err != nil {
+		return nil, err
+	}
+	body, err := p.block()
+	if err != nil {
+		return nil, err
+	}
+	return &FuncDecl{Name: name.Val, Params: params, Body: body}, nil
+}
+
+// ifStmt if 语句（else / else if 链）。
+func (p *parser) ifStmt() (Node, error) {
+	p.pos++ // if
+	if err := p.expectPunct("("); err != nil {
+		return nil, err
+	}
+	cond, err := p.expr(0)
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expectPunct(")"); err != nil {
+		return nil, err
+	}
+	then, err := p.block()
+	if err != nil {
+		return nil, err
+	}
+	st := &IfStmt{Cond: cond, Then: then}
+	if p.isKw("else") {
+		p.pos++
+		if p.isKw("if") {
+			els, err := p.statement()
+			if err != nil {
+				return nil, err
+			}
+			st.Else = []Node{els}
+		} else {
+			els, err := p.block()
+			if err != nil {
+				return nil, err
+			}
+			st.Else = els
+		}
+	}
+	return st, nil
+}
+
+// whileStmt while 循环。
+func (p *parser) whileStmt() (Node, error) {
+	p.pos++ // while
+	if err := p.expectPunct("("); err != nil {
+		return nil, err
+	}
+	cond, err := p.expr(0)
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expectPunct(")"); err != nil {
+		return nil, err
+	}
+	body, err := p.block()
+	if err != nil {
+		return nil, err
+	}
+	return &WhileStmt{Cond: cond, Body: body}, nil
+}
+
+// returnStmt return 语句；line 是 return 关键字所在行（其后换行 =
+// 无值 return，undefined）。
+func (p *parser) returnStmt(line int) (Node, error) {
+	p.pos++ // return
+	// return 后换行 → undefined
+	if p.isPunct(";") || p.isPunct("}") || p.cur().Line > line {
+		p.consumeSemi()
+		return &ReturnStmt{}, nil
+	}
+	v, err := p.expr(0)
+	if err != nil {
+		return nil, err
+	}
+	p.consumeSemi()
+	return &ReturnStmt{Val: v}, nil
 }
 
 func (p *parser) forStmt() (Node, error) {
@@ -880,58 +901,68 @@ func (p *parser) primary() (Node, error) {
 			}
 			return x, nil
 		case "[":
-			p.pos++
-			arr := &ArrayLit{}
-			for !p.isPunct("]") {
-				if p.atEOF() {
-					return nil, p.errf("unterminated array literal")
-				}
-				e, err := p.expr(0)
-				if err != nil {
-					return nil, err
-				}
-				arr.Elems = append(arr.Elems, e)
-				if p.isPunct(",") {
-					p.pos++
-				}
-			}
-			p.pos++
-			return arr, nil
+			return p.arrayLit()
 		case "{":
-			p.pos++
-			obj := &ObjectLit{}
-			for !p.isPunct("}") {
-				if p.atEOF() {
-					return nil, p.errf("unterminated object literal")
-				}
-				key := p.next()
-				var keyName string
-				switch key.Type {
-				case TokIdent, TokKeyword:
-					keyName = key.Val
-				case TokStr:
-					keyName = key.Val
-				default:
-					return nil, p.errf("object key expected, got %q", key.Val)
-				}
-				if err := p.expectPunct(":"); err != nil {
-					return nil, err
-				}
-				v, err := p.expr(0)
-				if err != nil {
-					return nil, err
-				}
-				obj.Keys = append(obj.Keys, keyName)
-				obj.Vals = append(obj.Vals, v)
-				if p.isPunct(",") {
-					p.pos++
-				}
-			}
-			p.pos++
-			return obj, nil
+			return p.objectLit()
 		}
 	}
 	return nil, p.errf("unexpected token %q", t.Val)
+}
+
+// arrayLit 数组字面量 [a, b, ...]（尾逗号容忍）。
+func (p *parser) arrayLit() (Node, error) {
+	p.pos++ // [
+	arr := &ArrayLit{}
+	for !p.isPunct("]") {
+		if p.atEOF() {
+			return nil, p.errf("unterminated array literal")
+		}
+		e, err := p.expr(0)
+		if err != nil {
+			return nil, err
+		}
+		arr.Elems = append(arr.Elems, e)
+		if p.isPunct(",") {
+			p.pos++
+		}
+	}
+	p.pos++
+	return arr, nil
+}
+
+// objectLit 对象字面量 {key: value, ...}（键为标识符/关键字/字符串）。
+func (p *parser) objectLit() (Node, error) {
+	p.pos++ // {
+	obj := &ObjectLit{}
+	for !p.isPunct("}") {
+		if p.atEOF() {
+			return nil, p.errf("unterminated object literal")
+		}
+		key := p.next()
+		var keyName string
+		switch key.Type {
+		case TokIdent, TokKeyword:
+			keyName = key.Val
+		case TokStr:
+			keyName = key.Val
+		default:
+			return nil, p.errf("object key expected, got %q", key.Val)
+		}
+		if err := p.expectPunct(":"); err != nil {
+			return nil, err
+		}
+		v, err := p.expr(0)
+		if err != nil {
+			return nil, err
+		}
+		obj.Keys = append(obj.Keys, keyName)
+		obj.Vals = append(obj.Vals, v)
+		if p.isPunct(",") {
+			p.pos++
+		}
+	}
+	p.pos++
+	return obj, nil
 }
 
 // template 解析模板字面量为 TemplateLit。

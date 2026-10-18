@@ -86,7 +86,7 @@ func segLines(sv segView, w int) []string {
 		line = fmt.Sprintf("💭 思考中… %ds", sv.secs)
 		if tail := term.LastLine(sv.text); tail != "" {
 			if space := w - term.StringWidth(line) - 3; space > 4 {
-				line += " · " + clipRunesT(tail, space)
+				line += " · " + term.ClipRunes(tail, space)
 			}
 		}
 	}
@@ -134,79 +134,14 @@ func (c *Chat) frame() frame {
 		}
 	}
 
-	// 弹窗/模态行
-	bottom := []string{}
-	if c.ask != nil {
-		bottom = append(bottom, c.ask.render(w)...)
-	} else if c.pop != nil {
-		// 弹窗高度预算：总高 - 输入区(3) - 至少 1 行内容
-		maxH := c.height - 4
-		if maxH < 4 {
-			maxH = 4
-		}
-		bottom = append(bottom, c.pop.render(w, maxH)...)
-	} else if hints := c.slashHints(); len(hints) > 0 {
-		for i, h := range hints {
-			if i == c.hintIdx {
-				bottom = append(bottom, cyan("❯ "+h))
-			} else {
-				bottom = append(bottom, "  "+dim(h))
-			}
-		}
-	}
-	// todo 面板（先记 bottom 内偏移，show 定稿后换算帧行区间）
-	todoOffLo, todoOffHi := -1, -1
-	if len(c.todos) > 0 {
-		todoOffLo = len(bottom)
-		bottom = append(bottom, c.todoPanel(w)...)
-		todoOffHi = len(bottom)
-	}
+	// 弹窗/模态/todo 面板行
+	bottom, todoOffLo, todoOffHi := c.bottomLines(w)
 
 	sepW := c.width - 1
 	if sepW < 3 {
 		sepW = 3
 	}
-	statusParts := []string{}
-	if m := c.app.Root().Model(); m != "" {
-		statusParts = append(statusParts, m)
-	}
-	if c.app.Root().InPlanMode() {
-		statusParts = append(statusParts, bold("计划模式"))
-	}
-	if c.app.Root().ApproveEach() {
-		statusParts = append(statusParts, bold("审批模式"))
-	}
-	if c.bang {
-		statusParts = append(statusParts, bold("命令模式"))
-	}
-	if c.goalText != "" {
-		statusParts = append(statusParts, "goal: "+clipRunesT(c.goalText, 30))
-	}
-	if len(c.todos) > 0 {
-		done := 0
-		for _, t := range c.todos {
-			if t.Status == "completed" {
-				done++
-			}
-		}
-		statusParts = append(statusParts, fmt.Sprintf("事项 %d/%d", done, len(c.todos)))
-	}
-	if c.running {
-		statusParts = append(statusParts, "● 运行中 Ctrl+C 中断")
-	}
-	top := dim(strings.Repeat("─", sepW))
-	if len(statusParts) > 0 || (c.status != "" && time.Now().Before(c.statusAt)) {
-		text := " " + strings.Join(statusParts, " · ") + " "
-		if c.status != "" && time.Now().Before(c.statusAt) {
-			text = " " + c.status + " "
-		}
-		pad := sepW - term.StringWidth(text)
-		if pad > 0 {
-			top = dim(strings.Repeat("─", pad/2) + text + strings.Repeat("─", pad-pad/2))
-		} else {
-			top = dim(clipRunesT(text, sepW))
-		}
-	}
+	top := c.statusLine(sepW)
 
 	inputText, inputCol := c.ed.Render(c.width - 2)
 
@@ -216,20 +151,7 @@ func (c *Chat) frame() frame {
 	if vpAvail < 1 {
 		vpAvail = 1
 	}
-	// 滚动窗口（距底部 scrollUp 行）
-	show := lines
-	if len(show) > vpAvail {
-		from := len(show) - vpAvail - c.scrollUp
-		if from < 0 {
-			from = 0
-		}
-		to := from + vpAvail
-		if to > len(show) {
-			to = len(show)
-		}
-		show = show[from:to]
-	}
-	base := len(lines) - len(show) // show[0] 的绝对行号
+	show, base := viewportWindow(lines, vpAvail, c.scrollUp)
 	// todo 面板帧行区间（紧随内容区之后）
 	if todoOffLo >= 0 {
 		c.todoRowLo, c.todoRowHi = len(show)+todoOffLo, len(show)+todoOffHi
@@ -259,6 +181,102 @@ func (c *Chat) frame() frame {
 	}
 }
 
+// bottomLines 内容区下方的面板行：ask 表单 / 弹窗 / 斜杠提示三选一，
+// 之后是 todo 面板。返回行集与 todo 面板在其中的偏移区间（无 todo 为
+// -1/-1，调用方按滚动窗口换算成帧行区间）。
+func (c *Chat) bottomLines(w int) (lines []string, todoLo, todoHi int) {
+	todoLo, todoHi = -1, -1
+	if c.ask != nil {
+		lines = append(lines, c.ask.render(w)...)
+	} else if c.pop != nil {
+		// 弹窗高度预算：总高 - 输入区(3) - 至少 1 行内容
+		maxH := c.height - 4
+		if maxH < 4 {
+			maxH = 4
+		}
+		lines = append(lines, c.pop.render(w, maxH)...)
+	} else if hints := c.slashHints(); len(hints) > 0 {
+		for i, h := range hints {
+			if i == c.hintIdx {
+				lines = append(lines, cyan("❯ "+h))
+			} else {
+				lines = append(lines, "  "+dim(h))
+			}
+		}
+	}
+	if len(c.todos) > 0 {
+		todoLo = len(lines)
+		lines = append(lines, c.todoPanel(w)...)
+		todoHi = len(lines)
+	}
+	return lines, todoLo, todoHi
+}
+
+// statusLine 内容区顶部的状态横线：模型/模式/goal/todo 进度/运行态
+// 组合，横线居中包夹；临时状态消息（c.status 未过期）优先。
+func (c *Chat) statusLine(sepW int) string {
+	statusParts := []string{}
+	if m := c.app.Root().Model(); m != "" {
+		statusParts = append(statusParts, m)
+	}
+	if c.app.Root().InPlanMode() {
+		statusParts = append(statusParts, bold("计划模式"))
+	}
+	if c.app.Root().ApproveEach() {
+		statusParts = append(statusParts, bold("审批模式"))
+	}
+	if c.bang {
+		statusParts = append(statusParts, bold("命令模式"))
+	}
+	if c.goalText != "" {
+		statusParts = append(statusParts, "goal: "+term.ClipRunes(c.goalText, 30))
+	}
+	if len(c.todos) > 0 {
+		done := 0
+		for _, t := range c.todos {
+			if t.Status == "completed" {
+				done++
+			}
+		}
+		statusParts = append(statusParts, fmt.Sprintf("事项 %d/%d", done, len(c.todos)))
+	}
+	if c.running {
+		statusParts = append(statusParts, "● 运行中 Ctrl+C 中断")
+	}
+	top := dim(strings.Repeat("─", sepW))
+	if len(statusParts) > 0 || (c.status != "" && time.Now().Before(c.statusAt)) {
+		text := " " + strings.Join(statusParts, " · ") + " "
+		if c.status != "" && time.Now().Before(c.statusAt) {
+			text = " " + c.status + " "
+		}
+		pad := sepW - term.StringWidth(text)
+		if pad > 0 {
+			top = dim(strings.Repeat("─", pad/2) + text + strings.Repeat("─", pad-pad/2))
+		} else {
+			top = dim(term.ClipRunes(text, sepW))
+		}
+	}
+	return top
+}
+
+// viewportWindow 滚动窗口：距底部 scrollUp 行取 vpAvail 行。返回窗口
+// 与窗口首行的绝对行号。
+func viewportWindow(lines []string, vpAvail, scrollUp int) (show []string, base int) {
+	show = lines
+	if len(show) > vpAvail {
+		from := len(show) - vpAvail - scrollUp
+		if from < 0 {
+			from = 0
+		}
+		to := from + vpAvail
+		if to > len(show) {
+			to = len(show)
+		}
+		show = show[from:to]
+	}
+	return show, len(lines) - len(show)
+}
+
 // frameLines 组帧的兼容包装（paint 与测试用）；鼠标路径请用 frame()。
 func (c *Chat) frameLines() ([]string, int, int, map[int]int) {
 	f := c.frame()
@@ -278,7 +296,7 @@ func (c *Chat) statsSep(sepW int) string {
 	if pad > 0 {
 		return dim(strings.Repeat("─", pad/2) + text + strings.Repeat("─", pad-pad/2))
 	}
-	return dim(clipRunesT(text, sepW))
+	return dim(term.ClipRunes(text, sepW))
 }
 
 // statsLine 统计文本（样式：3 轮 · 52 步 │ LLM 6m55s · 工具 39.1s │
@@ -368,7 +386,7 @@ func (c *Chat) todoPanel(w int) []string {
 			case "in_progress":
 				mark = "◐"
 			}
-			lines = append(lines, dim("  "+mark+" "+clipRunesT(t.Content, w-6)))
+			lines = append(lines, dim("  "+mark+" "+term.ClipRunes(t.Content, w-6)))
 		}
 		return lines
 	}
@@ -379,7 +397,7 @@ func (c *Chat) todoPanel(w int) []string {
 			lines = append(lines, dim("  …"))
 			break
 		}
-		lines = append(lines, dim("  ▸ "+clipRunesT(a, w-6)))
+		lines = append(lines, dim("  ▸ "+term.ClipRunes(a, w-6)))
 	}
 	return lines
 }
@@ -405,14 +423,6 @@ func (c *Chat) slashHints() []string {
 		out = append(out, app.SlashHintLine(cmd.Name, cmd.Alias, cmd.Desc))
 	}
 	return out
-}
-
-func clipRunesT(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n]) + "…"
 }
 
 // osc52Copy 经 OSC52 写系统剪贴板。

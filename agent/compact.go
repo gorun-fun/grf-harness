@@ -26,9 +26,10 @@ const DefaultCompactThreshold = 100_000
 // 作为新链首、原链被替换）。
 const compactSummaryMarker = "[conversation summary]"
 
-// compactSystemPrompt 总结提示词（与 server/compact.go 的 ORS 端点同文；
-// agent 不 import server，两处各自维护，改一处须同步另一处）。
-const compactSystemPrompt = "You compact conversation transcripts. Produce a faithful, information-dense summary in the original language, preserving: task state, decisions made, file paths, commands run and their outcomes, open questions, and the next step. Output only the summary."
+// CompactSystemPrompt 总结提示词——会话压缩的唯一事实：agent 就地压缩、
+// server 的 /v1/responses/compact 端点与 /compact 斜杠指令三个入口共用
+// （经 SummarizeTranscript），改动只落这里。
+const CompactSystemPrompt = "You compact conversation transcripts. Produce a faithful, information-dense summary in the original language, preserving: task state, decisions made, file paths, commands run and their outcomes, open questions, and the next step. Output only the summary."
 
 // SetCompactThreshold 设置自动压缩阈值（估算 token）：>0 显式阈值，0 用
 // 默认（DefaultCompactThreshold），<0 关闭自动压缩。manual Compact 不受
@@ -80,27 +81,13 @@ func (a *Agent) compactLocked(ctx context.Context) (string, error) {
 	if _, open := a.pausedCalls(); len(open) > 0 {
 		return "", fmt.Errorf("paused tool calls present; resume or dismiss them before compacting")
 	}
-	transcript := a.transcript()
-	if transcript == "" {
+	transcript, n := BuildTranscript(a.History())
+	if n == 0 {
 		return "", fmt.Errorf("nothing to compact")
 	}
-	msg, err := a.getClient().Chat(ctx, []llm.Message{
-		{Role: "system", Content: compactSystemPrompt},
-		{Role: "user", Content: transcript},
-	}, nil)
+	summary, err := SummarizeTranscript(ctx, a.getClient(), transcript)
 	if err != nil {
-		return "", fmt.Errorf("compact: %w", err)
-	}
-	// thinking 模型偶发把正文放 reasoning_content；transcript 的
-	// "role: " 行风格会诱导个别模型用 <summary> 标签包裹输出——两处
-	// 都规范化，否则压缩产出空壳摘要
-	content := msg.Content
-	if content == "" {
-		content = msg.Reasoning
-	}
-	summary := normalizeSummary(content)
-	if summary == "" {
-		return "", fmt.Errorf("compact: empty summary")
+		return "", err
 	}
 	a.mu.Lock()
 	sys := a.system
@@ -135,6 +122,46 @@ func (a *Agent) maybeAutoCompact(ctx context.Context) {
 	}
 }
 
+// BuildTranscript 会话历史 → 压缩用 transcript：跳过 system，逐条
+// "role: 内容" 拼接（Message.String 含工具调用摘要）。返回文本与
+// 非 system 消息条数（供空历史判定与 /compact 回显）。
+func BuildTranscript(history []llm.Message) (string, int) {
+	var sb strings.Builder
+	n := 0
+	for _, m := range history {
+		if m.Role == "system" {
+			continue
+		}
+		sb.WriteString(m.Role + ": " + m.String() + "\n")
+		n++
+	}
+	return sb.String(), n
+}
+
+// SummarizeTranscript 总结生成本体（三个压缩入口共用：agent 就地压缩、
+// server 的 /v1/responses/compact 端点与 /compact 斜杠指令）。
+func SummarizeTranscript(ctx context.Context, c *llm.Client, transcript string) (string, error) {
+	msg, err := c.Chat(ctx, []llm.Message{
+		{Role: "system", Content: CompactSystemPrompt},
+		{Role: "user", Content: transcript},
+	}, nil)
+	if err != nil {
+		return "", fmt.Errorf("compact: %w", err)
+	}
+	// thinking 模型偶发把正文放 reasoning_content；transcript 的
+	// "role: " 行风格会诱导个别模型用 <summary> 标签包裹输出——两处
+	// 都规范化，否则压缩产出空壳摘要
+	content := msg.Content
+	if content == "" {
+		content = msg.Reasoning
+	}
+	summary := normalizeSummary(content)
+	if summary == "" {
+		return "", fmt.Errorf("compact: empty summary")
+	}
+	return summary, nil
+}
+
 // normalizeSummary 清洗总结输出：剥掉模型偶发包裹的 <summary> 标签与
 // "summary:"/"总结:" 类前缀（transcript 的行风格会诱导部分模型这么包）。
 func normalizeSummary(s string) string {
@@ -152,20 +179,4 @@ func normalizeSummary(s string) string {
 		}
 	}
 	return s
-}
-
-// transcript 会话历史 → 压缩用 transcript：跳过 system，逐条
-// "role: 内容" 拼接（Message.String 含工具调用摘要；与 server 侧
-// buildTranscript 同构）。
-func (a *Agent) transcript() string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	var sb strings.Builder
-	for _, m := range a.history {
-		if m.Role == "system" {
-			continue
-		}
-		sb.WriteString(m.Role + ": " + m.String() + "\n")
-	}
-	return sb.String()
 }

@@ -3,18 +3,20 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
-	"fmt"
-	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
+
+	"git.gorun.fun/share/grf-harness/config"
+	"git.gorun.fun/share/grf-harness/llm"
+	"git.gorun.fun/share/grf-harness/term"
 )
 
 // handleAgentModelsGet GET /v1/agent/models。
 func (s *Server) handleAgentModelsGet(w http.ResponseWriter, r *http.Request) {
-	path, _ := settingsPath()
+	path := config.Path()
 	out := modelCfgDTO{Path: path, Providers: []providerDTO{}, Writable: settingsWritable(path)}
 	all, err := readSettingsRaw()
 	if err != nil {
@@ -45,7 +47,7 @@ func (s *Server) handleAgentModelsGet(w http.ResponseWriter, r *http.Request) {
 			out.Policy = p
 		}
 	}
-	ps := map[string]ghProvider{}
+	ps := map[string]config.Provider{}
 	if v, ok := all["providers"]; ok {
 		_ = json.Unmarshal(v, &ps)
 	}
@@ -75,7 +77,7 @@ func (s *Server) handleAgentModelsPut(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, errServer, err.Error(), "")
 		return
 	}
-	cur := map[string]ghProvider{}
+	cur := map[string]config.Provider{}
 	if v, ok := all["providers"]; ok {
 		_ = json.Unmarshal(v, &cur)
 	}
@@ -88,7 +90,7 @@ func (s *Server) handleAgentModelsPut(w http.ResponseWriter, r *http.Request) {
 		}
 		return ""
 	}
-	ps := map[string]ghProvider{}
+	ps := map[string]config.Provider{}
 	for _, p := range in.Providers {
 		name := strings.TrimSpace(p.Name)
 		if name == "" {
@@ -104,7 +106,7 @@ func (s *Server) handleAgentModelsPut(w http.ResponseWriter, r *http.Request) {
 		if key == "" {
 			key = keepKey(strings.TrimSpace(p.KeepKeyFrom), name)
 		}
-		ps[name] = ghProvider{
+		ps[name] = config.Provider{
 			Type:    strings.TrimSpace(p.Type),
 			BaseURL: strings.TrimSpace(p.BaseURL),
 			APIKey:  key,
@@ -140,8 +142,9 @@ func (s *Server) handleAgentModelsPut(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAgentModelsDetect POST /v1/agent/models/detect:服务端探测供应商
-// 的模型列表(OpenAI 兼容 GET /models)。探测用 Key 直接随请求携带(用户
-// 正在表单里输入的新 Key,尚不属于任何已存条目)。
+// 的模型列表(OpenAI 兼容 GET /models，探测本体见 llm.Client.ModelsRich)。
+// 探测用 Key 直接随请求携带(用户正在表单里输入的新 Key,尚不属于任何
+// 已存条目)。
 func (s *Server) handleAgentModelsDetect(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Name    string `json:"name"`
@@ -155,7 +158,7 @@ func (s *Server) handleAgentModelsDetect(w http.ResponseWriter, r *http.Request)
 	if key == "" {
 		// 未随请求带 Key:沿用已存同名供应商的 Key(编辑既有条目场景)
 		all, _ := readSettingsRaw()
-		ps := map[string]ghProvider{}
+		ps := map[string]config.Provider{}
 		if v, ok := all["providers"]; ok {
 			_ = json.Unmarshal(v, &ps)
 		}
@@ -168,70 +171,20 @@ func (s *Server) handleAgentModelsDetect(w http.ResponseWriter, r *http.Request)
 		writeError(w, 400, errInvalid, "未配置 base_url", "baseUrl")
 		return
 	}
-	req, err := http.NewRequest(http.MethodGet, base+"/models", nil)
+	// 20 秒上界沿旧探测口径（探测是交互表单的即时反馈，不等长思考）。
+	dctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	client := llm.NewFromProvider(strings.TrimSpace(in.Name), config.Provider{BaseURL: base, APIKey: key}, "")
+	rich, err := client.ModelsRich(dctx)
 	if err != nil {
-		writeError(w, 400, errInvalid, err.Error(), "")
+		writeError(w, 502, errServer, "探测失败: "+term.ClipRunes(err.Error(), 200), "")
 		return
-	}
-	if key != "" {
-		req.Header.Set("Authorization", "Bearer "+key)
-	}
-	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
-	if err != nil {
-		writeError(w, 502, errServer, "探测失败: "+err.Error(), "")
-		return
-	}
-	defer resp.Body.Close()
-	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if resp.StatusCode != 200 {
-		writeError(w, 502, errServer, fmt.Sprintf("供应商返回 %d: %s", resp.StatusCode, truncateRunes(string(rb), 200)), "")
-		return
-	}
-	// 裸数组 [{id}] 也兼容;上下文窗口按社区常见字段名依次尝试
-	// (token-hub 三者同值;OpenRouter/SiliconFlow 用 context_length,
-	// vLLM 用 max_model_len),与 goder 桌面侧 modelconfig.go 同一套字段。
-	var wrapped struct {
-		Data []map[string]any `json:"data"`
-	}
-	var bare []map[string]any
-	if err := json.Unmarshal(rb, &wrapped); err == nil && len(wrapped.Data) > 0 {
-		bare = wrapped.Data
-	} else if err := json.Unmarshal(rb, &bare); err != nil {
-		writeError(w, 502, errServer, "响应不是 OpenAI 兼容模型列表: "+err.Error(), "")
-		return
-	}
-	type richModel struct {
-		ID     string `json:"id"`
-		CtxLen int    `json:"ctxLen"`
-	}
-	models := make([]string, 0, len(bare))
-	rich := make([]richModel, 0, len(bare))
-	for _, item := range bare {
-		id, _ := item["id"].(string)
-		if id == "" {
-			continue
-		}
-		models = append(models, id)
-		rich = append(rich, richModel{ID: id, CtxLen: modelCtxLen(item)})
 	}
 	// models 维持纯 id 数组(旧客户端兼容);modelsRich 带 ctxLen 供
 	// goder 网页形态缓存真实上下文窗口(与桌面态 wails 探测同构)。
-	writeJSON(w, 200, map[string]any{"models": models, "modelsRich": rich})
-}
-
-// modelCtxLen 从模型对象里取上下文窗口,数字或数字字符串均可,取首个 >0 的值。
-func modelCtxLen(item map[string]any) int {
-	for _, key := range []string{"context_length", "context_window", "max_model_len"} {
-		switch v := item[key].(type) {
-		case float64:
-			if v > 0 {
-				return int(v)
-			}
-		case string:
-			if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
-				return n
-			}
-		}
+	models := make([]string, 0, len(rich))
+	for _, m := range rich {
+		models = append(models, m.ID)
 	}
-	return 0
+	writeJSON(w, 200, map[string]any{"models": models, "modelsRich": rich})
 }

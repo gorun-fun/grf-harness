@@ -1,8 +1,17 @@
-// lines.go 行选取助手：多行文本里取首个/最后一个非空行（供各上层
-// 统一"首行摘要"类逻辑，避免各自实现漂移）。
+// lines.go 行选取与截断助手：多行文本里取首个/最后一个非空行、按 rune
+// 截断加省略号（供各上层统一"首行摘要/超长截断"类逻辑，避免各自实现漂移）。
 package term
 
 import "strings"
+
+// ClipRunes 按 rune 截断（多字节安全），超长加省略号；不超长原样返回。
+func ClipRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
 
 // FirstLine 返回 s 的首个非空行（trim 后）；max>0 时超过 max rune 截断
 // 并加省略号；无非空行返回空串。

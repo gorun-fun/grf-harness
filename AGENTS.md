@@ -127,8 +127,9 @@ ANSI→验证帧），历史会话输出落在 `.grf/sessions/`。
 - **会话压缩**（`compact.go`）：新回合入口估算 token 超阈值（默认 100k，
   settings 的 `compact_threshold` 覆盖/负值关闭）或 `/compact` 手动触发，
   历史收敛为 [system 原文, 摘要消息]；只在回合边界发生（暂停态拒绝），
-  自动失败开放。总结提示词与 server/compact.go 同文（agent 不 import
-  server，改一处须同步另一处）。
+  自动失败开放。总结生成本体（提示词 `CompactSystemPrompt`/transcript
+  构造 `BuildTranscript`/输出规范化 `SummarizeTranscript`）收敛在 agent
+  包导出件，server 的 compact 端点与 `/compact` 指令薄委托，无第二份。
 - **TUI 单 goroutine 规则**：`tui/chat.go` 的所有状态（blocks/todos/popups）
   只能在事件循环 goroutine 上改。后台 goroutine（agent 回调/Host）必须经
   `c.events` 通道投递（见 `onEvent`/`eventMsg`），直接改状态会 data race。
@@ -193,8 +194,8 @@ Windows 用 Console API 提供同套能力（`term/tty_windows.go`：VT 输入�
 方向键等翻译成 ANSI 序列喂给 input.go 既有解析器、VT 输出模式让备用屏幕等
 转义序列生效；老 conhost 不支持 VT 时 OpenRaw 报错照旧回退行模式），其余
 平台回退非交互（`term/tty_other.go`）。resize 监听平台化（`term/resize_*.go`）：
-unix 走 SIGWINCH，Windows 无等价信号改轮询。守护进程平台差异在根目录
-`daemon_unix.go`/`daemon_other.go`。全屏交互要求 stdin+stdout 均为 TTY，
+unix 走 SIGWINCH，Windows 无等价信号改轮询。守护进程平台差异在 `weixin` 包
+（`weixin/daemon_unix.go`/`daemon_other.go`）。全屏交互要求 stdin+stdout 均为 TTY，
 否则自动回退纯文本行模式。bash 工具的执行载体平台化（`tools/bash.go` 的
 `resolveShell`）：windows 依次探测 Git Bash 常规安装位与 PATH 上非
 System32 的 bash.exe（`System32\bash.exe` 是 WSL 启动器、命令跑在 Linux

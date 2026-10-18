@@ -139,7 +139,7 @@ func defaultClient() (*llm.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return llm.NewClient(llm.Config{Provider: eff.Provider, BaseURL: eff.BaseURL, APIKey: eff.APIKey, Model: eff.Model}), nil
+	return llm.NewFromEffective(eff), nil
 }
 
 // settingsFingerprint settings.json 的轻量指纹（mtime^size），供回合边界
@@ -557,9 +557,6 @@ func (s *Server) listConversations() []*sessionMeta {
 	sort.Slice(metas, func(i, j int) bool { return metas[i].CreatedAt.After(metas[j].CreatedAt) })
 	return metas
 }
-
-// autoApproveSetting 会话的审批默认值。
-func (sess *session) autoApproveSetting() bool { return sess.meta.AutoApprove }
 
 // ---- 回合簿记（cancel 端点与 busy 检查用）----
 

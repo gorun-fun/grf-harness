@@ -79,14 +79,6 @@ type skillsDTO struct {
 
 // ---------- 文件形状(settings.json 原生 snake_case) ----------
 
-// ghProvider settings.json 中单个供应商的原始形状。
-type ghProvider struct {
-	Type    string   `json:"type,omitempty"`
-	BaseURL string   `json:"base_url"`
-	APIKey  string   `json:"api_key,omitempty"`
-	Models  []string `json:"models,omitempty"`
-}
-
 // ghPlugin settings.json plugins 项的原始形状。
 type ghPlugin struct {
 	Name    string   `json:"name,omitempty"`
@@ -97,16 +89,6 @@ type ghPlugin struct {
 }
 
 // ---------- 跨域共享小工具 ----------
-
-// truncateRunes 按 rune 截断(多字节安全),超长加省略号。create.go 的
-// data URL 报错截断也用它。
-func truncateRunes(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n]) + "…"
-}
 
 func sortedKeys[F any](m map[string]F) []string {
 	ks := make([]string, 0, len(m))

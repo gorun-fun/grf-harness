@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"git.gorun.fun/share/grf-harness/config"
+	"git.gorun.fun/share/grf-harness/term"
 )
 
 // SkillCatalog 技能目录：workspace/.grf/skills 与 ~/.grf/skills 下的
@@ -82,7 +83,7 @@ func (c *SkillCatalog) Summary(name string) string {
 	s, _ := c.entries[name]
 	for _, line := range strings.Split(s, "\n") {
 		if t := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "#")); t != "" {
-			return clipRunes(t, 80)
+			return term.ClipRunes(t, 80)
 		}
 	}
 	return ""

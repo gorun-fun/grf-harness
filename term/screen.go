@@ -26,7 +26,6 @@ type Screen struct {
 
 	resizeCh   chan struct{}
 	sigClose   chan struct{}
-	resizeOnce sync.Once
 }
 
 // NewScreen 创建面向 stdout 的全屏渲染器（尚未进入全屏）。
@@ -116,13 +115,6 @@ func (s *Screen) SetMouse(on bool) {
 		s.out.WriteString("\x1b[?1002l\x1b[?1006l")
 	}
 	s.out.Flush()
-}
-
-// Mouse 鼠标上报是否开启。
-func (s *Screen) Mouse() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.mouse
 }
 
 // SyncSize 查询并更新当前终端尺寸（查询失败保持现有值）。

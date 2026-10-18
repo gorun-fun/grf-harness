@@ -16,6 +16,7 @@ import (
 	"git.gorun.fun/share/grf-harness/agent"
 	"git.gorun.fun/share/grf-harness/config"
 	"git.gorun.fun/share/grf-harness/llm"
+	"git.gorun.fun/share/grf-harness/term"
 	"git.gorun.fun/share/grf-harness/tools"
 )
 
@@ -26,47 +27,12 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 会话定位：previous_response_id 链尾校验 / 懒创建。
-	var sess *session
-	var err error
-	if req.PreviousResponseID != "" {
-		sid, _, err := parseRespID(req.PreviousResponseID)
-		if err != nil {
-			writeError(w, 400, errInvalid, "malformed previous_response_id", "previous_response_id")
-			return
-		}
-		sess, err = s.getSession(sid)
-		if err != nil {
-			writeJSONError(w, err)
-			return
-		}
-		if cur := sess.curRespID(); cur != req.PreviousResponseID {
-			writeError(w, 409, errInvalid,
-				fmt.Sprintf("previous_response_id %s is not the latest response (chain tail is %s); forking history is not supported",
-					req.PreviousResponseID, cur), "previous_response_id")
-			return
-		}
-	} else {
-		sess, err = s.newSession(req.GrfSession)
-		if err != nil {
-			writeError(w, 500, errServer, "create session: "+err.Error(), "")
-			return
-		}
-	}
-
-	if sess.root.IsRunning() {
-		writeError(w, 409, errInvalid, "a turn is already running in this session; cancel it (POST /v1/responses/{id}/cancel) or retry later", "")
+	sess, ok := s.locateSession(w, &req)
+	if !ok {
 		return
 	}
-	// 回合槽占用：上面的预检与 execute 的 beginTurn 之间隔着请求级配置、
-	// input 解析与斜杠指令（/compact 可达秒级），两个并发请求可同时通过
-	// 预检——漏网时 409 退化为 200+failed 且推进链尾。tryClaim 原子完成
-	// "检查+占用"；execute 的各出口按占用代号释放，本地 defer 兜底
-	// execute 未被调用的早退路径（代号匹配保证不误伤后续占用），background
-	// 模式随会话移交后台 goroutine。
-	claim, ok := sess.tryClaim()
+	claim, ok := s.claimTurn(w, sess)
 	if !ok {
-		writeError(w, 409, errInvalid, "a turn is already running in this session; cancel it (POST /v1/responses/{id}/cancel) or retry later", "")
 		return
 	}
 	handoff := false
@@ -86,26 +52,7 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 请求级配置。
-	if req.Instructions != nil && *req.Instructions != "" {
-		sess.root.SetSystemText(*req.Instructions)
-	}
-	if req.MaxToolCalls != nil && *req.MaxToolCalls >= 1 {
-		sess.root.SetMaxSteps(*req.MaxToolCalls)
-	}
-	if req.PromptCacheKey != "" {
-		sess.h.SetCacheKey(req.PromptCacheKey)
-	}
-	if req.Model != "" {
-		s.trySwitchModel(sess, req.Model)
-	}
-	if req.Reasoning != nil && req.Reasoning.Effort != "" {
-		// 思考强度：作用在当前（可能刚切换的）client 上；换模型重建
-		// client 后由后续请求重设。
-		sess.root.SetReasoningEffort(req.Reasoning.Effort)
-	}
-	if err := s.applyTools(sess, &req); err != nil {
-		writeError(w, 400, errInvalid, err.Error(), "tools")
+	if !s.applyRequestConfig(w, sess, &req) {
 		return
 	}
 
@@ -115,18 +62,7 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, errInvalid, ferr.Error(), "input")
 		return
 	}
-	paused := sess.root.HasPausedCalls()
-	if paused && len(resume) == 0 {
-		writeError(w, 400, errInvalid,
-			"this session is paused awaiting interaction; submit grf:input_result (or function_call_output) items as input", "input")
-		return
-	}
-	if !paused && len(resume) > 0 {
-		writeError(w, 400, errInvalid, "no paused tool calls in this session; grf:input_result items are only valid while paused", "input")
-		return
-	}
-	if paused && (text != "" || len(inject) > 0) {
-		writeError(w, 400, errInvalid, "session is paused; new input must only contain grf:input_result / function_call_output items", "input")
+	if !validatePausedState(w, sess, text, resume, inject) {
 		return
 	}
 	// 回传历史 item 并入会话历史（新输入之前）。
@@ -156,6 +92,101 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, res)
+}
+
+// locateSession 会话定位：previous_response_id 链尾校验 / 懒创建。
+// 失败已写响应，返回 false。
+func (s *Server) locateSession(w http.ResponseWriter, req *createRequest) (*session, bool) {
+	if req.PreviousResponseID != "" {
+		sid, _, err := parseRespID(req.PreviousResponseID)
+		if err != nil {
+			writeError(w, 400, errInvalid, "malformed previous_response_id", "previous_response_id")
+			return nil, false
+		}
+		sess, err := s.getSession(sid)
+		if err != nil {
+			writeJSONError(w, err)
+			return nil, false
+		}
+		if cur := sess.curRespID(); cur != req.PreviousResponseID {
+			writeError(w, 409, errInvalid,
+				fmt.Sprintf("previous_response_id %s is not the latest response (chain tail is %s); forking history is not supported",
+					req.PreviousResponseID, cur), "previous_response_id")
+			return nil, false
+		}
+		return sess, true
+	}
+	sess, err := s.newSession(req.GrfSession)
+	if err != nil {
+		writeError(w, 500, errServer, "create session: "+err.Error(), "")
+		return nil, false
+	}
+	return sess, true
+}
+
+// claimTurn 占用回合槽：上面的预检与 execute 的 beginTurn 之间隔着请求级
+// 配置、input 解析与斜杠指令（/compact 可达秒级），两个并发请求可同时
+// 通过预检——漏网时 409 退化为 200+failed 且推进链尾。tryClaim 原子完成
+// "检查+占用"；execute 的各出口按占用代号释放，本地 defer 兜底
+// execute 未被调用的早退路径（代号匹配保证不误伤后续占用），background
+// 模式随会话移交后台 goroutine。失败已写响应，返回 false。
+func (s *Server) claimTurn(w http.ResponseWriter, sess *session) (uint64, bool) {
+	if sess.root.IsRunning() {
+		writeError(w, 409, errInvalid, "a turn is already running in this session; cancel it (POST /v1/responses/{id}/cancel) or retry later", "")
+		return 0, false
+	}
+	claim, ok := sess.tryClaim()
+	if !ok {
+		writeError(w, 409, errInvalid, "a turn is already running in this session; cancel it (POST /v1/responses/{id}/cancel) or retry later", "")
+		return 0, false
+	}
+	return claim, true
+}
+
+// applyRequestConfig 请求级配置：instructions / max_tool_calls /
+// prompt_cache_key / model（即时切换）/ reasoning / tools。失败已写
+// 响应，返回 false。
+func (s *Server) applyRequestConfig(w http.ResponseWriter, sess *session, req *createRequest) bool {
+	if req.Instructions != nil && *req.Instructions != "" {
+		sess.root.SetSystemText(*req.Instructions)
+	}
+	if req.MaxToolCalls != nil && *req.MaxToolCalls >= 1 {
+		sess.root.SetMaxSteps(*req.MaxToolCalls)
+	}
+	if req.PromptCacheKey != "" {
+		sess.h.SetCacheKey(req.PromptCacheKey)
+	}
+	if req.Model != "" {
+		s.trySwitchModel(sess, req.Model)
+	}
+	if req.Reasoning != nil && req.Reasoning.Effort != "" {
+		// 思考强度：作用在当前（可能刚切换的）client 上；换模型重建
+		// client 后由后续请求重设。
+		sess.root.SetReasoningEffort(req.Reasoning.Effort)
+	}
+	if err := s.applyTools(sess, req); err != nil {
+		writeError(w, 400, errInvalid, err.Error(), "tools")
+		return false
+	}
+	return true
+}
+
+// validatePausedState 暂停态输入校验：暂停中只收应答 item、非暂停不收
+// 应答 item。失败已写响应，返回 false。
+func validatePausedState(w http.ResponseWriter, sess *session, text string, resume []agent.ResumeInput, inject []llm.Message) bool {
+	paused := sess.root.HasPausedCalls()
+	switch {
+	case paused && len(resume) == 0:
+		writeError(w, 400, errInvalid,
+			"this session is paused awaiting interaction; submit grf:input_result (or function_call_output) items as input", "input")
+	case !paused && len(resume) > 0:
+		writeError(w, 400, errInvalid, "no paused tool calls in this session; grf:input_result items are only valid while paused", "input")
+	case paused && (text != "" || len(inject) > 0):
+		writeError(w, 400, errInvalid, "session is paused; new input must only contain grf:input_result / function_call_output items", "input")
+	default:
+		return true
+	}
+	return false
 }
 
 // execute 回合执行：接线事件桥、跑 RunTurn/Resume、拼终态资源。
@@ -199,11 +230,7 @@ func (s *Server) execute(ctx context.Context, sess *session, req *createRequest,
 				Content: []contentPart{{Type: "output_text", Text: out}},
 			}}
 			base.Usage = usageFrom(sess.root.LLMStats(), pre)
-			if store {
-				sess.h.Store.SetCacheKey(sess.h.CacheKey())
-				_, _ = sess.h.Store.SaveSession(sess.root.History())
-				sess.saveSnap(base)
-			}
+			s.persistTurn(sess, base, store)
 			sess.releaseClaim(claim)
 			return base, nil
 		}
@@ -248,7 +275,14 @@ func (s *Server) execute(ctx context.Context, sess *session, req *createRequest,
 	now := time.Now().Unix()
 	base.CompletedAt = &now
 	base.Usage = usageFrom(sess.root.LLMStats(), pre)
+	finalizeStatus(base, reply, pausedTurn, runErr, br, extCanceled)
+	s.persistTurn(sess, base, store)
+	return base, nil
+}
 
+// finalizeStatus 回合终态判定：暂停（含交互请求 / 纯客户端函数暂停）、
+// 完成、取消、max steps 超限、失败五态写进 base。
+func finalizeStatus(base *ResponseResource, reply string, pausedTurn *agent.PausedTurn, runErr error, br *bridge, extCanceled bool) {
 	switch {
 	case runErr == nil && pausedTurn != nil:
 		hasInteraction, reqs := br.pausedItems(pausedTurn)
@@ -276,13 +310,15 @@ func (s *Server) execute(ctx context.Context, sess *session, req *createRequest,
 			base.Output = br.finish("")
 		}
 	}
+}
 
+// persistTurn 回合终态落盘：缓存键随历史一起存档，快照供会话详情端点。
+func (s *Server) persistTurn(sess *session, base *ResponseResource, store bool) {
 	if store {
 		sess.h.Store.SetCacheKey(sess.h.CacheKey())
 		_, _ = sess.h.Store.SaveSession(sess.root.History())
 		sess.saveSnap(base)
 	}
-	return base, nil
 }
 
 // runStreaming SSE 流式模式。
@@ -518,7 +554,7 @@ func (s *Server) trySwitchModel(sess *session, model string) {
 	if !found {
 		return
 	}
-	nc := llm.NewClient(llm.Config{Provider: provider, BaseURL: p.BaseURL, APIKey: p.APIKey, Model: name})
+	nc := llm.NewFromProvider(provider, *p, name)
 	// 缓存键迁移 + 子代理 client + 系统提示词身份行重写（身份行是会话构建期
 	// 烘焙的，切换须同步，否则模型以旧身份自我认知、自称旧模型名）。
 	sess.h.SwitchClient(nc)
@@ -578,7 +614,7 @@ func (s *Server) refreshDefaultClient(sess *session, requestedModel string) {
 	if err != nil {
 		return
 	}
-	nc := llm.NewClient(llm.Config{Provider: eff.Provider, BaseURL: eff.BaseURL, APIKey: eff.APIKey, Model: eff.Model})
+	nc := llm.NewFromEffective(eff)
 	sess.h.SwitchClient(nc)
 	sess.clientFP = fp
 }
@@ -706,10 +742,10 @@ func parseContentParts(raw json.RawMessage) (text string, images []tools.Image, 
 }
 
 // imageDataURL data URL → Image（远程 URL 一期不支持）。截断用 rune 版
-// truncateRunes（data URL 前缀为 ASCII，语义与按字节截断一致）。
+// term.ClipRunes（data URL 前缀为 ASCII，语义与按字节截断一致）。
 func imageDataURL(u string) (tools.Image, error) {
 	if !strings.HasPrefix(u, "data:") {
-		return tools.Image{}, fmt.Errorf("input_image only supports data URLs (got %q)", truncateRunes(u, 64))
+		return tools.Image{}, fmt.Errorf("input_image only supports data URLs (got %q)", term.ClipRunes(u, 64))
 	}
 	comma := strings.Index(u, ",")
 	if comma < 0 {

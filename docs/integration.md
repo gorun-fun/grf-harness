@@ -272,7 +272,14 @@ func installSkills(workspace string, skills map[string]string) error {
 - **用量统计**：`Agent.LLMStats()`（轮次/首 token/生成耗时/tokens/缓存
   命中率）与 `Agent.ToolStats()`（调用数/累计耗时），UI 或计量用。
 - **编程式子代理**：`Harness.Manager` 的 `Subagent/Fork/SendMessage/
-  Interrupt/WaitForSettled/ListAgents`——不经过模型直接驱动子代理树。
+  Interrupt/WaitForSettled/ListAgents/HandleOf`——不经过模型直接驱动
+  子代理树（`HandleOf(id)` 按 id 取句柄）。
+- **并发上限调节**：`Agent.SetMaxParallelTools(n)`（默认
+  `agent.DefaultMaxParallelTools = 8`）——同批并行安全工具的并发池上限。
+- **后台作业表扩展**：`tools.JobManager.NewFinal(kind, descr)` 创建
+  final 类型的一次性挂起作业、`FinishFinal(id, result, err)` 落定——
+  嵌入方把自己的异步任务挂到 `/jobs` 可见作业表用（内置只有 bash 超时
+  晋升的 stream 类型作业）。
 - **提示词缓存**：`Harness.CacheKey()/SetCacheKey()` 会话级
   prompt_cache_key，随会话文件持久化，resume 自动复用（`app.Restore`
   已处理）。

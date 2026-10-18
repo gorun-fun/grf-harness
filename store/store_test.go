@@ -23,10 +23,11 @@ func TestSessionRoundTrip(t *testing.T) {
 	if _, err := s.SaveSession(msgs); err != nil {
 		t.Fatal(err)
 	}
-	got, err := s.LatestSession()
+	gotFull, err := s.LatestSessionFull()
 	if err != nil {
 		t.Fatal(err)
 	}
+	got := gotFull.Messages
 	if len(got) != 4 {
 		t.Fatalf("恢复消息数 = %d, 期望 4（system 被剔除）", len(got))
 	}

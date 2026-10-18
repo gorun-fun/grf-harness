@@ -69,6 +69,38 @@ func TestHelperProcess(t *testing.T) {
 	os.Exit(0)
 }
 
+// TestStdioStderrTail 插件进程写超容量的 stderr 后崩溃：连接失效错误须
+// 带回尾部截留（环形语义——头部丢弃、尾部保留）。
+func TestStdioStderrTail(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := testCtx(t)
+	defer cancel()
+	_, err = DialStdio(ctx, []string{exe, "-test.run=TestHelperStderrCrash", "--"}, []string{helperEnv + "=crash"})
+	if err == nil {
+		t.Fatal("进程立即退出，握手应失败")
+	}
+	if !strings.Contains(err.Error(), "boom-tail") {
+		t.Fatalf("失效错误应带 stderr 尾部: %v", err)
+	}
+	if strings.Contains(err.Error(), "head-garbage") {
+		t.Fatalf("超容量应丢头部保尾部: %v", err)
+	}
+}
+
+// TestHelperStderrCrash 桩：写超过截留容量的 stderr 后退出（由
+// TestStdioStderrTail 经 -test.run 复执行本测试二进制触发）。
+func TestHelperStderrCrash(t *testing.T) {
+	if os.Getenv(helperEnv) != "crash" {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "head-garbage%s\n", strings.Repeat("x", stderrCap))
+	fmt.Fprintln(os.Stderr, "boom-tail")
+	os.Exit(3)
+}
+
 // runStubServer 极简 MCP 服务端：initialize / tools/list / tools/call。
 func runStubServer(r interface{ Read([]byte) (int, error) }, w interface{ Write([]byte) (int, error) }) {
 	buf := make([]byte, 0, 4096)

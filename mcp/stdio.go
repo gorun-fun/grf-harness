@@ -32,9 +32,15 @@ type stdioTransport struct {
 	stderrMu sync.Mutex
 	stderr   []byte // 尾部截留（最多 stderrCap）
 	done     chan struct{}
+	waitDone chan struct{} // 进程回收完毕（stderr 泵已写尽）
 }
 
 const stderrCap = 8 << 10
+
+// stderrTailWait 取 stderr 尾部前等进程回收的上限：孙进程（如插件拉起的
+// 浏览器）继承 stderr 管道会让 cmd.Wait 长期不返回，超时即拿现有尾部，
+// 尽力而为。
+const stderrTailWait = 500 * time.Millisecond
 
 // DialStdio 启动本地插件进程（command = 可执行文件 + 参数）并完成握手。
 // extraEnv 追加到子进程环境（默认继承当前进程环境）。
@@ -67,14 +73,17 @@ func startStdio(command []string, extraEnv []string) (*stdioTransport, error) {
 	if err != nil {
 		return nil, err
 	}
-	t := &stdioTransport{cmd: cmd, stdin: stdin, pending: map[int64]chan rpcResponse{}, done: make(chan struct{})}
+	t := &stdioTransport{cmd: cmd, stdin: stdin, pending: map[int64]chan rpcResponse{},
+		done: make(chan struct{}), waitDone: make(chan struct{})}
+	cmd.Stderr = t // 经 Write 尾部截留（exec 以管道 + 拷贝 goroutine 接泵）
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("启动插件 %s: %w", command[0], err)
 	}
 	go t.readLoop(stdout)
 	go func() {
 		<-t.done
-		_ = t.cmd.Wait() // 回收进程，避免僵尸
+		_ = t.cmd.Wait() // 回收进程，避免僵尸；返回即 stderr 拷贝 goroutine 已写尽
+		close(t.waitDone)
 	}()
 	return t, nil
 }
@@ -82,7 +91,6 @@ func startStdio(command []string, extraEnv []string) (*stdioTransport, error) {
 // readLoop 逐行读 stdout 并分发响应；EOF/解析无关行（如插件误写日志到
 // stdout）都容忍——只有结构正确的响应才投递。
 func (t *stdioTransport) readLoop(r io.Reader) {
-	defer close(t.done)
 	br := bufio.NewReaderSize(r, 64<<10)
 	for {
 		line, err := br.ReadBytes('\n')
@@ -90,7 +98,8 @@ func (t *stdioTransport) readLoop(r io.Reader) {
 			t.handleLine(line)
 		}
 		if err != nil {
-			if tail := strings.TrimSpace(t.Stderr()); tail != "" {
+			close(t.done) // 唤醒进程回收 goroutine（唯一的退出路径）
+			if tail := strings.TrimSpace(t.drainStderrTail()); tail != "" {
 				t.markDead(fmt.Errorf("插件进程已退出: %s", tail))
 			} else {
 				t.markDead(fmt.Errorf("插件进程已退出"))
@@ -154,6 +163,28 @@ func (t *stdioTransport) isDead() error {
 	return t.deadErr
 }
 
+// Write 实现 io.Writer：exec.Cmd 把子进程 stderr 逐段写到这里，尾部
+// 截留最近 stderrCap 字节（超出丢头部）。
+func (t *stdioTransport) Write(p []byte) (int, error) {
+	t.stderrMu.Lock()
+	t.stderr = append(t.stderr, p...)
+	if n := len(t.stderr); n > stderrCap {
+		t.stderr = append(t.stderr[:0], t.stderr[n-stderrCap:]...)
+	}
+	t.stderrMu.Unlock()
+	return len(p), nil
+}
+
+// drainStderrTail 等进程回收（stderr 已写尽）后取尾部截留；孙进程占住
+// stderr 管道时至多等 stderrTailWait，拿现有尾部尽力而为。
+func (t *stdioTransport) drainStderrTail() string {
+	select {
+	case <-t.waitDone:
+	case <-time.After(stderrTailWait):
+	}
+	return t.Stderr()
+}
+
 // Stderr 尾部截留的诊断输出（进程异常退出时带回给调用方）。
 func (t *stdioTransport) Stderr() string {
 	t.stderrMu.Lock()
@@ -198,7 +229,7 @@ func (t *stdioTransport) Call(ctx context.Context, method string, params any) (j
 		}
 		return resp.Result, nil
 	case <-t.done:
-		return nil, fmt.Errorf("插件进程已退出（stderr: %s）", t.Stderr())
+		return nil, fmt.Errorf("插件进程已退出（stderr: %s）", t.drainStderrTail())
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
