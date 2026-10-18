@@ -11,7 +11,10 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 )
 
@@ -121,7 +124,42 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/agent/skills/{name}", s.guard(s.handleAgentSkillDelete))
 	mux.HandleFunc("POST /v1/agent/skills/{name}/enabled", s.guard(s.handleAgentSkillEnabled))
 	mux.HandleFunc("GET /v1/health", s.guard(s.handleHealth))
-	return mux
+	return accessLog(mux)
+}
+
+// accessLog 访问日志中间件：每个请求一行（方法/路径/状态/耗时/来源）
+// 写 stderr——gh server 前台进程可直接看到，多用户/嵌入场景排障的基本
+// 观察面。SSE 流式请求在流结束后才记一行（耗时含整个流时长）。
+// GRF_SERVER_ACCESS_LOG=off 关闭。
+func accessLog(next http.Handler) http.Handler {
+	if strings.EqualFold(os.Getenv("GRF_SERVER_ACCESS_LOG"), "off") {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rw := &statusWriter{ResponseWriter: w, status: 200}
+		next.ServeHTTP(rw, r)
+		log.Printf("server: %s %s %d %s %s", r.Method, r.URL.Path, rw.status,
+			time.Since(start).Round(time.Millisecond), r.RemoteAddr)
+	})
+}
+
+// statusWriter 捕获响应状态码的包装。Flush 必须显式委托——SSE 处理器
+// 经 http.Flusher 断言刷新，包装后不实现会把流式响应退化成缓冲到结束。
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusWriter) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *statusWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 // ListenAndServe 阻塞监听（main 的 server 子命令入口）。

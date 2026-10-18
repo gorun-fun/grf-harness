@@ -89,3 +89,40 @@ func TestSessionMetaRoundTrip(t *testing.T) {
 		t.Fatalf("旧版文件回退失败: %+v, %v", sess2, err)
 	}
 }
+
+// TestSaveSameSecondCollision 同秒两次首次落盘（多对话共享 workspace 的
+// 场景，ResetCurrent 模拟第二个对话）不得互覆：文件名应带序号去重，且
+// 列表解析能容忍序号后缀还原时间。
+func TestSaveSameSecondCollision(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+	s2 := New(root) // 同目录另一个 Store 实例（= 另一个对话）
+	first, err := s.SaveSession([]llm.Message{{Role: "user", Content: "第一个对话"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s2.SaveSession([]llm.Message{{Role: "user", Content: "第二个对话"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatalf("同秒落盘撞名: %q", first)
+	}
+	// 两个文件都完整存在（未被互覆）
+	for _, p := range []string{first, second} {
+		full, err := LoadSession(p)
+		if err != nil || len(full) != 1 {
+			t.Fatalf("会话文件 %q 应完整: %v %d", p, err, len(full))
+		}
+	}
+	// 列表能识别两场会话且时间戳可解析（序号后缀不破坏解析）
+	infos := s.ListSessions(0)
+	if len(infos) != 2 {
+		t.Fatalf("应列出 2 场会话，得 %d", len(infos))
+	}
+	for _, info := range infos {
+		if info.When.IsZero() {
+			t.Errorf("会话 %q 时间戳解析失败", info.Name)
+		}
+	}
+}

@@ -311,8 +311,8 @@ func installSkills(workspace string, skills map[string]string) error {
 `Options.Workspace`**（`GRF_HOME` 不搬会话）。`NewSession`/`Restore`
 之后下次保存另起新文件。多个对话共享同一 workspace 时注意：
 
-- 文件名时间戳只精确到**秒**：两个对话的首次落盘落在同一秒会生成同名
-  文件、交错覆写。
+- 文件名时间戳只精确到**秒**：两个对话的首次落盘落在同一秒时自动追加
+  序号去重（`session-...-2.json`），不会互覆。
 - `ListSessions` / `LatestSessionFull` 枚举目录下**全部**会话——跨对话
   混排，文件名不含对话 ID，"最近一场"在多对话下无意义。
 - `a.AutoSave()` 不返回路径；要建对话↔文件索引请自己调 `a.SaveSession()`

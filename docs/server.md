@@ -163,6 +163,7 @@ exit_plan_mode 计划审批、enter_plan_mode 进入申请经 `Host.AskUser`
 |------|------|
 | `GRF_TURN_WEBHOOK_URL` | 后台（`background:true`）回合落定即 POST `turn.settled` 事件（`type/session_id/response_id/status/model/usage/ts`）给宿主；同步/SSE 回合不外发。投递尽力而为（5s 超时、不重试），幂等键 `response_id`，轮询 retrieve 仍是兜底 |
 | `GRF_TURN_WEBHOOK_SECRET` | 事件体 HMAC-SHA256 签名密钥；配置后附 `X-GRF-Signature: sha256=<hex(body)>` 头，接收方应常量时间校验后再信任事件体 |
+| `GRF_SERVER_ACCESS_LOG` | 置 `off` 关闭访问日志（默认开启：每请求一行"方法 路径 状态 耗时 来源"写 stderr，SSE 流在结束后记录） |
 
 两项均启动期读取（goder-serve 等宿主网关经子进程 env 注入，见其
 `GODER_GH_ENV_<KEY>` 透传通道）。

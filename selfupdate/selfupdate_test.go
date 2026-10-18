@@ -3,6 +3,8 @@ package selfupdate
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -219,5 +221,61 @@ func TestInstallHTTPError(t *testing.T) {
 
 	if err := Install(context.Background(), srv.URL, filepath.Join(t.TempDir(), "gh"), nil); err == nil {
 		t.Fatal("HTTP 404 应报错")
+	}
+}
+
+// TestInstallChecksum SHA256SUMS 清单校验：条目匹配放行、不匹配拦截、
+// 无清单/无条目兼容放行（私有服务器与历史版本不受影响）。
+func TestInstallChecksum(t *testing.T) {
+	payload := "new-binary-content"
+	sum := sha256.Sum256([]byte(payload))
+	good := fmt.Sprintf("%s  gh\n", hex.EncodeToString(sum[:]))
+	bad := strings.Repeat("0", 64) + "  gh\n"
+
+	install := func(t *testing.T, manifest string) error {
+		t.Helper()
+		paths := map[string]string{"/v1/gh": payload}
+		if manifest != "" {
+			paths["/v1/SHA256SUMS"] = manifest
+		}
+		srv := newFileServer(t, paths)
+		defer srv.Close()
+		return Install(context.Background(), srv.URL+"/v1/gh", filepath.Join(t.TempDir(), "gh"), nil)
+	}
+
+	if err := install(t, good); err != nil {
+		t.Fatalf("清单匹配应放行: %v", err)
+	}
+	if err := install(t, bad); err == nil {
+		t.Fatal("清单不匹配应拦截")
+	} else if !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("应为校验失败错误，得 %v", err)
+	}
+	if err := install(t, ""); err != nil {
+		t.Fatalf("无清单应兼容放行: %v", err)
+	}
+	// 清单存在但无该产物条目：放行
+	if err := install(t, strings.Repeat("1", 64)+"  other-file\n"); err != nil {
+		t.Fatalf("无条目应兼容放行: %v", err)
+	}
+	// 校验失败时目标文件不被替换
+	dir := t.TempDir()
+	srv := newFileServer(t, map[string]string{
+		"/v1/gh":         payload,
+		"/v1/SHA256SUMS": bad,
+	})
+	defer srv.Close()
+	exePath := filepath.Join(dir, "gh")
+	os.WriteFile(exePath, []byte("old"), 0o755)
+	if err := Install(context.Background(), srv.URL+"/v1/gh", exePath, nil); err == nil {
+		t.Fatal("不匹配应报错")
+	}
+	data, _ := os.ReadFile(exePath)
+	if string(data) != "old" {
+		t.Fatalf("校验失败后旧文件应保留，得 %q", data)
+	}
+	ents, _ := os.ReadDir(dir)
+	if len(ents) != 1 {
+		t.Errorf("临时文件应已清理，目录 %d 个文件", len(ents))
 	}
 }

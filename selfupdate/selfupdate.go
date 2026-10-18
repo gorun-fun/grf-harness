@@ -12,6 +12,8 @@ package selfupdate
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -336,6 +338,12 @@ func Install(ctx context.Context, url, exePath string, progress func(done, total
 		return err
 	}
 
+	// 替换前校验与同目录 SHA256SUMS 清单的一致性（见 verifyChecksum）；
+	// 清单缺失不拦截（兼容私有服务器与历史版本），有条目则强校验
+	if err := verifyChecksum(ctx, url, tmpName); err != nil {
+		return err
+	}
+
 	if runtime.GOOS == "windows" {
 		old := exePath + ".old"
 		os.Remove(old) // 上次更新可能残留
@@ -350,4 +358,63 @@ func Install(ctx context.Context, url, exePath string, progress func(done, total
 		return nil
 	}
 	return os.Rename(tmpName, exePath)
+}
+
+// verifyChecksum 校验已下载产物与下载 URL 同目录下 SHA256SUMS 清单的
+// 一致性（CI 发布时随产物生成，sha256sum 标准格式 "hex  文件名"；主程序
+// 在版本目录、插件在 plugins/ 子目录，与各自下载 URL 天然同目录）。
+// 清单缺失（404/网络故障）或其中无该产物条目时不拦截——兼容未发布
+// 清单的私有服务器与历史版本；有条目则强校验，拦下传输损坏与发布错版。
+// 注意这是完整性校验而非来源认证：清单与产物同源同信道，防不了下载
+// 服务器自身的全面失陷。
+func verifyChecksum(ctx context.Context, url, path string) error {
+	i := strings.LastIndex(url, "/")
+	if i < 0 {
+		return nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url[:i+1]+"SHA256SUMS", nil)
+	if err != nil {
+		return nil
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil // 清单拉取失败不拦截更新
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil // 无清单：兼容历史版本与私有服务器
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil
+	}
+	base := filepath.Base(url)
+	want := ""
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) != 2 {
+			continue
+		}
+		name := strings.TrimPrefix(fields[1], "*") // sha256sum 二进制模式条目带 * 前缀
+		if name == base && len(fields[0]) == 64 {
+			want = strings.ToLower(fields[0])
+			break
+		}
+	}
+	if want == "" {
+		return nil // 清单里没有该产物的条目：不拦截
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return err
+	}
+	if got := hex.EncodeToString(h.Sum(nil)); got != want {
+		return fmt.Errorf("checksum mismatch for %s: manifest %s, downloaded %s", base, want, got)
+	}
+	return nil
 }

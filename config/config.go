@@ -176,14 +176,42 @@ func Load() (Effective, error) {
 			eff.Model = model
 		}
 	}
+	// GRF_MODEL 环境覆盖支持三类写法（与会话层模型切换同一套解析，
+	// 见 Settings.ResolveModel）：裸名（默认供应商含之则等价现状，否则
+	// "恰一家提供"时切换）、限定名 provider/model（供应商+模型表内校验）、
+	// 限定名但模型未登记（已知供应商即信任显式覆盖——测试新模型不必先改
+	// settings）。均不命中时原样透传（老行为：整串当模型名发给当前供应商）。
+	if v := os.Getenv("GRF_MODEL"); v != "" {
+		pn, m, ok := s.ResolveModel(v)
+		if !ok {
+			// 整体解析未命中：限定名且供应商已知时仍信任显式覆盖
+			//（模型名免登记，方便对新模型做临时测试）
+			if p2, m2 := SplitDefault(v); p2 != "" && m2 != "" {
+				if _, exists := s.Providers[p2]; exists {
+					pn, m, ok = p2, m2, true
+				}
+			}
+		}
+		if ok {
+			eff.Provider, eff.Model = pn, m
+		} else {
+			eff.Model = v
+		}
+		if eff.Provider != name { // 环境变量切换了供应商：端点与密钥随之
+			if p2 := s.Providers[eff.Provider]; p2 != nil {
+				if p2.BaseURL != "" {
+					eff.BaseURL = p2.BaseURL
+				}
+				eff.APIKey = p2.APIKey
+			}
+		}
+	}
+	// OPENAI_* 在 GRF_MODEL 之后应用：显式指定的端点/密钥拥有最终决定权
 	if v := os.Getenv("OPENAI_BASE_URL"); v != "" {
 		eff.BaseURL = v
 	}
 	if v := os.Getenv("OPENAI_API_KEY"); v != "" {
 		eff.APIKey = v
-	}
-	if v := os.Getenv("GRF_MODEL"); v != "" {
-		eff.Model = v
 	}
 	return eff, nil
 }
@@ -221,6 +249,62 @@ func SplitDefault(def string) (provider, model string) {
 		return parts[0], parts[1]
 	}
 	return parts[0], ""
+}
+
+// ResolveModel 把模型名解析为 (provider, model)：带 provider/ 前缀的
+// 限定名要求供应商存在且模型在其表内；裸模型名按"默认供应商含该模型
+// 优先，否则全表恰一家命中"解析。零命中、歧义（多供应商同名且默认
+// 供应商不含）或供应商未知返回 ok=false——调用方自行决定回退语义。
+// GRF_MODEL 环境覆盖与会话层模型切换（server 的 trySwitchModel）共用。
+func (s *Settings) ResolveModel(name string) (provider, model string, ok bool) {
+	if name == "" {
+		return "", "", false
+	}
+	if s.Providers == nil {
+		return "", "", false
+	}
+	// 限定名以斜杠存在性判断——SplitDefault 对无斜杠输入返回非空
+	// provider（整个字符串），按 provider=="" 判定会让裸名分支永远
+	// 走不到（曾使 server 的裸模型名解析成为死代码）。
+	if strings.Contains(name, "/") {
+		pn, m := SplitDefault(name)
+		if m == "" {
+			return "", "", false
+		}
+		p, exists := s.Providers[pn]
+		if !exists {
+			return "", "", false
+		}
+		for _, x := range p.Models {
+			if x == m {
+				return pn, m, true
+			}
+		}
+		return "", "", false
+	}
+	defProvider, _ := SplitDefault(s.Default)
+	if p, exists := s.Providers[defProvider]; exists {
+		for _, x := range p.Models {
+			if x == name {
+				return defProvider, name, true
+			}
+		}
+	}
+	single := ""
+	for _, pn := range s.SortedProviderNames() {
+		for _, x := range s.Providers[pn].Models {
+			if x == name {
+				if single != "" {
+					return "", "", false // 多供应商同名且默认供应商不含：歧义
+				}
+				single = pn
+			}
+		}
+	}
+	if single == "" {
+		return "", "", false // 零命中
+	}
+	return single, name, true
 }
 
 // SortedProviderNames 提供商名列表（字典序）。

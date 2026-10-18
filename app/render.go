@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"strings"
 	"time"
@@ -148,6 +149,11 @@ func (a *App) collectBackground(ctx context.Context, wait time.Duration, print f
 // OnEvent/StreamHooks 回调）——需要自定义回调的嵌入方直接用
 // Root().Run / RunAutoGoal 驱动，不要经过本方法。
 func (a *App) RunTask(ctx context.Context, task string) error {
+	// 挂自带渲染会静默覆盖 New 时装的事件回调——显式配置过回调的嵌入方
+	// 多半是误用，落一行警告指路（StreamHooks 同理但无法探测）
+	if a.opts.VerboseEvents != nil {
+		log.Printf("警告: RunTask 挂载自带 stdout 渲染，app.Options.VerboseEvents 回调将被覆盖；需要自定义回调请直接用 Root().Run / RunAutoGoal 驱动")
+	}
 	ui := &stdoutUI{tty: term.IsTTY(int(os.Stdout.Fd())), w: os.Stdout}
 	ui.attach(a.Root())
 	host := a.opts.Host

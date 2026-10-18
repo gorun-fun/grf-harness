@@ -27,37 +27,49 @@ func testCfg() *config.Settings {
 	}
 }
 
-func TestResolveBareModel(t *testing.T) {
+func TestResolveModel(t *testing.T) {
 	cfg := testCfg()
 	// 默认供应商含该模型 → 默认供应商。
-	p, m := resolveBareModel(cfg, "gpt-x")
-	if p != "openai" || m != "gpt-x" {
-		t.Fatalf("默认供应商命中失败: %s/%s", p, m)
+	p, m, ok := cfg.ResolveModel("gpt-x")
+	if !ok || p != "openai" || m != "gpt-x" {
+		t.Fatalf("默认供应商命中失败: %s/%s/%v", p, m, ok)
 	}
 	// gpt-y 两家都有,但默认供应商含 → 仍默认供应商。
-	p, m = resolveBareModel(cfg, "gpt-y")
-	if p != "openai" || m != "gpt-y" {
-		t.Fatalf("默认供应商优先失败: %s/%s", p, m)
+	p, m, ok = cfg.ResolveModel("gpt-y")
+	if !ok || p != "openai" || m != "gpt-y" {
+		t.Fatalf("默认供应商优先失败: %s/%s/%v", p, m, ok)
 	}
 	// 仅一家提供 → 唯一命中。
-	p, m = resolveBareModel(cfg, "other-m")
-	if p != "other" || m != "other-m" {
-		t.Fatalf("唯一供应商命中失败: %s/%s", p, m)
+	p, m, ok = cfg.ResolveModel("other-m")
+	if !ok || p != "other" || m != "other-m" {
+		t.Fatalf("唯一供应商命中失败: %s/%s/%v", p, m, ok)
+	}
+	// 限定名：模型表内命中。
+	p, m, ok = cfg.ResolveModel("other/other-m")
+	if !ok || p != "other" || m != "other-m" {
+		t.Fatalf("限定名命中失败: %s/%s/%v", p, m, ok)
+	}
+	// 限定名：供应商未知/模型不在表内 → 放弃。
+	if _, _, ok = cfg.ResolveModel("ghost/gpt-x"); ok {
+		t.Fatal("未知供应商应放弃")
+	}
+	if _, _, ok = cfg.ResolveModel("openai/nope-m"); ok {
+		t.Fatal("模型不在表内应放弃")
 	}
 	// 默认供应商不含 gpt-y、且 openai/other 两家都提供 → 歧义放弃
 	// (不静默换到非预期供应商)。
 	cfg.Providers["fourth"] = &config.Provider{Models: []string{"fourth-m"}}
 	cfg.Default = "fourth/fourth-m"
-	if p, m = resolveBareModel(cfg, "gpt-y"); p != "" || m != "" {
-		t.Fatalf("歧义应放弃: %s/%s", p, m)
+	if p, m, ok = cfg.ResolveModel("gpt-y"); ok || p != "" || m != "" {
+		t.Fatalf("歧义应放弃: %s/%s/%v", p, m, ok)
 	}
 	// 零命中。
-	if p, m = resolveBareModel(cfg, "nope"); p != "" || m != "" {
-		t.Fatalf("零命中应放弃: %s/%s", p, m)
+	if p, m, ok = cfg.ResolveModel("nope"); ok || p != "" || m != "" {
+		t.Fatalf("零命中应放弃: %s/%s/%v", p, m, ok)
 	}
 	// 空名。
-	if p, m = resolveBareModel(cfg, ""); p != "" || m != "" {
-		t.Fatalf("空名应放弃: %s/%s", p, m)
+	if p, m, ok = cfg.ResolveModel(""); ok || p != "" || m != "" {
+		t.Fatalf("空名应放弃: %s/%s/%v", p, m, ok)
 	}
 }
 

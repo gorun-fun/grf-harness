@@ -16,8 +16,10 @@
 ```sh
 ./run.sh                # vet + build（产物 ./gh，跳过测试；macOS 会重做 adhoc 签名）
 ./run.sh macos|macos-arm64|linux|linux-arm64|windows|windows-arm64|all   # 交叉编译，产物在 dist/
-./run.sh all            # 6 平台全量；CI（.gitlab-ci.yml，仅 tag 触发、无 test job）用它构建后发布到
-                          # 10.8.0.5:/data/download/grf-harness/{平台}/{tag去v}/gh(.exe)；
+./run.sh all            # 6 平台全量；CI（.gitlab-ci.yml，仅 tag 触发：test 门禁 →
+                          # build → publish）用它构建后发布到
+                          # 10.8.0.5:/data/download/grf-harness/{平台}/{tag去v}/gh(.exe)，
+                          # 随产物生成 SHA256SUMS 清单（selfupdate.Install 下载校验）；
                           # 版本号经 ldflags 注入 config.Version（CI 取 tag、本地取 git describe，去 v 前缀）；
                           # 交叉编译产物 linux/windows 经 upx 压缩（UPX=0 禁用；darwin 与 windows/arm64
                           # 跳过，同 plugins/build.sh 规则）
@@ -31,9 +33,10 @@ go test ./...             # 无需网络与 API key（agent 回环用 httptest �
 go test -race ./agent ./tools ./term ./js ./llm ./server
 ```
 
-注意：本机 `~/.grf/grants.json` 已有可用的真实模型端点，直接 `./gh "任务"`
-即可做端到端冒烟；全屏 UI 冒烟可用 python3 pty.fork 驱动（打字→截图式解析
-ANSI→验证帧），历史会话输出落在 `.grf/sessions/`。
+注意：真实模型端点配置在 `~/.grf/settings.json` 的 providers（GRF_HOME 可
+重定位），默认模型可用时直接 `./gh "任务"` 即可做端到端冒烟；全屏 UI 冒烟可用
+python3 pty.fork 驱动（打字→截图式解析 ANSI→验证帧），历史会话输出落在
+`.grf/sessions/`。
 
 ## 硬性约束
 

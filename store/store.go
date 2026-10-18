@@ -84,7 +84,17 @@ func (s *Store) SaveSession(msgs []llm.Message) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	name := fmt.Sprintf("session-%s.json", time.Now().Format("20060102-150405"))
+	// 时间戳只精确到秒：多对话共享同一 workspace 时，两个对话的首次
+	// 落盘落在同一秒会生成同名文件互覆——已存在时追加序号区分
+	//（"-2"、"-3"…，列表解析见 ListSessions 对后缀的容忍）
+	base := fmt.Sprintf("session-%s", time.Now().Format("20060102-150405"))
+	name := base + ".json"
+	for i := 2; ; i++ {
+		if _, err := os.Stat(filepath.Join(dir, name)); os.IsNotExist(err) {
+			break
+		}
+		name = fmt.Sprintf("%s-%d.json", base, i)
+	}
 	s.cur = filepath.Join(dir, name)
 	if err := writeSession(s.cur, msgs, s.cacheKey); err != nil {
 		s.cur = ""
@@ -220,8 +230,16 @@ func (s *Store) ListSessions(n int) []SessionInfo {
 		if info.Title == "" {
 			info.Title = e.Name()
 		}
-		if t, err := time.ParseInLocation("20060102-150405",
-			strings.TrimSuffix(strings.TrimPrefix(e.Name(), "session-"), ".json"), time.Local); err == nil {
+		// 文件名 "session-<时间戳>[-<序号>].json"：序号后缀是同秒撞名的
+		// 去重产物（见 Save），解析失败时剥掉尾部 "-数字" 再试一次
+		stem := strings.TrimSuffix(strings.TrimPrefix(e.Name(), "session-"), ".json")
+		t, err := time.ParseInLocation("20060102-150405", stem, time.Local)
+		if err != nil {
+			if i := strings.LastIndexByte(stem, '-'); i >= 0 {
+				t, err = time.ParseInLocation("20060102-150405", stem[:i], time.Local)
+			}
+		}
+		if err == nil {
 			info.When = t
 		}
 		infos = append(infos, info)

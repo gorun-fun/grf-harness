@@ -525,35 +525,20 @@ func (s *Server) applyTools(sess *session, req *createRequest) error {
 
 // trySwitchModel model 参数 best-effort：provider/model 匹配配置则切换，
 // 否则沿用当前（保证任意 model 值可跑，ORS 合规测试语义）。
-// 裸模型名（无 provider/ 前缀）按供应商表解析：默认供应商含该模型即用
-// 默认供应商；否则恰有一个供应商提供时用它；多供应商同名且默认供应商
-// 不在其中则维持旧语义忽略（不静默换到非预期供应商）——宿主（如
-// openos 的 resolveModel shim、会话模型继承）不再需要自行补全限定名。
+// 解析统一走 config.Settings.ResolveModel（限定名校验供应商与模型表；
+// 裸模型名默认供应商优先、否则恰一家提供时用它；歧义/零命中忽略，不
+// 静默换到非预期供应商）——宿主（如 openos 的 resolveModel shim、会话
+// 模型继承）不需要自行补全限定名。
 func (s *Server) trySwitchModel(sess *session, model string) {
 	cfg, err := config.LoadFileForUpdate()
 	if err != nil || cfg == nil {
 		return
 	}
-	provider, name := config.SplitDefault(model)
-	if provider == "" {
-		provider, name = resolveBareModel(cfg, model)
-		if provider == "" {
-			return
-		}
-	}
-	p, ok := cfg.Providers[provider]
-	if !ok || name == "" {
+	provider, name, ok := cfg.ResolveModel(model)
+	if !ok {
 		return
 	}
-	found := false
-	for _, m := range p.Models {
-		if m == name {
-			found = true
-		}
-	}
-	if !found {
-		return
-	}
+	p := cfg.Providers[provider]
 	nc := llm.NewFromProvider(provider, *p, name)
 	// 缓存键迁移 + 子代理 client + 系统提示词身份行重写（身份行是会话构建期
 	// 烘焙的，切换须同步，否则模型以旧身份自我认知、自称旧模型名）。
@@ -561,41 +546,6 @@ func (s *Server) trySwitchModel(sess *session, model string) {
 	// 切换即读盘：client 与最新 settings.json 对齐，同步指纹避免下一回合
 	// 被 refreshDefaultClient 误判"配置又变了"再切回默认。
 	sess.clientFP = settingsFingerprint()
-}
-
-// resolveBareModel 裸模型名 → (provider, model)：默认供应商（settings
-// 的 Default 指向）含该模型优先；否则全表恰一家提供时用它；零命中或
-// 歧义返回空（调用方维持旧语义忽略）。
-func resolveBareModel(cfg *config.Settings, name string) (string, string) {
-	if name == "" {
-		return "", ""
-	}
-	var defProvider string
-	if pn, _ := config.SplitDefault(cfg.Default); pn != "" {
-		defProvider = pn
-	}
-	if p, ok := cfg.Providers[defProvider]; ok {
-		for _, m := range p.Models {
-			if m == name {
-				return defProvider, name
-			}
-		}
-	}
-	single := ""
-	for _, pn := range cfg.SortedProviderNames() {
-		for _, m := range cfg.Providers[pn].Models {
-			if m == name {
-				if single != "" {
-					return "", "" // 多供应商同名且默认供应商不含：歧义，放弃
-				}
-				single = pn
-			}
-		}
-	}
-	if single == "" {
-		return "", "" // 零命中
-	}
-	return single, name
 }
 
 // refreshDefaultClient settings.json 变更后让未显式指定模型的会话跟随
