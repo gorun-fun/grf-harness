@@ -168,6 +168,11 @@ func (s *Server) ListenAndServe(addr string) error {
 		Addr:              addr,
 		Handler:           s.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
+		// ReadTimeout 兜住慢速滴漏式请求体（64MB 上限内的合法上传留足
+		// 余量）；IdleTimeout 回收空闲 keepalive 连接。不设 WriteTimeout
+		// ——SSE 流式响应的写入时长不可预估，会掐断长回合
+		ReadTimeout: 10 * time.Minute,
+		IdleTimeout: 2 * time.Minute,
 	}
 	return srv.ListenAndServe()
 }

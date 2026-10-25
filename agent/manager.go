@@ -45,6 +45,18 @@ func NewManager(root *Agent, depthLimit int) *Manager {
 // Root 根 agent。
 func (m *Manager) Root() *Agent { return m.root }
 
+// SetPolicyAll 全树同步策略开关（set_policy 收紧/放宽时调用，含根）：
+// 已存在的子代理立即跟随新策略，不留"旧策略子代理"绕行通道。
+func (m *Manager) SetPolicyAll(observe, readLimit bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, h := range m.agents {
+		if h.Ag != nil && h.Ag.Fs != nil {
+			h.Ag.Fs.SetPolicy(observe, readLimit)
+		}
+	}
+}
+
 func (m *Manager) register(parent *Agent, label string, seed []llm.Message) (*Handle, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

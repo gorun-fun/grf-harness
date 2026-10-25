@@ -78,6 +78,8 @@ func (r *Registry) RegisterCustom(def llm.Tool, h Handler) {
 // 工具）：定义随请求发给模型，但调用不在本地执行——agent 循环遇到它时
 // 暂停回合（历史尾部保留未闭合 tool_call），由接入方执行后经
 // Agent.Resume 回传结果。名字规则同 RegisterCustom（不得与内置冲突）。
+// 同名重注册幂等（覆盖定义）：ORS 客户端惯例是每个请求都重发完整 tools
+// 数组，重注册是常态而非异常。
 func (r *Registry) RegisterClient(def llm.Tool) {
 	if def.Name == "" {
 		panic("tools: client tool definition needs a name")
@@ -88,7 +90,9 @@ func (r *Registry) RegisterClient(def llm.Tool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.handlers[def.Name]; ok {
-		panic("tools: tool already registered: " + def.Name)
+		if _, isClient := r.client[def.Name]; !isClient {
+			panic("tools: client tool name conflicts with registered tool: " + def.Name)
+		}
 	}
 	r.custom[def.Name] = def
 	r.handlers[def.Name] = clientPendingHandler

@@ -18,7 +18,7 @@
 ./run.sh macos|macos-arm64|linux|linux-arm64|windows|windows-arm64|all   # 交叉编译，产物在 dist/
 ./run.sh all            # 6 平台全量；CI（.gitlab-ci.yml，仅 tag 触发：test 门禁 →
                           # build → publish）用它构建后发布到
-                          # 10.8.0.5:/data/download/grf-harness/{平台}/{tag去v}/gh(.exe)，
+                          # 发布机 ${DEPLOY_DIR}（CI Variables）/{平台}/{tag去v}/gh(.exe)，
                           # 随产物生成 SHA256SUMS 清单（selfupdate.Install 下载校验）；
                           # 版本号经 ldflags 注入 config.Version（CI 取 tag、本地取 git describe，去 v 前缀）；
                           # 交叉编译产物 linux/windows 经 upx 压缩（UPX=0 禁用；darwin 与 windows/arm64
@@ -51,8 +51,8 @@ python3 pty.fork 驱动（打字→截图式解析 ANSI→验证帧），历史�
   不得与内置 28 个重名），内置工具不借道覆盖；ORS 客户端执行工具走 `RegisterClient`
   （模型调用时转入暂停协议，见 agent/pause.go）。
 - 回复**不做 markdown 渲染**，只显示原始文本（需求如此，勿加渲染）。
-- **Git 远端分工**：origin = 私有主库 `https://git.gorun.fun/ai/grf-harnees.git`
-  （推送一律走这里；"harnees"是仓库实名，勿"纠正"）；`https://git.gorun.fun/share/grf-harness`
+- **Git 远端分工**：origin = 私有主库（地址见本机 `git remote -v`，不入库文；
+  推送一律走这里）；`https://git.gorun.fun/share/grf-harness`
   是对外**公开镜像（模块安装地址），只读——禁止对它直接 push 或任何写操作**。
 
 ## 分层（功能线条，依赖自上而下、无环）
@@ -92,10 +92,21 @@ python3 pty.fork 驱动（打字→截图式解析 ANSI→验证帧），历史�
   与模型配置页。
 - `server`：Responses API 接入层（ORS 兼容；会话盘上为真、SSE 事件桥、
   client function tools、暂停应答链式续交、compact），`gh server` 子命令。
+  客户端工具同名重注册幂等（ORS 客户端每请求重发 tools 数组是常态，
+  `registry.go` RegisterClient 覆盖式；与内置重名/请求内重名在 `applyTools`
+  提前 400）；`parseRespID` 校验 sid 为 16 位 hex（sid 拼磁盘路径，防穿越）；
+  会话 meta/快照落盘 0600；HTTP 层设 ReadTimeout/IdleTimeout（不设
+  WriteTimeout——SSE 长写不可预估）。
 - `weixin`：微信 ClawBot 消息渠道（`gh connect weixin` 拉起守护进程，日志在
-  `~/.grf/weixin.log`；消息由本地 agent 回答）。守护进程生命周期管理也在本包：
-  `connect.go` 的 `Connect`/`Disconnect` + 平台文件 `daemon_unix.go`/`daemon_other.go`
-  （根目录 main.go 只做子命令分发）。
+  `~/.grf/weixin.log` 0600；消息由本地 agent 回答）。**渠道安全默认**：发送者
+  白名单（settings.json `weixin.allow_senders`，空 = 拒绝所有并回执指引，未授权
+  回执按发送者 60s 节流）；工作区默认 `~/.grf/weixin/ws`（不再默认整个 home）；
+  策略默认 `write-workspace|read-workspace`（`weixin.policy` 覆盖，全局 AutoApprove
+  不带入）；审批（逐工具/升级/计划）经微信问答转发（`host.go` 的 Approve* 实现，
+  超时按拒绝）；媒体下载钉域 `*.weixin.qq.com`（`media.go` checkCDNURL，防 SSRF）；
+  守护进程拉起用 pid 文件 O_EXCL 互斥（`connect.go` claimPidFile）。守护进程生命
+  周期管理也在本包：`connect.go` 的 `Connect`/`Disconnect` + 平台文件
+  `daemon_unix.go`/`daemon_other.go`（根目录 main.go 只做子命令分发）。
 - `mcp` + `plugin`：MCP 插件接入（docs/plugins.md）。`mcp` 是零依赖客户端
   （`stdio.go` spawn 子进程行分隔 JSON-RPC / `http.go` Streamable HTTP，
   仅 initialize/tools 子集，通知一律丢弃；stdio stderr 环形截留用于诊断）。
@@ -165,25 +176,36 @@ python3 pty.fork 驱动（打字→截图式解析 ANSI→验证帧），历史�
   不接升级协议；bash 沙箱叠加读黑名单——deny `/Users` `/root` `/home`
   后 allow 工作区，因 macOS 默认拒绝读会 SIGABRT 只能黑名单）。空值=默认 `off`（全关）；解析出错回退 `write-workspace`（保写侧）；
   `off` 全关。解析在
-  `config.ParsePolicy/NormalizePolicy`。写边界（文件工具只写工作区）
+  `config.ParsePolicy/NormalizePolicy`。bash 子进程环境剔除疑似密钥变量
+  （`tools/env.go` 的 ChildEnv：`*API_KEY*`/`*TOKEN*`/`*SECRET*` 等命名族；
+  mcp 插件子进程同规则，见 `mcp/stdio.go` 的 stripSecretEnv——两处同步改）。写边界（文件工具只写工作区）
   无条件生效不受 policy 控制；bash 越界拒绝标记 `[sandbox: file access
   denied ...]`；越权即问——写边界/bash 沙箱拒绝时 harness 直接挂起问
   `Host.ApproveEscalation` 返回 `EscalationDecision`（批准=当次放行，bash
   脱沙箱重跑同一命令；拒绝=终局，记录消费掉，模型带 sandbox_permissions
   重试也不会二次询问；write/edit 可选 GrantDir=授权目录，持久化到工作区
-  `.grf/grants.json` 仅本工作区生效，该目录下后续写越过写边界不再询问）。多租户用户隔离：Workspace=用户文件夹 +
+  `.grf/grants.json` 仅本工作区生效，该目录下后续写越过写边界不再询问——
+  但 grants 文件自身禁止模型侧写入（`fspolicy.go` CheckWrite 硬拒，防自写
+  授权）；随仓库分发的 grants 构建期披露进系统提示词（`GrantsNotice`），
+  且 "/" 与家目录级条目拒载）。多租户用户隔离：Workspace=用户文件夹 +
   默认 policy + 禁 bash + Host.ApproveEscalation 恒 false。
   `set_policy` 工具（仅根会话注册，`tools/policy.go`）：模型只能拉起弹窗
   并附理由，不可传目标 policy——用户从预制选项（`write-workspace` 工作区
   访问 / `off` 完全访问，见 `tools.SetPolicyOptions`）亲自选择，经
   `Host.AskUser` 弹窗呈现；选定后仅本会话生效、不落盘（`Harness.applyPolicy`
-  更新内存 Settings + 根 FsPolicy；bash 沙箱开关经 `FsPolicy.Limits` 实时
-  读取，立即生效）；未选或保持现状为拒绝，终局。
+  更新内存 Settings + 根 FsPolicy，且经 `Manager.SetPolicyAll` 全树同步到
+  已存在的子代理（不留旧策略绕行通道）；bash 沙箱开关经 `FsPolicy.Limits`
+  实时读取，立即生效）；未选或保持现状为拒绝，终局。
 - llm 有两条正文回退工具调用解析（`<tool_call>` XML 与 DeepSeek DSML），
   标记常量与变体归一正则统一在 `llm/fallback_tags.go`——三处（两个解析器 +
   stream_display 过滤）必须共用，勿再各写一套。
 - workflow 的 js 解释器是受控子集（无 Promise 全家桶/扩展运算符）；钩子误用
   抛错必须终止整个脚本（fail-loud，见 agent/workflow.go 的 panicWorkflow）。
+  资源护栏（`js/interp.go`，脚本=模型输出=半受信）：嵌套深度上限（表达式与
+  用户函数帧共用计数，防 Go 栈溢出 fatal）、步数预算 + 周期性 ctx 取消观察
+  （防纯自旋卡死回合，workflow 工具入口走 `RunEvalCtx` 传回合 ctx）、解析器
+  深度上限（`parser.go`）、字符串操作 16MB 上限（repeat/padEnd/拼接）；Future
+  goroutine 的 panic 一律转错误（不 re-panic，进程级崩溃面封死）。
 - goal/ralph/ask_user 仅根会话可用；子代理注册时就不挂这三个入口
   （`registerTools(root bool)`）。
 - 首行摘要等纯文本助手统一用 `term.FirstLine/LastLine`（agent/app/tui/store

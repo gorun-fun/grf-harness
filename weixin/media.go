@@ -1,8 +1,9 @@
 // media.go 入站媒体（图片/文件）处理：从消息 item_list 提取 CDN 引用，
-// 下载密文并 AES-128-ECB(PKCS7) 解密。协议来自官方 ClawBot 插件
-// （openclaw-weixin）逆向：媒体经 https://novac2c.cdn.weixin.qq.com/c2c
+// 下载密文并 AES-128-ECB(PKCS7) 解密。媒体经 https://novac2c.cdn.weixin.qq.com/c2c
 // 中转，key 有三种编码（image_item.aeskey 为 32 位 hex；media.aes_key
 // 为 base64，解码后可能是 16 字节裸 key 或 32 位 hex 字符串）。
+// 下载 URL 钉域 *.weixin.qq.com：入站消息里的 full_url 是外部可控字段，
+// 不钉域会把守护进程变成任意 URL 抓取器（SSRF）。
 package weixin
 
 import (
@@ -19,6 +20,23 @@ import (
 )
 
 const cdnBaseURL = "https://novac2c.cdn.weixin.qq.com/c2c"
+
+// checkCDNURL 媒体下载钉域：仅接受微信系域名（weixin.qq.com 及其子域），
+// scheme 限 http/https。full_url 来自入站消息（外部可控），不校验即 SSRF。
+func checkCDNURL(raw string) error {
+	pu, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("媒体 URL 解析失败: %w", err)
+	}
+	if pu.Scheme != "http" && pu.Scheme != "https" {
+		return fmt.Errorf("拒绝非 http(s) 的媒体 URL: %q", pu.Scheme)
+	}
+	host := pu.Hostname()
+	if host != "weixin.qq.com" && !strings.HasSuffix(host, ".weixin.qq.com") {
+		return fmt.Errorf("拒绝非微信 CDN 域的媒体下载: %s", host)
+	}
+	return nil
+}
 
 // mediaMaxBytes 单个媒体文件下载上限（与官方插件一致 100MB）。
 const mediaMaxBytes = 100 << 20
@@ -152,6 +170,9 @@ func downloadRef(ctx context.Context, ref *cdnRef) ([]byte, error) {
 	u := ref.fullURL
 	if u == "" {
 		u = cdnBaseURL + "/download?encrypted_query_param=" + url.QueryEscape(ref.encryptQueryParam)
+	}
+	if err := checkCDNURL(u); err != nil {
+		return nil, err
 	}
 	ciphertext, err := httpGet(ctx, u)
 	if err != nil {

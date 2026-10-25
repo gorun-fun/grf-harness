@@ -8,31 +8,32 @@ import (
 	"sync"
 
 	"git.gorun.fun/share/grf-harness/agent"
+	"git.gorun.fun/share/grf-harness/config"
 	"git.gorun.fun/share/grf-harness/llm"
-	"git.gorun.fun/share/grf-harness/tools"
 )
 
 // agentPool 每个微信用户一个独立 agent 会话(独立历史与工具工作区上下文)。
 // 消息经 userMux 分发到各用户的 goroutine 并发处理,pool 需加锁。
 type agentPool struct {
-	mu          sync.Mutex
-	opts        agent.Options
-	agents      map[string]*agent.Agent
-	hosts       map[string]*weixinHost
-	mux         *userMux // messageLoop 创建后回填(get 时必已就位)
-	autoApprove bool
+	mu       sync.Mutex
+	opts     agent.Options
+	agents   map[string]*agent.Agent
+	hosts    map[string]*weixinHost
+	mux      *userMux // messageLoop 创建后回填(get 时必已就位)
+	settings *config.Settings
 }
 
-func newAgentPool(client *llm.Client, systemPrompt, workspace string, autoApprove bool) *agentPool {
+func newAgentPool(client *llm.Client, systemPrompt, workspace string, settings *config.Settings) *agentPool {
 	return &agentPool{
 		opts: agent.Options{
 			Workspace:    workspace,
 			Client:       client,
 			SystemPrompt: systemPrompt,
+			Settings:     settings,
 		},
-		agents:      map[string]*agent.Agent{},
-		hosts:       map[string]*weixinHost{},
-		autoApprove: autoApprove,
+		agents:   map[string]*agent.Agent{},
+		hosts:    map[string]*weixinHost{},
+		settings: settings,
 	}
 }
 
@@ -53,12 +54,14 @@ func (p *agentPool) get(fromID string) (*agent.Agent, *weixinHost, error) {
 	if a, ok := p.agents[fromID]; ok {
 		return a, p.hosts[fromID], nil
 	}
+	// 内嵌 NoopHost 零值仅提供 NotifyEvent 语义；提问与三类审批
+	// (AskUser/ApproveTool/ApproveEscalation/ApprovePlan)均转发到微信
+	// 问答，远程渠道不静默放行任何审批
 	host := &weixinHost{
-		NoopHost: tools.NoopHost{AutoApprove: p.autoApprove},
-		bot:      p.mux.bot,
-		mux:      p.mux,
-		pool:     p,
-		fromID:   fromID,
+		bot:    p.mux.bot,
+		mux:    p.mux,
+		pool:   p,
+		fromID: fromID,
 	}
 	opts := p.opts
 	opts.Host = host

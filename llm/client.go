@@ -550,7 +550,7 @@ type ModelInfo struct {
 }
 
 // ModelsRich 查询模型列表（含上下文窗口）：data[].id 与裸数组 [{id}]
-// 两种应答形态都兼容；上下文窗口按社区常见字段名依次尝试（token-hub
+// 两种应答形态都兼容；上下文窗口按社区常见字段名依次尝试（自建网关
 // 三者同值；OpenRouter/SiliconFlow 用 context_length，vLLM 用
 // max_model_len）。按 id 字典序返回。
 func (c *Client) ModelsRich(ctx context.Context) ([]ModelInfo, error) {

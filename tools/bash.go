@@ -277,11 +277,13 @@ func (t *bashTool) build(runCtx context.Context, a bashArgs, unconfined bool) *e
 		cmd = exec.CommandContext(runCtx, sh.exe, sh.args(a.Command)...)
 	}
 	cmd.Dir = a.Workdir
-	env := os.Environ()
+	// 子进程环境剔除疑似密钥变量（env.go：模型可令命令打印环境，供应商
+	// 密钥与工具链秘密不应顺带暴露），再叠加 harness 事实变量
+	var extra []string
 	if t.deps.Env != nil {
-		env = append(env, t.deps.Env()...)
+		extra = t.deps.Env()
 	}
-	cmd.Env = env
+	cmd.Env = ChildEnv(extra)
 	cmd.WaitDelay = 5 * time.Second
 	// 停止语义集中在此（前台/后台共用）：unix 先 SIGINT 给清理机会，
 	// 强杀由 WaitDelay 兜底；windows 无跨进程信号，taskkill 终止进程树

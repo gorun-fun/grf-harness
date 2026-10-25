@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -143,7 +144,7 @@ func defaultClient() (*llm.Client, error) {
 }
 
 // settingsFingerprint settings.json 的轻量指纹（mtime^size），供回合边界
-// 检测"宿主改写了配置"（openos AISyncer 等供应商同步集成直接落盘
+// 检测"宿主改写了配置"（供应商同步类集成直接落盘
 // settings.json）。文件不存在返回 0。
 func settingsFingerprint() int64 {
 	fi, err := os.Stat(config.Path())
@@ -366,7 +367,7 @@ func writeMeta(dir string, meta *sessionMeta) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, "meta.json"), data, 0o644)
+	return os.WriteFile(filepath.Join(dir, "meta.json"), data, 0o600)
 }
 
 func readMeta(dir string) (*sessionMeta, error) {
@@ -388,10 +389,18 @@ func respID(sid string, seq int) string {
 	return fmt.Sprintf("resp_%s_%04d", sid, seq)
 }
 
+// sidRe 会话 id 形状（newSID 为 8 字节 hex）。sid 会拼进磁盘路径
+// （convDir），只接受服务端生成的形状——previous_response_id 来自请求
+// 体（外部输入），不校验即存在 "resp_.._.._1" 类穿越拼接面。
+var sidRe = regexp.MustCompile(`^[0-9a-f]{16}$`)
+
 // parseRespID 拆出 (sid, seq)。
 func parseRespID(id string) (string, int, error) {
 	parts := strings.Split(id, "_")
 	if len(parts) != 3 || parts[0] != "resp" {
+		return "", 0, fmt.Errorf("malformed response id")
+	}
+	if !sidRe.MatchString(parts[1]) {
 		return "", 0, fmt.Errorf("malformed response id")
 	}
 	seq, err := strconv.Atoi(parts[2])
@@ -443,7 +452,7 @@ func (sess *session) saveSnap(r *ResponseResource) {
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(sess.snapPath(seq), data, 0o644)
+	_ = os.WriteFile(sess.snapPath(seq), data, 0o600)
 }
 
 // loadSnap 读快照。

@@ -113,6 +113,11 @@ func (r *PluginRelease) Download(ctx context.Context, names []string, progress f
 	}
 	var saved []string
 	for _, f := range files {
+		// 文件名来自远端目录列表（外部输入）：拒绝任何路径分量，防
+		// "sub/../../x" 类条目经 filepath.Join 逃出插件目录任意写
+		if f == "" || f == "." || f == ".." || f != filepath.Base(f) || strings.ContainsAny(f, `/\`) {
+			return saved, fmt.Errorf("远端插件清单含非法文件名 %q，已中止下载", f)
+		}
 		dst := filepath.Join(PluginDir(), f)
 		wrap := func(done, total int64) { progress(f, done, total) }
 		if err := selfupdate.Install(ctx, r.URL(f), dst, wrap); err != nil {

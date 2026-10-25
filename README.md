@@ -37,7 +37,7 @@
 - **Responses API 服务**：`gh server` 以 ORS 兼容形状暴露 agent 能力
   （SSE 流式、client function tools、跨重启的暂停/恢复），见 `docs/server.md`
 - **微信渠道**：`gh connect weixin` 拉起守护进程，微信消息由本地 agent
-  回答（每用户独立会话）
+  回答（每用户独立会话；发送者白名单默认拒绝，见下方安全须知）
 
 ## 用法
 
@@ -258,3 +258,29 @@ go test -race ./agent ./tools ./term ./js ./llm ./server
   workflow/ralph/沙箱等）
 - markdown 不再渲染（原 glamour），按需求显示原始 md 文本
 - 保留：多提供商配置、会话持久化/恢复、输入历史、模型配置页
+
+## 安全须知（务必阅读）
+
+gh 驱动的是**本机 bash 与文件工具**，请按下列边界使用：
+
+- **策略默认**：未配置时 policy 为 `off`（无沙箱）。建议在 settings.json
+  配 `policy: write-workspace`（macOS 下 bash 经 sandbox-exec 限制写边界）；
+  **Linux/Windows 没有进程级 bash 沙箱**——write/edit 的文件工具边界在所有
+  平台生效，但 bash 命令在这些平台不受 OS 级限制，仅在交互形态经升级审批。
+- **gh server 是受控的本机 RCE 入口**：默认仅绑 `127.0.0.1:7400` 并要求
+  Bearer token；绑非环回地址前请读 `docs/server.md`。
+- **微信渠道默认拒绝所有发送者**：首次使用在 `~/.grf/settings.json` 配置
+  `weixin.allow_senders`（收到未授权回执时会附上你的微信 ID 供复制）；
+  渠道默认工作区 `~/.grf/weixin/ws`、默认策略
+  `write-workspace|read-workspace`，工具审批经微信问答转发。
+- **插件（MCP）工具不受 harness policy 约束**：插件是独立进程，读写与命令
+  执行不经过文件工具边界与 bash 沙箱；只安装你信任的插件。插件远程模式
+  （`serve --addr`）强制 Bearer token（缺省自动生成打印），且服务端不发
+  CORS 放行头。
+- **自更新/插件下载的完整性校验与产物同信道**：HTTPS + 同目录 SHA256SUMS
+  可拦传输损坏，防不了下载服务器自身失陷；`GRF_DOWNLOAD_BASE` 可改基址。
+- **工作区随附文件即不可信输入**：克隆的仓库可能携带 `.grf/grants.json`
+  （越工作区写预授权）与 `.grf/memory.json`（跨会话注入文本），两者在系统
+  提示词中有披露提示；不信任仓库请先删除其 `.grf/` 目录。
+- **秘密不会传给子进程**：bash 与插件子进程的环境会剔除名称疑似密钥的
+  变量（`*API_KEY*`/`*TOKEN*`/`*SECRET*` 等，`tools/env.go`）。

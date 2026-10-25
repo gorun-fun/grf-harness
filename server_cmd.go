@@ -45,6 +45,8 @@ func runServerCmd(args []string) {
 		Addr:              *addr,
 		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       10 * time.Minute, // 慢速滴漏请求体兜底；SSE 不可设 WriteTimeout
+		IdleTimeout:       2 * time.Minute,
 	}
 	go func() {
 		<-ctx.Done()

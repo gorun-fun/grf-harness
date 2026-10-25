@@ -128,12 +128,42 @@ func registerWrite(r *Registry, fs *FsPolicy) {
 		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 			return Result{}, err
 		}
-		if err := os.WriteFile(abs, []byte(a.Content), 0o644); err != nil {
+		if err := writeFileNoFollow(abs, []byte(a.Content)); err != nil {
 			return Result{}, err
 		}
 		fs.MarkWritten(abs)
 		return TextResult(fmt.Sprintf("wrote %d bytes to %s", len(a.Content), a.FilePath)), nil
 	})
+}
+
+// writeFileNoFollow 覆写/新建文件，末段符号链接不跟随：同目录临时文件
+// 写全量后 rename 替换。rename 换的是路径名本身（末段若是符号链接会被
+// 换成普通文件而不是被写入），堵上"边界检查（EvalSymlinks）与写入
+// （直接 WriteFile 会跟随链接）之间翻转符号链接"的 TOCTOU 越界写；
+// 同分区 rename 原子，写中途崩溃不留半截文件。权限沿用既有文件
+// （新建 0644）。
+func writeFileNoFollow(abs string, data []byte) error {
+	mode := os.FileMode(0o644)
+	if st, err := os.Stat(abs); err == nil {
+		mode = st.Mode().Perm()
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(abs), "."+filepath.Base(abs)+".new-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpName, mode); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, abs)
 }
 
 // ---- edit ----
@@ -181,7 +211,7 @@ func registerEdit(r *Registry, fs *FsPolicy) {
 		if a.ReplaceAll {
 			updated = strings.ReplaceAll(text, a.OldString, a.NewString)
 		}
-		if err := os.WriteFile(abs, []byte(updated), 0o644); err != nil {
+		if err := writeFileNoFollow(abs, []byte(updated)); err != nil {
 			return Result{}, err
 		}
 		fs.MarkWritten(abs)

@@ -1,5 +1,6 @@
-// host.go 微信侧工具宿主:把 ask_user_question 的提问(问题+选项)转发到
-// 微信对话框,用该用户的下一条消息作答;审批类回调沿用 Noop 语义。
+// host.go 微信侧工具宿主:把 ask_user_question 的提问(问题+选项)与三类
+// 审批(逐工具/沙箱升级/计划)都转发到微信对话框,用该用户的下一条消息
+// 作答;等待失败或超时一律按拒绝处理(远程渠道默认安全侧)。
 package weixin
 
 import (
@@ -88,6 +89,59 @@ func (h *weixinHost) askOne(ctx context.Context, q tools.Question) (any, error) 
 		fmt.Printf("💬 微信回复提问: %s\n", text)
 		return matchAnswer(q, text), nil
 	}
+}
+
+// ApproveTool 审批模式:逐工具确认转发到微信。回复"批准"(或选项 1)放行;
+// "拒绝"拒绝;其他文字按"拒绝+用户反馈"处理,反馈随拒绝原因回给模型。
+func (h *weixinHost) ApproveTool(ctx context.Context, name, args string) tools.ApproveDecision {
+	approved, feedback := h.confirm(ctx, fmt.Sprintf("🔒 审批执行工具 %s", name), args)
+	return tools.ApproveDecision{Approved: approved, Feedback: feedback}
+}
+
+// ApproveEscalation 沙箱升级审批:转发到微信,批准 = 当次放行。GrantDir
+// (目录级持久授权)不经此渠道授予——持久授权需要更强的本机交互确认,
+// 远程消息渠道只做单次决定。
+func (h *weixinHost) ApproveEscalation(ctx context.Context, tool, key, mode, justification string) tools.EscalationDecision {
+	approved, _ := h.confirm(ctx, fmt.Sprintf("🔒 工具 %s 请求越权执行(模式 %s)", tool, mode), justification)
+	return tools.EscalationDecision{Approved: approved}
+}
+
+// ApprovePlan 计划审批:转发到微信,批准退出计划模式执行,文字回复作为
+// 修改反馈。
+func (h *weixinHost) ApprovePlan(ctx context.Context, plan string) (bool, string) {
+	return h.confirm(ctx, "📋 计划审批(批准后退出计划模式开始执行)", plan)
+}
+
+// confirm 通用微信确认。发送失败/等待超时/用户新开会话都按拒绝处理。
+func (h *weixinHost) confirm(ctx context.Context, title, detail string) (bool, string) {
+	q := tools.Question{ID: "confirm", Question: title,
+		Options: []tools.Option{{Label: "批准"}, {Label: "拒绝"}}}
+	if detail != "" {
+		q.Question = title + "\n" + truncateForChat(detail, 800)
+	}
+	ans, err := h.askOne(ctx, q)
+	if err != nil {
+		fmt.Printf("审批等待失败(按拒绝处理): %v\n", err)
+		return false, ""
+	}
+	s, _ := ans.(string)
+	switch s {
+	case "批准":
+		return true, ""
+	case "拒绝":
+		return false, ""
+	default:
+		return false, s
+	}
+}
+
+// truncateForChat 微信文本截断(按 rune,保头)。
+func truncateForChat(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
 }
 
 // formatQuestion 把问题渲染成微信文本(编号列表 + 作答提示)。

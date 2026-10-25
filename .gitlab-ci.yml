@@ -4,9 +4,9 @@
 #          仅 tag 触发;普通分支推送不创建任何 job（runner 为低性能单并发机,
 #          不浪费槽位）
 # 流程:    test（主程序+插件全量测试,发布门禁）-> 交叉编译 6 平台产物(主程序 +
-#          插件) -> 按平台/版本目录发布到 10.8.0.5:
-#          /data/download/grf-harness/{目标平台}/{版本号}/gh(.exe)
-#          /data/download/grf-harness/{目标平台}/{版本号}/plugins/grf-*
+#          插件) -> 按平台/版本目录发布到发布机:
+#          ${DEPLOY_DIR}/{目标平台}/{版本号}/gh(.exe)
+#          ${DEPLOY_DIR}/{目标平台}/{版本号}/plugins/grf-*
 #          并随产物生成 SHA256SUMS 清单（版本目录与 plugins/ 子目录各一份,
 #          selfupdate.Install 下载后按同目录清单校验完整性）
 #          （版本号与产物内 config.Version 同源,即 tag 去掉 v 前缀;插件文件名
@@ -15,19 +15,16 @@
 # 零第三方依赖、纯标准库,直接用 golang 镜像跑 ./run.sh 即可,无需 Docker 打包。
 # 插件模块（plugins/,独立 go.mod）拉第三方依赖走 GOPROXY 国内镜像;主程序与
 # 插件的 linux/windows 产物均在各自 build.sh all 内经 upx 压缩。
-# 发布侧需在 GitLab CI/CD Variables 配置文件型变量:
-#   DEPLOY_SSH_PRIVATE_KEY (发布机 SSH 私钥,类型选 File)
+# 发布侧需在 GitLab CI/CD Variables 配置（值不入库,见下方 variables 注释）:
+#   DEPLOY_HOST / DEPLOY_USER / DEPLOY_DIR / DEPLOY_SSH_PRIVATE_KEY(File)
 # ============================================================================
 
 image: golang:1.26-alpine
 
 variables:
-  # 发布目标主机(内网,通过 SSH 登录)
-  DEPLOY_HOST: 10.8.0.5
-  # 发布机上的产物目录
-  DEPLOY_DIR: /data/download/grf-harness
-  # SSH 登录用户
-  DEPLOY_USER: root
+  # 发布目标（DEPLOY_HOST/DEPLOY_USER/DEPLOY_DIR 均为 CI/CD Variables,
+  # 值不入库;本文件保持可公开）
+  # DEPLOY_HOST / DEPLOY_USER / DEPLOY_DIR 由项目 CI Variables 注入
   # Go 构建缓存放进工作区,经下方 cache 跨 job 复用。docker 执行器每 job
   # 全新容器,默认 GOCACHE 随容器丢弃,导致每次冷编译 6 平台标准库(约 5 分半);
   # 命中缓存后只剩项目包的重编,低性能 runner 上约 1-2 分钟
@@ -91,7 +88,7 @@ build:
   rules:
     - if: '$CI_COMMIT_TAG'
 
-# 发布:主程序与插件按平台/版本目录 scp 到 10.8.0.5（目录随版本累积,
+# 发布:主程序与插件按平台/版本目录 scp 到发布机（目录随版本累积,
 # 历史版本可回溯下载;插件落在版本目录的 plugins/ 子目录,gh plugins
 # download 即按此布局探测下载）
 publish:

@@ -46,6 +46,19 @@ type Settings struct {
 	// ~/.grf/plugins 下的可执行文件；[]（显式空数组）= 关闭自动发现；
 	// 非空 = 仅使用列出的插件（本地 command / 远程 url，见 Plugin）。
 	Plugins []Plugin `json:"plugins,omitempty"`
+	// Weixin 微信渠道（gh connect weixin）的安全配置；nil = 全默认
+	// （白名单空 = 拒绝所有消息，策略 = write-workspace|read-workspace）。
+	Weixin *Weixin `json:"weixin,omitempty"`
+}
+
+// Weixin 微信渠道安全配置：微信消息是任意外部输入，渠道默认必须收紧。
+type Weixin struct {
+	// AllowSenders 允许驱动 agent 的微信用户 id（from_user_id）白名单。
+	// 空 = 拒绝所有消息并回执指引（默认拒绝）。
+	AllowSenders []string `json:"allow_senders,omitempty"`
+	// Policy 渠道策略覆盖；空 = write-workspace|read-workspace（比全局
+	// 默认 off 更紧——远程消息渠道驱动的是本机 bash 与文件工具）。
+	Policy string `json:"policy,omitempty"`
 }
 
 // Plugin 一个 MCP 插件接入项：本地可执行文件（stdio 模式，harness 直接

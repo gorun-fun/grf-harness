@@ -21,6 +21,9 @@ const (
 	JobKilled  = "killed"
 )
 
+// jobBufCap 单作业输出缓冲上限（内存护栏，见 emit 写入点）。
+const jobBufCap = 8 << 20
+
 type job struct {
 	id     string
 	kind   string // "stream"（bash 后台）| "final"（一次性结果）
@@ -65,8 +68,18 @@ func (m *JobManager) StartStream(kind, descr string, run func(ctx context.Contex
 		defer cancel() // 作业结束后释放 ctx 资源（对已完成的 ctx 重复 cancel 无害）
 		err := run(ctx, func(s string) {
 			j.mu.Lock()
-			j.buf.WriteString(s)
-			j.cond.Broadcast()
+			// 输出缓冲有上限：无界作业（yes / cat /dev/zero）会把进程
+			// 内存吃穿；触顶截断并标注，增量读取方看到标记即知有丢失
+			if j.buf.Len() < jobBufCap {
+				if j.buf.Len()+len(s) > jobBufCap {
+					remain := jobBufCap - j.buf.Len()
+					j.buf.WriteString(s[:remain])
+					j.buf.WriteString("\n[output truncated: job buffer cap reached]\n")
+				} else {
+					j.buf.WriteString(s)
+				}
+				j.cond.Broadcast()
+			}
 			j.mu.Unlock()
 		})
 		j.mu.Lock()

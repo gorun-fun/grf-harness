@@ -4,6 +4,7 @@
 package mcp
 
 import (
+	"regexp"
 	"bufio"
 	"context"
 	"encoding/json"
@@ -64,7 +65,10 @@ func DialStdio(ctx context.Context, command []string, extraEnv []string) (*Clien
 
 func startStdio(command []string, extraEnv []string) (*stdioTransport, error) {
 	cmd := exec.Command(command[0], command[1:]...)
-	cmd.Env = append(os.Environ(), extraEnv...)
+	// 子进程环境剔除疑似密钥变量（与 tools/env.go 同规则副本——本包不
+	// 依赖 tools，规则改动两处同步）：插件代码不受 harness 策略约束，
+	// 父进程环境里的 LLM 密钥等不应默认带过去
+	cmd.Env = stripSecretEnv(extraEnv)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -264,4 +268,22 @@ func (t *stdioTransport) Close() error {
 		_ = t.cmd.Process.Kill()
 		return nil
 	}
+}
+
+// secretEnvRe 疑似密钥变量名匹配（与 tools/env.go 同规则副本——本包不
+// 依赖 tools 层，规则改动两处同步）。
+var secretEnvRe = regexp.MustCompile(`(?i)(api[_-]?key|apikey|secret|token|password|passwd|credential)`)
+
+// stripSecretEnv 构造插件子进程环境：父进程环境剔除疑似密钥变量后追加
+// extraEnv（连接配置显式注入的部分不剔除）。
+func stripSecretEnv(extra []string) []string {
+	env := os.Environ()
+	out := make([]string, 0, len(env)+len(extra))
+	for _, kv := range env {
+		if i := strings.IndexByte(kv, '='); i > 0 && secretEnvRe.MatchString(kv[:i]) {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return append(out, extra...)
 }

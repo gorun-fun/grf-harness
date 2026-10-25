@@ -1,6 +1,7 @@
 package js
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -291,5 +292,58 @@ func TestCondExpr(t *testing.T) {
 	}
 	if v != "big" {
 		t.Fatalf("got %v", v)
+	}
+}
+
+// ---- 资源护栏回归（安全修复：失控递归/自旋曾可杀死进程或永久卡死回合）----
+
+func TestGuardRunawayRecursion(t *testing.T) {
+	ip := New(nil)
+	// 26 字节即可触发未防护时的 Go 栈溢出 fatal（不可 recover）
+	_, err := ip.RunEval(`const f = (n) => f(n+1); return f(0);`)
+	if err == nil || !strings.Contains(err.Error(), "nesting depth") {
+		t.Fatalf("want depth-limit error, got %v", err)
+	}
+}
+
+func TestGuardInfiniteLoopStepBudget(t *testing.T) {
+	ip := New(nil)
+	_, err := ip.RunEval(`var i = 0; while (true) { i++; } return i;`)
+	if err == nil || !strings.Contains(err.Error(), "step budget") {
+		t.Fatalf("want step-budget error, got %v", err)
+	}
+}
+
+func TestGuardLoopCtxCancel(t *testing.T) {
+	ip := New(nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+	_, err := ip.RunEvalCtx(ctx, `var i = 0; while (true) { i++; } return i;`)
+	if err == nil || !strings.Contains(err.Error(), "cancelled") {
+		t.Fatalf("want cancellation error, got %v", err)
+	}
+}
+
+func TestGuardParseDepth(t *testing.T) {
+	// 深嵌套括号：未防护时解析器自身递归栈溢出（fatal）
+	_, err := Parse(strings.Repeat("(", 200_000) + "1" + strings.Repeat(")", 200_000))
+	if err == nil || !strings.Contains(err.Error(), "nesting too deep") {
+		t.Fatalf("want parse-depth error, got %v", err)
+	}
+}
+
+func TestGuardStringBombs(t *testing.T) {
+	ip := New(nil)
+	if _, err := ip.RunEval(`return "x".repeat(-1);`); err == nil {
+		t.Fatal("negative repeat must error")
+	}
+	if _, err := ip.RunEval(`return "x".repeat(1000000000);`); err == nil {
+		t.Fatal("huge repeat must error")
+	}
+	if _, err := ip.RunEval(`var s = "a"; for (var i = 0; i < 40; i++) { s = s + s; } return s;`); err == nil {
+		t.Fatal("doubling concat must error past cap")
 	}
 }

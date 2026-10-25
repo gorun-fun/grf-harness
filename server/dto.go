@@ -94,8 +94,8 @@ type grfSessionConfig struct {
 	Policy       string `json:"policy,omitempty"` // write-workspace|read-workspace 组合 | off（默认）
 	AutoApprove  *bool  `json:"auto_approve,omitempty"`
 	SystemPrompt string `json:"system_prompt,omitempty"`
-	// HostContext 宿主环境简报：嵌入方（goder/openos 等宿主平台）注入的
-	// 运行环境事实（"你运行在 OpenOS 桌面，当前用户是 X、角色 Y，可用
+	// HostContext 宿主环境简报：嵌入方（宿主平台）注入的
+	// 运行环境事实（"你运行在宿主桌面，当前用户是 X、角色 Y，可用
 	// os_* 工具操作桌面"之类）。作为独立段拼在 custom 身份段之后，
 	// 与 system_prompt 叠加而非替换——宿主不需要（也不应该）为了传达
 	// 环境信息接管整段身份提示词。仅会话首建生效，随 meta.json 持久化。

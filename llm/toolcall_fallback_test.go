@@ -8,14 +8,14 @@ import (
 
 func TestFallbackAttrForm(t *testing.T) {
 	// 用户实测的畸形属性形式（arguments 用冒号、值为裸 JSON）
-	m := Message{Content: `我来读取该文件。<tool_call name="read" arguments: { "file_path": "/Users/wenjun/AiProjects/test/src/snake.js" } />`}
+	m := Message{Content: `我来读取该文件。<tool_call name="read" arguments: { "file_path": "/home/dev/projects/test/src/snake.js" } />`}
 	if !fallbackContentToolCalls(&m) {
 		t.Fatal("应识别出属性形式工具调用")
 	}
 	if len(m.ToolCalls) != 1 || m.ToolCalls[0].Name() != "read" {
 		t.Fatalf("调用解析错误: %+v", m.ToolCalls)
 	}
-	if want := `{ "file_path": "/Users/wenjun/AiProjects/test/src/snake.js" }`; m.ToolCalls[0].Arguments() != want {
+	if want := `{ "file_path": "/home/dev/projects/test/src/snake.js" }`; m.ToolCalls[0].Arguments() != want {
 		t.Fatalf("arguments = %q, want %q", m.ToolCalls[0].Arguments(), want)
 	}
 	if m.ToolCalls[0].ID == "" || m.ToolCalls[0].Type != "function" {
@@ -109,7 +109,7 @@ func TestFallbackReasoningAndContentDedup(t *testing.T) {
 
 func TestFallbackGarbageTailArgs(t *testing.T) {
 	// 参数 JSON 后面被模型追加了垃圾尾巴，应提取第一个配平对象
-	m := Message{Content: `<tool_call name="bash" arguments={"command": "mkdir -p src", "description": "Create src directory", "workdir": "/Users/wenjun/AiProjects/test/sokoban"},"name":"bash"} />`}
+	m := Message{Content: `<tool_call name="bash" arguments={"command": "mkdir -p src", "description": "Create src directory", "workdir": "/home/dev/projects/test/sokoban"},"name":"bash"} />`}
 	if !fallbackContentToolCalls(&m) {
 		t.Fatal("应识别出工具调用")
 	}
@@ -138,7 +138,7 @@ func TestFallbackArgsWithRedirect(t *testing.T) {
 
 // 用户实测：开标签是 <tool_call>、闭合却混用截断的 DSML 风格标签
 func TestFallbackMixedDSMLCloser(t *testing.T) {
-	m := Message{Content: "<tool_call>\n{\"name\": \"glob\", \"arguments\": {\"pattern\": \"**/*\", \"path\": \"/Users/wenjun/AiProjects/test\"}}\n</｜｜DSML｜｜tool_cal>"}
+	m := Message{Content: "<tool_call>\n{\"name\": \"glob\", \"arguments\": {\"pattern\": \"**/*\", \"path\": \"/home/dev/projects/test\"}}\n</｜｜DSML｜｜tool_cal>"}
 	if !fallbackContentToolCalls(&m) {
 		t.Fatal("应识别出混搭闭合的工具调用")
 	}

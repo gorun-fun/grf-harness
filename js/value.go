@@ -156,10 +156,18 @@ func binOp(op string, l, r Value) (Value, error) {
 	switch op {
 	case "+":
 		if ls, ok := l.(string); ok {
-			return ls + ToString(r), nil
+			out := ls + ToString(r)
+			if len(out) > maxStringBytes {
+				return nil, rtErr("string concatenation exceeds %d-byte cap (memory guard)", maxStringBytes)
+			}
+			return out, nil
 		}
 		if rs, ok := r.(string); ok {
-			return ToString(l) + rs, nil
+			out := ToString(l) + rs
+			if len(out) > maxStringBytes {
+				return nil, rtErr("string concatenation exceeds %d-byte cap (memory guard)", maxStringBytes)
+			}
+			return out, nil
 		}
 		return ToNumber(l) + ToNumber(r), nil
 	case "-":

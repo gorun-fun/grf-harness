@@ -20,6 +20,39 @@ import (
 // ClawBot 拆成两条消息先后到达,这里等一小段静默期把它们并成同一轮输入。
 const mergeWindow = 2 * time.Second
 
+// senderGate 发送者白名单：微信消息是任意外部输入（驱动本机 bash 与
+// 文件工具），不在名单内的消息一律拒绝并回执指引（回执按发送者节流，
+// 防被刷屏消耗回复配额）。
+type senderGate struct {
+	mu    sync.Mutex
+	allow map[string]bool
+	last  map[string]time.Time
+}
+
+// newSenderGate 构建白名单（空白名单 = 拒绝所有，默认安全侧）。
+func newSenderGate(ids []string) *senderGate {
+	m := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if id = strings.TrimSpace(id); id != "" {
+			m[id] = true
+		}
+	}
+	return &senderGate{allow: m, last: map[string]time.Time{}}
+}
+
+func (g *senderGate) ok(id string) bool { return g.allow[id] }
+
+// noticeDue 未授权回执节流：同一发送者 60 秒至多一条。
+func (g *senderGate) noticeDue(id string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if t := g.last[id]; !t.IsZero() && time.Since(t) < time.Minute {
+		return false
+	}
+	g.last[id] = time.Now()
+	return true
+}
+
 // inboundPiece 一条入站消息提取出的内容(文本/图片/文件)。
 type inboundPiece struct {
 	fromID       string
@@ -381,7 +414,7 @@ func saveInboundFile(workspace, name string, data []byte) (string, error) {
 		name = fmt.Sprintf("%d_%s", time.Now().UnixMilli(), name)
 	}
 	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return "", err
 	}
 	return path, nil

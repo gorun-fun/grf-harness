@@ -12,7 +12,7 @@ func resolveFixture() *Settings {
 		Default: "GRF/glm-5.3-flash",
 		Providers: map[string]*Provider{
 			"GRF":   {BaseURL: "https://grf.example/v1", APIKey: "grf-key", Models: []string{"glm-5.3-flash", "glm-5.3"}},
-			"proxy": {BaseURL: "https://proxy.example/v1", APIKey: "proxy-key", Models: []string{"deepseek-v4-flash"}},
+			"proxy": {BaseURL: "https://proxy.example/v1", APIKey: "proxy-key", Models: []string{"ds-example-chat"}},
 		},
 	}
 }
@@ -25,11 +25,11 @@ func TestResolveModel(t *testing.T) {
 		model string
 	}{
 		{"GRF/glm-5.3-flash", "GRF", "glm-5.3-flash"},             // 限定名命中
-		{"proxy/deepseek-v4-flash", "proxy", "deepseek-v4-flash"}, // 限定名切供应商
+		{"proxy/ds-example-chat", "proxy", "ds-example-chat"}, // 限定名切供应商
 		{"GRF/never-registered", "", ""},                          // 限定名模型不在表内
 		{"ghost/model", "", ""},                                   // 限定名供应商未知
 		{"glm-5.3", "GRF", "glm-5.3"},                             // 裸名在默认供应商
-		{"deepseek-v4-flash", "proxy", "deepseek-v4-flash"},       // 裸名恰一家提供
+		{"ds-example-chat", "proxy", "ds-example-chat"},       // 裸名恰一家提供
 		{"no-such-model", "", ""},                                 // 裸名零命中
 		{"", "", ""},                                              // 空名
 	}
@@ -71,10 +71,10 @@ func TestLoadGRFModel(t *testing.T) {
 		baseURL  string
 	}{
 		{"GRF/glm-5.3-flash", "GRF", "glm-5.3-flash", "https://grf.example/v1"},               // 限定名：剥前缀（修复点）
-		{"proxy/deepseek-v4-flash", "proxy", "deepseek-v4-flash", "https://proxy.example/v1"}, // 切供应商
+		{"proxy/ds-example-chat", "proxy", "ds-example-chat", "https://proxy.example/v1"}, // 切供应商
 		{"GRF/brand-new", "GRF", "brand-new", "https://grf.example/v1"},                       // 已知供应商+未登记：信任覆盖
 		{"glm-5.3-flash", "GRF", "glm-5.3-flash", "https://grf.example/v1"},                   // 裸名在默认供应商：等价现状
-		{"deepseek-v4-flash", "proxy", "deepseek-v4-flash", "https://proxy.example/v1"},       // 裸名恰一家：切换
+		{"ds-example-chat", "proxy", "ds-example-chat", "https://proxy.example/v1"},       // 裸名恰一家：切换
 		{"ghost/model", "GRF", "ghost/model", "https://grf.example/v1"},                       // 未知供应商：整串原样（老行为）
 		{"whatever", "GRF", "whatever", "https://grf.example/v1"},                             // 零命中：原样（老行为）
 	}

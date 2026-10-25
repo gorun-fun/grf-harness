@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -23,7 +24,10 @@ const replyOnLlmError = "⚠️ AI 服务暂时不可用,请稍后再试"
 
 // Run 执行 connect weixin:扫码登录(必要时)→ 长轮询收消息 → 交本地 agent
 // (全部 28 个工具)处理并回复。阻塞直到 ctx 取消;退出前发送 notifystop。
-// workspace 为 agent 工作区;空串用用户 home 目录。
+// workspace 为 agent 工作区;空串用 ~/.grf/weixin/ws(微信消息是任意外部
+// 输入,不默认放开整个 home)。渠道安全配置(发送者白名单/策略)取
+// settings.json 的 weixin 段,默认:白名单空=拒绝所有消息、策略
+// write-workspace|read-workspace、审批一律经微信问答不静默放行。
 func Run(ctx context.Context, systemPrompt, workspace string) error {
 	// agent 使用 gh 当前生效的模型配置(~/.grf/settings.json)
 	eff, err := config.Load()
@@ -33,15 +37,39 @@ func Run(ctx context.Context, systemPrompt, workspace string) error {
 	client := llm.NewFromEffective(eff)
 	fmt.Printf("🤖 模型: %s (%s)\n", eff.Model, eff.BaseURL)
 
+	cfg, cerr := config.LoadFileForUpdate()
+	if cerr != nil {
+		return fmt.Errorf("加载配置失败: %w", cerr)
+	}
+	wxcfg := cfg.Weixin
+	if wxcfg == nil {
+		wxcfg = &config.Weixin{}
+	}
+
 	if workspace == "" {
-		home, herr := os.UserHomeDir()
-		if herr != nil {
-			workspace, _ = os.Getwd()
-		} else {
-			workspace = home
-		}
+		workspace = filepath.Join(config.Home(), "weixin", "ws")
+	}
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		return fmt.Errorf("创建微信渠道工作区失败: %w", err)
 	}
 	fmt.Printf("🛠  agent 工作区: %s\n", workspace)
+
+	// 策略:显式配置优先,否则渠道默认收紧为 write-workspace|read-workspace
+	policy := "write-workspace|read-workspace"
+	if strings.TrimSpace(wxcfg.Policy) != "" {
+		policy = config.NormalizePolicy(wxcfg.Policy)
+	}
+	// 渠道专用 settings 副本:全局 AutoApprove 不带入(审批经微信问答,
+	// 见 weixinHost 的 Approve* 实现),policy 用渠道值
+	channelCfg := *cfg
+	channelCfg.Policy = policy
+	channelCfg.AutoApprove = false
+	fmt.Printf("🛡  渠道策略: %s\n", policy)
+	if len(wxcfg.AllowSenders) == 0 {
+		fmt.Println("⚠️  未配置白名单(settings.json 的 weixin.allow_senders):将拒绝所有消息")
+	} else {
+		fmt.Printf("👥 发送者白名单: %d 个微信用户\n", len(wxcfg.AllowSenders))
+	}
 
 	bot := NewClient()
 	st := LoadState()
@@ -74,11 +102,7 @@ func Run(ctx context.Context, systemPrompt, workspace string) error {
 	}()
 
 	fmt.Println("🤖 Bot 已上线,开始监听微信消息(Ctrl+C 退出)…")
-	autoApprove := false
-	if settings, serr := config.LoadFileForUpdate(); serr == nil {
-		autoApprove = settings.AutoApprove
-	}
-	return messageLoop(ctx, bot, st, client, systemPrompt, workspace, autoApprove)
+	return messageLoop(ctx, bot, st, client, systemPrompt, workspace, &channelCfg, wxcfg.AllowSenders)
 }
 
 // LoginInteractive 前台交互式扫码登录:二维码链接打终端、配对码从 stdin 读,
@@ -110,10 +134,12 @@ func LoginInteractive(ctx context.Context) error {
 	return nil
 }
 
-// messageLoop 长轮询主循环:getupdates → 逐条处理 → 回复。token 失效时重新扫码。
+// messageLoop 长轮询主循环:getupdates → 逐条处理(白名单校验)→ 回复。
+// token 失效时重新扫码。settings 为渠道专用配置副本,allow 为发送者白名单。
 func messageLoop(ctx context.Context, bot *Client, st *State, client *llm.Client,
-	systemPrompt, workspace string, autoApprove bool) error {
-	pool := newAgentPool(client, systemPrompt, workspace, autoApprove)
+	systemPrompt, workspace string, settings *config.Settings, allow []string) error {
+	pool := newAgentPool(client, systemPrompt, workspace, settings)
+	gate := newSenderGate(allow)
 	mux := newUserMux(ctx, bot, pool)
 	pool.mux = mux
 	for {
@@ -156,6 +182,16 @@ func messageLoop(ctx context.Context, bot *Client, st *State, client *llm.Client
 					continue
 				}
 				if piece := extractPiece(msg); piece != nil {
+					// 白名单默认拒绝:未授权发送者的消息不进 agent,
+					// 回执指引(按发送者节流防刷屏)告知如何授权
+					if !gate.ok(piece.fromID) {
+						fmt.Printf("⛔️ 拒绝未授权发送者 %s 的消息\n", piece.fromID)
+						if gate.noticeDue(piece.fromID) {
+							_ = bot.SendMessage(ctx, piece.fromID, piece.contextToken,
+								"⛔️ 未授权。请机主在 ~/.grf/settings.json 的 weixin.allow_senders 中添加: \""+piece.fromID+"\"")
+						}
+						continue
+					}
 					mux.push(piece)
 				}
 			}

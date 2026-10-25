@@ -47,7 +47,10 @@ func fallbackContentToolCalls(m *Message) bool {
 	// 就会静默结束。
 	for _, src := range []*string{&m.Content, &m.Reasoning} {
 		// DSML 标记检测放宽到 "DSML" 关键字：竖线可能是全半角/空格变体，
-		// 归一化在 extractDSMLCalls 内部进行
+		// 归一化在 extractDSMLCalls 内部进行。这只是性能预筛而非安全
+		// 边界——真正的提取要求完整标记语法（<｜｜DSML｜｜invoke …>），
+		// 仅有提及 DSML 的普通文本不会产出任何调用；且真实模型存在裸
+		// invoke 块（无 tool_calls 外层），不能按 "tool" 字样收紧
 		if strings.Contains(*src, "DSML") {
 			extracted, cleaned := extractDSMLCalls(*src)
 			calls = append(calls, extracted...)

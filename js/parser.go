@@ -142,9 +142,26 @@ type AwaitExpr struct{ X Node }
 // ---- 解析器 ----
 
 type parser struct {
-	toks []Tok
-	pos  int
+	toks  []Tok
+	pos   int
+	depth int // 语法嵌套深度（expr/unary/primary 三处递归入口共用计数）
 }
+
+// maxParseDepth 语法嵌套深度上限：递归下降解析器自身也消耗 Go 栈，
+// 超长嵌套表达式（数 MB 的左括号/数组字面量）会把解析打爆成不可恢复
+// 的栈溢出 fatal，超限按语法错误终止。
+const maxParseDepth = 10_000
+
+// enter 语法递归入口（expr/unary/primary）配对计数，超深即语法错误。
+func (p *parser) enter() error {
+	p.depth++
+	if p.depth > maxParseDepth {
+		return p.errf("syntax nesting too deep (>%d)", maxParseDepth)
+	}
+	return nil
+}
+
+func (p *parser) exit() { p.depth-- }
 
 // Parse 解析整段程序。
 func Parse(src string) (*Program, error) {
@@ -562,6 +579,10 @@ func binPrec(op string) int {
 }
 
 func (p *parser) expr(minPrec int) (Node, error) {
+	if err := p.enter(); err != nil {
+		return nil, err
+	}
+	defer p.exit()
 	left, err := p.unary()
 	if err != nil {
 		return nil, err
@@ -705,6 +726,10 @@ func incDec(op, name string) Node {
 }
 
 func (p *parser) unary() (Node, error) {
+	if err := p.enter(); err != nil {
+		return nil, err
+	}
+	defer p.exit()
 	t := p.cur()
 	if t.Type == TokPunct {
 		switch t.Val {
@@ -830,6 +855,10 @@ func (p *parser) args() ([]Node, error) {
 }
 
 func (p *parser) primary() (Node, error) {
+	if err := p.enter(); err != nil {
+		return nil, err
+	}
+	defer p.exit()
 	t := p.cur()
 	switch t.Type {
 	case TokNum:

@@ -86,7 +86,7 @@ gh server [-addr 127.0.0.1:7400] [-data ~/.grf/server] [-token <t>]
                                // 运行环境事实，独立段拼在 system_prompt 之后、
                                // 内置工具说明之前（叠加而非替换）；根与子代理
                                // 共享；GET /v1/conversations/{id} 的 host_context
-                               // 字段回显落定值。宿主（如 goder/openos）用它让
+                               // 字段回显落定值。宿主用它让
                                // 会话知道自己运行在哪个平台里，不必为环境信息
                                // 接管整段身份提示词。
   "default_skill": "grf-start", // 默认技能名（目录中存在该名字时 SKILL.md 全文注入系统提示词）；缺省不注入任何默认技能
@@ -165,12 +165,12 @@ exit_plan_mode 计划审批、enter_plan_mode 进入申请经 `Host.AskUser`
 | `GRF_TURN_WEBHOOK_SECRET` | 事件体 HMAC-SHA256 签名密钥；配置后附 `X-GRF-Signature: sha256=<hex(body)>` 头，接收方应常量时间校验后再信任事件体 |
 | `GRF_SERVER_ACCESS_LOG` | 置 `off` 关闭访问日志（默认开启：每请求一行"方法 路径 状态 耗时 来源"写 stderr，SSE 流在结束后记录） |
 
-两项均启动期读取（goder-serve 等宿主网关经子进程 env 注入，见其
-`GODER_GH_ENV_<KEY>` 透传通道）。
+两项均启动期读取（宿主网关经子进程 env 注入，见其
+`HOST_GH_ENV_<KEY>` 透传通道（宿主侧约定名，gh 只认最终注入的 KEY））。
 
 **settings.json 热跟随**：回合边界检测配置文件变更（mtime+size 指纹），
 未显式指定 `model` 的存量会话在下一回合自动跟随新默认供应商/模型
-（宿主 AISyncer 类集成直接落盘改配置即可生效，无需重启/空闲回收进程）。
+（配置同步类集成直接落盘改配置即可生效，无需重启/空闲回收进程）。
 显式 `model` 走 trySwitchModel，本就即时读盘。
 
 ## 9. ORS 合规对照（17 项浏览器/CLI 套件 → gh 实现）

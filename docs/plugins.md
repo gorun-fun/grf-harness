@@ -45,7 +45,7 @@ gh plugins                 # 体检：列出插件、连接状态、工具清单
     // 本地模式：显式指定可执行文件与参数（auto 发现之外的插件）
     {"name": "browser", "command": ["/opt/grf/grf-browser", "--headless=false"]},
     // 远程模式：MCP Streamable HTTP 端点（远端先启动 serve）
-    {"name": "remote-browser", "url": "http://10.8.0.5:7610/mcp", "token": "共享密钥"}
+    {"name": "remote-browser", "url": "http://10.0.0.1:7610/mcp", "token": "共享密钥"}
   ]
 }
 ```
@@ -158,8 +158,13 @@ chromedp（纯 Go CDP 客户端）实现，工具面对齐微软 playwright-mcp 
   **计划模式**（未标只读的插件工具一律拦截，`agent/turn.go` 的
   `planBlocked`）。
 - 插件进程与主程序**同权限**运行（文件系统/网络不受 harness 沙箱约束
-  ——沙箱只约束内置 bash 工具）。只安装可信来源的插件；远程模式建议
-  配置 `--token` 并仅监听内网/回环地址。
+  ——沙箱只约束内置 bash 工具）。只安装可信来源的插件；插件子进程环境
+  会剔除名称疑似密钥的变量（`mcp/stdio.go`，与 `tools/env.go` 同规则）。
+- **远程模式强制鉴权**：`serve --addr` 的 Bearer token 为必填——`--token`
+  缺省时自动生成随机 token 并打印到启动日志（配置到 harness 侧
+  `plugins[].token`）；服务端**不发 CORS 放行头**——插件驱动的是浏览器/
+  电脑，`ACAO:*` 会让任意网页直接 fetch 环回端口驱动它。仍建议仅监听
+  回环/内网地址并自备防火墙。
 - 插件连接是**进程级共享**的：同一进程内多个会话（gh server 每会话
   harness、weixin 每用户）复用同一批插件连接，浏览器等有状态上下文跨
   会话保留；`go test` 下插件自动空转（`testing.Testing()`），测试不产生

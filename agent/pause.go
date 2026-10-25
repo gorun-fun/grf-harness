@@ -137,6 +137,14 @@ func (a *Agent) applyResume(turnCtx context.Context, inputs []ResumeInput) error
 			a.finishCall(c, c.ID, tools.Result{Text: out}, ToolStatusDone, false)
 		case PauseKindApproval:
 			if in.Approved && !in.Dismiss {
+				// 计划模式硬拦截在恢复路径补检：暂停可能发生在模式切换
+				// 之前，用户的工具批准不能越过计划模式的改动禁令（计划
+				// 只能经 exit_plan_mode 的评审获得执行许可）
+				if a.inPlan() && a.planBlocked(c.Name()) {
+					a.finishCall(c, c.ID, tools.Result{Text: "[plan mode] " + c.Name() +
+						" is blocked while planning; the plan must be approved via exit_plan_mode before executing changes"}, ToolStatusDenied, true)
+					continue
+				}
 				a.execToolCall(turnCtx, c, c.ID)
 				continue
 			}

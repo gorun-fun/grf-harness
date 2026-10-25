@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -200,7 +201,7 @@ func (s *Server) execute(ctx context.Context, sess *session, req *createRequest,
 	sink func(*event), onStart func(base *ResponseResource)) (*ResponseResource, error) {
 
 	// 供应商同步热生效：未显式指定 model 的会话在回合边界跟随
-	// settings.json 的新默认——宿主（openos AISyncer 等）直接落盘改配置，
+	// settings.json 的新默认——宿主（配置同步类集成）直接落盘改配置，
 	// 存量会话与常驻进程无需重启/空闲回收即可生效（旧口径"gh 仅启动时
 	// 读盘"的竞态消除）。显式 model 由 handleCreate 的 trySwitchModel
 	// 处理（本就即时读盘）。
@@ -486,6 +487,15 @@ func (s *Server) applyTools(sess *session, req *createRequest) error {
 			if t.Name == "" {
 				return fmt.Errorf("function tool needs a name")
 			}
+			// 名字冲突提前 400：与内置工具或请求内重复名冲突都不再走
+			// RegisterClient 的 panic（panic 只杀本连接，标准 ORS 客户端
+			// 每请求重发 tools 数组，这里必须是可预期错误）
+			if _, ok := tools.SpecDef(t.Name); ok {
+				return fmt.Errorf("function tool name conflicts with a built-in tool: %s", t.Name)
+			}
+			if slices.Contains(sess.clientTools, t.Name) {
+				return fmt.Errorf("duplicate function tool name in request: %s", t.Name)
+			}
 			reg.RegisterClient(llm.Tool{Name: t.Name, Description: t.Description, Parameters: t.Parameters})
 			sess.clientTools = append(sess.clientTools, t.Name)
 			sess.meta.ClientTools = append(sess.meta.ClientTools, toolDef{
@@ -527,7 +537,7 @@ func (s *Server) applyTools(sess *session, req *createRequest) error {
 // 否则沿用当前（保证任意 model 值可跑，ORS 合规测试语义）。
 // 解析统一走 config.Settings.ResolveModel（限定名校验供应商与模型表；
 // 裸模型名默认供应商优先、否则恰一家提供时用它；歧义/零命中忽略，不
-// 静默换到非预期供应商）——宿主（如 openos 的 resolveModel shim、会话
+// 静默换到非预期供应商）——宿主（如自带 resolveModel shim 的宿主、会话
 // 模型继承）不需要自行补全限定名。
 func (s *Server) trySwitchModel(sess *session, model string) {
 	cfg, err := config.LoadFileForUpdate()

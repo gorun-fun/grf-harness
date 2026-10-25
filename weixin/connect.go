@@ -6,6 +6,7 @@ package weixin
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -26,7 +27,8 @@ import (
 // 带 --daemon 为子进程内部入口,前台直跑。可选项:
 //
 //	-prompt <s>      自定义系统提示词
-//	-workspace <dir> agent 工作区(默认用户 home)
+//	-workspace <dir> agent 工作区(默认 ~/.grf/weixin/ws；微信消息是外部
+//	               输入，不再默认整个 home)
 func Connect(args []string) {
 	// flag 包遇到首个位置参数即停止解析,这里把旗标前置,
 	// 保证 "connect weixin -workspace xx" 与 "connect -workspace xx weixin" 均可。
@@ -48,7 +50,7 @@ func Connect(args []string) {
 	}
 	fs := flag.NewFlagSet("connect", flag.ExitOnError)
 	prompt := fs.String("prompt", "", "自定义系统提示词")
-	workspace := fs.String("workspace", "", "agent 工作区(默认用户 home)")
+	workspace := fs.String("workspace", "", "agent 工作区(默认 ~/.grf/weixin/ws)")
 	daemon := fs.Bool("daemon", false, "内部:守护进程前台直跑")
 	fresh := fs.Bool("fresh", false, "内部:丢弃旧登录态,新建 ClawBot")
 	_ = fs.Parse(append(flags, pos...))
@@ -100,7 +102,8 @@ func Connect(args []string) {
 		fatal(fmt.Errorf("定位可执行文件: %w", err))
 	}
 	logPath := filepath.Join(config.Home(), "weixin.log")
-	logf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	// 日志含完整消息文本与扫码登录链接（他者扫码即可接管会话），0600
+	logf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		fatal(fmt.Errorf("打开日志文件: %w", err))
 	}
@@ -118,13 +121,23 @@ func Connect(args []string) {
 	cmd.Stdout = logf
 	cmd.Stderr = logf
 	cmd.SysProcAttr = detachProcAttr() // 脱离会话(unix setsid),Ctrl+C 不影响
+	// pid 文件以 O_EXCL 原子创建做拉起互斥：并发两次 connect 只有一个
+	// 成功（旧竞态：双方都过了"无 pid"预检后各起一个守护进程，长轮询
+	// 同一 token 互踩）；登录等耗时流程都在此前，抢占点紧贴 spawn
+	pidPath := filepath.Join(config.Home(), "weixin.pid")
+	claim, aerr := claimPidFile(pidPath)
+	if aerr != nil {
+		fatal(fmt.Errorf("另一实例正在启动或已在运行(如需重启请先 gh disconnect weixin): %w", aerr))
+	}
 	if err := cmd.Start(); err != nil {
+		claim.Close()
+		_ = os.Remove(pidPath)
 		fatal(fmt.Errorf("启动守护进程: %w", err))
 	}
-	pidPath := filepath.Join(config.Home(), "weixin.pid")
-	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(cmd.Process.Pid)), 0o644); err != nil {
+	if _, err := claim.WriteString(strconv.Itoa(cmd.Process.Pid)); err != nil {
 		fatal(fmt.Errorf("写 pid 文件: %w", err))
 	}
+	claim.Close()
 	fmt.Printf("🚀 微信 agent 守护进程已启动(pid %d)\n", cmd.Process.Pid)
 	if *fresh {
 		fmt.Println("   模式: 新建 ClawBot(旧登录态已丢弃)")
@@ -188,6 +201,24 @@ func askReuse() string {
 		return "new"
 	}
 	return "reuse"
+}
+
+// claimPidFile 以 O_EXCL 原子创建抢占 pid 文件（互斥语义）：成功返回
+// 打开的句柄由调用方写入 pid；文件已存在且其中进程仍活着报错（已在
+// 运行），进程已死视为陈旧残留——清掉重试一次。
+func claimPidFile(path string) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err == nil {
+		return f, nil
+	}
+	if !errors.Is(err, os.ErrExist) {
+		return nil, err
+	}
+	if weixinDaemonPID() > 0 {
+		return nil, fmt.Errorf("already running")
+	}
+	_ = os.Remove(path)
+	return os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 }
 
 // weixinDaemonPID 读取守护进程 pid;文件缺失或进程已死返回 0。

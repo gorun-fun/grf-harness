@@ -3,6 +3,7 @@
 package js
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -211,13 +212,23 @@ func stringMethod(prop string) (func(s string, args []Value) (Value, error), boo
 			n := int(argNum(args, 0, 0))
 			pad := argStr(args, 1, " ")
 			for len([]rune(s)) < n && pad != "" {
+				if len(s)+len(pad) > maxStringBytes {
+					return nil, rtErr("padEnd result exceeds %d-byte cap", maxStringBytes)
+				}
 				s += pad
 			}
 			return s, nil
 		}, true
 	case "repeat":
 		return func(s string, args []Value) (Value, error) {
-			return strings.Repeat(s, int(argNum(args, 0, 0))), nil
+			n := int(argNum(args, 0, 0))
+			if n < 0 {
+				return nil, rtErr("repeat count must be >= 0")
+			}
+			if int64(n)*int64(len(s)) > maxStringBytes {
+				return nil, rtErr("repeat result exceeds %d-byte cap", maxStringBytes)
+			}
+			return strings.Repeat(s, n), nil
 		}, true
 	case "toString":
 		return func(s string, args []Value) (Value, error) { return s, nil }, true
@@ -417,6 +428,16 @@ func (ip *Interp) RunEval(src string) (Value, error) {
 		return nil, err
 	}
 	return ip.Run(prog)
+}
+
+// RunEvalCtx 解析并执行整段脚本，执行期观察 ctx 取消（循环/调用点周期
+// 检查，见 tick）。工具入口应传回合 ctx，让取消能打断解释器自旋。
+func (ip *Interp) RunEvalCtx(ctx context.Context, src string) (Value, error) {
+	prog, err := Parse(src)
+	if err != nil {
+		return nil, err
+	}
+	return ip.RunWithCtx(ctx, prog)
 }
 
 // JSONParse 把 JSON 文本解析为 Value。encoding/json 解码出的类型集合

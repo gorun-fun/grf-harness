@@ -29,6 +29,9 @@ func ctrlSignal(err error) bool {
 }
 
 func (ip *Interp) evalStmt(st Node, env *Env) (Value, error) {
+	if err := ip.tick(); err != nil {
+		return nil, err
+	}
 	switch s := st.(type) {
 	case *VarDecl:
 		var last Value
@@ -71,6 +74,9 @@ func (ip *Interp) evalStmt(st Node, env *Env) (Value, error) {
 			return nil, err
 		}
 		for _, item := range items {
+			if err := ip.tick(); err != nil {
+				return nil, err
+			}
 			child := NewEnv(env)
 			child.declare(s.Name, item)
 			if stop, err := ip.loopBody(s.Body, child); err != nil {
@@ -82,6 +88,9 @@ func (ip *Interp) evalStmt(st Node, env *Env) (Value, error) {
 		return nil, nil
 	case *WhileStmt:
 		for {
+			if err := ip.tick(); err != nil {
+				return nil, err
+			}
 			c, err := ip.evalExpr(s.Cond, env)
 			if err != nil {
 				return nil, err
@@ -150,6 +159,9 @@ func (ip *Interp) evalFor(s *ForStmt, env *Env) (Value, error) {
 		}
 	}
 	for {
+		if err := ip.tick(); err != nil {
+			return nil, err
+		}
 		if s.Cond != nil {
 			c, err := ip.evalExpr(s.Cond, child)
 			if err != nil {
@@ -225,6 +237,10 @@ func (ip *Interp) execBody(body []Node, env *Env) (Value, error) {
 // ---- 表达式 ----
 
 func (ip *Interp) evalExpr(x Node, env *Env) (Value, error) {
+	if err := ip.enter(); err != nil {
+		return nil, err
+	}
+	defer ip.leave()
 	switch e := x.(type) {
 	case *NumLit:
 		return e.V, nil
@@ -400,6 +416,9 @@ func (ip *Interp) evalExpr(x Node, env *Env) (Value, error) {
 }
 
 func (ip *Interp) evalCall(e *CallExpr, env *Env) (Value, error) {
+	if err := ip.tick(); err != nil {
+		return nil, err
+	}
 	// 方法调用：Fn 为 MemberExpr 时以 obj 为 this 分派内建方法
 	if m, ok := e.Fn.(*MemberExpr); ok && !m.Opt {
 		obj, err := ip.evalExpr(m.Obj, env)

@@ -29,7 +29,7 @@ import (
 type PromptOptions struct {
 	Workspace string
 	Model     string
-	// HostContext 宿主环境简报：嵌入方（goder/openos 等宿主平台）注入的
+	// HostContext 宿主环境简报：嵌入方（宿主平台）注入的
 	// 运行环境事实，作为独立段拼在 custom 身份段之后。会话级稳定事实
 	// （不随回合变化），排序上紧贴 custom；根与子代理共享同一份——
 	// 子代理同样需要知道"自己运行在哪个宿主里"。空值不拼段。
@@ -38,6 +38,10 @@ type PromptOptions struct {
 	Subagent       bool                // 子代理身份（附加说明）
 	Label          string              // 子代理标签
 	PluginWarnings []string            // 不可用插件（为空不拼段）
+	// TrustWarnings 工作区信任提示（grants 授权目录披露、自带项目记忆
+	// 披露等；为空不拼段）。这些文件随仓库分发即不可信来源，必须让模型
+	// 知道它们的来历。
+	TrustWarnings []string
 	// DefaultSkill 默认技能名：技能目录中存在该技能时，其 SKILL.md 全文
 	// 直接注入系统提示词（无需模型调用 skill 工具）。空值不注入任何默认
 	// 技能；集成方经 agent/app Options 或 server 会话配置指定自己的默认
@@ -141,6 +145,14 @@ func BuildSystemPrompt(o PromptOptions, custom string) string {
 	if len(o.PluginWarnings) > 0 {
 		b.WriteString("\n## 插件状态\n以下插件不可用，调用其工具会失败，请向用户说明并避免依赖：\n- ")
 		b.WriteString(strings.Join(o.PluginWarnings, "\n- "))
+		b.WriteString("\n")
+	}
+
+	// 工作区信任提示：grants 授权目录 / 自带项目记忆等随仓库分发的
+	// "能力与素材"，披露其来历，防投毒内容被当作用户亲手配置
+	if len(o.TrustWarnings) > 0 {
+		b.WriteString("\n## 工作区信任提示\n以下内容来自工作区自带文件（可随仓库分发，未必出自用户本人）：\n- ")
+		b.WriteString(strings.Join(o.TrustWarnings, "\n- "))
 		b.WriteString("\n")
 	}
 

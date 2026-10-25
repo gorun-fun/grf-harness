@@ -43,7 +43,7 @@ func discoverPlugins() []config.Plugin {
 // IsExecutableFile 判断文件是否视为可执行插件。Windows 没有 POSIX
 // 可执行位：Go 把普通文件统一报成 0666（只读 0444），os.Chmod 也只切换
 // 只读属性，按位过滤恒为空——改按可执行后缀判定（.exe/.bat/.cmd/.com/
-// .ps1）。goder 的 internal/desktop/agentconfig.go 有同规则副本，两边
+// .ps1）。嵌入方宿主的配置模块有同规则副本，两边
 // 必须同步改。
 func IsExecutableFile(name string, mode os.FileMode) bool {
 	if runtime.GOOS == "windows" {

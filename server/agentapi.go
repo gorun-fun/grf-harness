@@ -1,6 +1,6 @@
 // agentapi.go — gh server 的智能体配置 API(/v1/agent/*):让网页/嵌入形态
 // 的设置页也能管理 gh 的本地配置(模型供应商、Harness 常用项、插件/MCP、
-// 技能),与 goder 桌面端服务(internal/desktop 的 ModelConfig/AgentConfig)
+// 技能),与宿主桌面端服务(ModelConfig/AgentConfig)
 // 同一套文件语义(GRF_HOME 可重定位;settings.json 其余键原样保留)。
 //
 // 密钥安全:API Key / MCP Token 绝不下发浏览器 —— GET 恒回空串并以
@@ -16,7 +16,7 @@ import (
 	"sort"
 )
 
-// ---------- DTO(与 goder 前端 host/bridge.ts 对齐,camelCase) ----------
+// ---------- DTO(与宿主前端的 host/bridge 对齐,camelCase) ----------
 
 // providerDTO 供应商项。apiKey:GET 恒空(hasKey 标注);PUT 空=保留。
 type providerDTO struct {

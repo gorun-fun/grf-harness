@@ -30,8 +30,8 @@ type turnWebhook struct {
 	secret string
 }
 
-// turnWebhookFromEnv 从环境变量读取（gh server 启动期一次性；goder-serve
-// 等宿主网关经子进程 env 注入，见其 GODER_GH_ENV_ 透传）。
+// turnWebhookFromEnv 从环境变量读取（gh server 启动期一次性；宿主网关
+// 类集成经子进程 env 注入，见 docs/server.md §8.5）。
 func turnWebhookFromEnv() turnWebhook {
 	return turnWebhook{
 		url:    os.Getenv("GRF_TURN_WEBHOOK_URL"),

@@ -134,7 +134,8 @@ func writeSession(path string, msgs []llm.Message, cacheKey string) error {
 	if err != nil {
 		return err
 	}
-	return config.WriteFileAtomic(path, data, 0o644)
+	// 会话转录可能含密钥等敏感内容（与 settings.json 同级敏感），0600
+	return config.WriteFileAtomic(path, data, 0o600)
 }
 
 // Session 一场会话的完整恢复材料：消息（不含 system）+ system 提示词

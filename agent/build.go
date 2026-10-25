@@ -43,6 +43,7 @@ type Harness struct {
 	defSkill string   // 默认技能名（Options.DefaultSkill；空 = 不注入默认技能，gh CLI 终端形态配 grf-usage）
 	hostCtx  string   // 宿主环境简报（Options.HostContext；独立段拼在 custom 身份段后，根与子代理共享）
 	plugWarn []string // 插件状态警告（构建期取一次；子代理提示词复用）
+	trustWarn []string // 工作区信任提示（grants/自带记忆披露；构建期取一次）
 }
 
 // Options 组装参数。
@@ -125,6 +126,14 @@ func Build(opts Options) (*Harness, error) {
 	// 但要告知模型：相关工具调用会失败。构建期取一次，子代理工厂复用。
 	if pm != nil {
 		h.plugWarn = pm.Warnings()
+	}
+	// 工作区信任提示（构建期取一次，根与子代理提示词共用）：grants 授权
+	// 目录披露 + 自带项目记忆披露——这些文件随仓库分发时是投毒载体
+	if n := h.Fs.GrantsNotice(); n != "" {
+		h.trustWarn = append(h.trustWarn, n)
+	}
+	if n := tools.ProjectMemoryNotice(opts.Workspace); n != "" {
+		h.trustWarn = append(h.trustWarn, n)
 	}
 
 	root := NewAgent("agent_root", opts.Client, tools.NewRegistry(), "")
@@ -248,6 +257,7 @@ func (h *Harness) systemPromptFor(reg *tools.Registry, subagent bool, label, ove
 		Subagent:       subagent,
 		Label:          label,
 		PluginWarnings: h.plugWarn, // 构建期取好，根与子代理同一份
+		TrustWarnings:  h.trustWarn,
 		Tools:          names,
 		DefaultSkill:   h.defSkill,
 		HostContext:    h.hostCtx, // 宿主环境简报：根与子代理共享（子代理同样需要知道宿主环境）
@@ -274,6 +284,9 @@ func (h *Harness) applyPolicy(normalized string) {
 	h.Settings.Policy = normalized
 	writeLimit, readLimit := config.ParsePolicy(normalized)
 	h.Fs.SetPolicy(writeLimit, readLimit)
+	// 已存在的子代理同步收紧/放宽：防"先起的子代理保留旧策略"成为
+	// set_policy 收紧后的绕行通道（bash 经旧策略的子代理照跑）
+	h.Manager.SetPolicyAll(writeLimit, readLimit)
 }
 
 // SetPolicy 宿主（GUI 等）直接变更本会话 policy：规范化后走与 set_policy

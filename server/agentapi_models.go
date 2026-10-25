@@ -181,7 +181,7 @@ func (s *Server) handleAgentModelsDetect(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	// models 维持纯 id 数组(旧客户端兼容);modelsRich 带 ctxLen 供
-	// goder 网页形态缓存真实上下文窗口(与桌面态 wails 探测同构)。
+	// 宿主网页形态缓存真实上下文窗口(与桌面端探测同构)。
 	models := make([]string, 0, len(rich))
 	for _, m := range rich {
 		models = append(models, m.ID)

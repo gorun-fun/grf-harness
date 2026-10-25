@@ -83,7 +83,7 @@ func RegisterWorkflow(r *tools.Registry, a *Agent, m *Manager) {
 		} else {
 			ip.Global.Declare("args", map[string]any{})
 		}
-		out, err := ip.RunEval(p.Script)
+		out, err := ip.RunEvalCtx(ctx, p.Script)
 		if err != nil {
 			return tools.Result{}, fmt.Errorf("workflow script failed: %w", err)
 		}
@@ -258,7 +258,9 @@ func (w *workflowCtx) hookAgent(ip *js.Interp, args []js.Value) (js.Value, error
 		}
 	}
 	return js.NewFuture(func() (out js.Value, err error) {
-		// panicWorkflow（钩子误用）→ Future 错误，await 处冒泡终止脚本
+		// panicWorkflow（钩子误用）→ Future 错误，await 处冒泡终止脚本。
+		// 这个 goroutine 不在工具执行的 recover 保护圈内，任何 panic
+		// re-throw 都会杀死整个进程——未知 panic 一律转为 Future 错误
 		defer func() {
 			if r := recover(); r != nil {
 				if re, ok := r.(*js.RuntimeError); ok {
@@ -268,7 +270,11 @@ func (w *workflowCtx) hookAgent(ip *js.Interp, args []js.Value) (js.Value, error
 					out, err = nil, re
 					return
 				}
-				panic(r)
+				msg := fmt.Sprint(r)
+				if e, ok := r.(error); ok {
+					msg = e.Error()
+				}
+				out, err = nil, js.RtErr("agent hook panic: %s", msg)
 			}
 		}()
 		return w.runAgent(prompt, opts), nil
@@ -334,17 +340,21 @@ func (w *workflowCtx) hookParallel(ip *js.Interp, args []js.Value) (js.Value, er
 }
 
 // runConcurrently hookPipeline/hookParallel 的公共并发骨架：为 n 个工作
-// 项各起一个 goroutine，fn(i) 的返回值按序落入结果数组——失败项由 fn
+// 项起 goroutine（有界：脚本可构造任意长数组，不设上限会一次 spawn
+// 等量 goroutine），fn(i) 的返回值按序落入结果数组——失败项由 fn
 // 自己归为 nil（"阶段抛错置 null"语义保持不变），全部落定后返回。
 // 钩子误用（panicWorkflow）不在此层：agent() 的 Future 已把它记入
 // w.failErr，调用方在 Wait 后经 takeFail 终止整个脚本。
 func (w *workflowCtx) runConcurrently(n int, fn func(i int) any) []any {
 	results := make([]any, n)
 	var wg sync.WaitGroup
+	sem := make(chan struct{}, workflowConcurrency)
 	for i := range n {
 		wg.Add(1)
+		sem <- struct{}{}
 		go func() {
 			defer wg.Done()
+			defer func() { <-sem }()
 			results[i] = fn(i)
 		}()
 	}

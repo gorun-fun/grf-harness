@@ -16,7 +16,7 @@ func TestBuildSystemPromptHostContext(t *testing.T) {
 	got := BuildSystemPrompt(PromptOptions{
 		Workspace:   "/ws",
 		Model:       "m",
-		HostContext: "你运行在 OpenOS 桌面,当前用户 alice。",
+		HostContext: "你运行在宿主桌面,当前用户 alice。",
 	}, "你是测试身份。")
 
 	iCustom := strings.Index(got, "你是测试身份。")
@@ -31,7 +31,7 @@ func TestBuildSystemPromptHostContext(t *testing.T) {
 	if iInner >= 0 && iInner < iHost {
 		t.Fatalf("宿主简报段应在 inner prompt 之前(inner@%d host@%d)", iInner, iHost)
 	}
-	if !strings.Contains(got, "你运行在 OpenOS 桌面,当前用户 alice。") {
+	if !strings.Contains(got, "你运行在宿主桌面,当前用户 alice。") {
 		t.Fatalf("宿主简报正文缺失:\n%s", got)
 	}
 }

@@ -30,6 +30,9 @@ type FsPolicy struct {
 	read   map[string]string // abs 路径 -> 内容摘要（写前校验读过）
 	denied map[string]string // 升级键(tool:abs) -> 被拒模式，供一次性重试校验
 	grants map[string]bool   // 升级审批授权的目录（工作区 .grf/grants.json，仅本工作区）
+	// grantsLoaded 构建期从工作区 grants.json 载入的授权目录快照（GrantsNotice
+	// 披露用；运行期 grantDir 追加的不算——那些是用户刚亲自批准的）。
+	grantsLoaded []string
 }
 
 func NewFsPolicy(workspace string, observe, readLimit bool, host Host) *FsPolicy {
@@ -73,7 +76,10 @@ func (f *FsPolicy) grantsPath() string {
 	return filepath.Join(f.wsReal, ".grf", "grants.json")
 }
 
-// loadGrants 加载本工作区的授权目录（不存在视为空）。
+// loadGrants 加载本工作区的授权目录（不存在视为空）。grants.json 随仓库
+// 分发时它是"能力"而不只是文本——克隆了恶意仓库的人必须能看见自己被
+// 预授权了什么：载入即快照进 grantsLoaded（经 GrantsNotice 进系统提示词
+// 披露），且整盘/整个家目录级别的授权过于宽泛，直接拒载。
 func (f *FsPolicy) loadGrants() {
 	data, err := os.ReadFile(f.grantsPath())
 	if err != nil {
@@ -83,9 +89,27 @@ func (f *FsPolicy) loadGrants() {
 	if json.Unmarshal(data, &dirs) != nil {
 		return
 	}
+	home, _ := os.UserHomeDir()
 	for _, d := range dirs {
-		f.grants[filepath.Clean(absOr(d))] = true
+		a := filepath.Clean(absOr(d))
+		if a == string(filepath.Separator) || (home != "" && a == filepath.Clean(home)) {
+			continue // "/" 与家目录整体授权：拒载
+		}
+		f.grants[a] = true
+		f.grantsLoaded = append(f.grantsLoaded, a)
 	}
+}
+
+// GrantsNotice 工作区携带授权目录时的披露文案（构建期进系统提示词；
+// 空 = 无可披露）。
+func (f *FsPolicy) GrantsNotice() string {
+	if len(f.grantsLoaded) == 0 {
+		return ""
+	}
+	dirs := append([]string(nil), f.grantsLoaded...)
+	sort.Strings(dirs)
+	return "本工作区自带 .grf/grants.json，以下目录的写操作已被预授权（越工作区写不再询问）：" +
+		strings.Join(dirs, "、") + "。该文件随仓库分发、未必出自用户本人——涉及这些目录的写入先向用户说明来源再动手。"
 }
 
 // grantDir 授权一个目录（升级审批"批准并授权目录"）并落盘。快照在锁内
@@ -105,7 +129,7 @@ func (f *FsPolicy) grantDir(dir string) {
 		return
 	}
 	_ = os.MkdirAll(filepath.Dir(f.grantsPath()), 0o755)
-	_ = os.WriteFile(f.grantsPath(), data, 0o644)
+	_ = os.WriteFile(f.grantsPath(), data, 0o600)
 }
 
 // dirGranted 路径所在目录是否已被授权（授权目录内的写操作越过写边界，
@@ -194,6 +218,11 @@ func deniedKey(tool, key string) string {
 // read 过；新建文件不受限）。返回 (abs, error)。
 func (f *FsPolicy) CheckWrite(path string, readBeforeEdit bool) (string, error) {
 	abs := f.resolve(path)
+	// grants 文件是写边界的能力凭证，模型侧自写 grants.json 等于给自己
+	// 发永久越权授权，一律拒绝（bash 侧的防线是沙箱与构建期披露）
+	if gp := f.grantsPath(); abs == gp || f.realPath(abs) == gp {
+		return abs, fmt.Errorf("refusing to modify %q: the workspace grant table (.grf/grants.json) can only grow through user-approved escalation prompts, never by direct writes — request the escalation through the normal flow instead", path)
+	}
 	f.mu.Lock()
 	_, hasRead := f.read[abs]
 	f.mu.Unlock()
