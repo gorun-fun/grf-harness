@@ -4,12 +4,19 @@
 28 个工具的**定义（名称/描述/参数 Schema）内嵌于 `tools/spec/tools.json`**（唯一来源），
 一个不能少。改动工具相关代码前先读 spec 与对接文档。
 
-文档分工：`docs/architecture.md`（架构总览：功能线条分层、关键机制、并发
+文档分工（**每篇都有中英双版本：`xxx.md` 中文为默认 + `xxx.en.md` 英文，
+第 3 行语言切换（当前语言加粗）；修改任一版本必须同步另一版本——这是硬约束**）：
+`docs/usage.md`（使用指南：三形态、快捷键、指令、工具速查）、
+`docs/configuration.md`（配置参考：settings.json 全字段、policy、环境变量）、
+`docs/security.md`（安全模型：威胁边界、各渠道默认、检查清单）、
+`docs/architecture.md`（架构总览：功能线条分层、关键机制、并发
 规则）、`docs/integration.md`（Go 库对接：go get 安装、事件、多会话）、
 `docs/server.md`（HTTP Responses API 接入，ORS 兼容）、
 `docs/plugins.md`（MCP 插件：grf-browser/grf-computer、安装配置、
 协议子集与安全模型）、`docs/plugin-dev.md`（插件开发规范：运行时
-契约、工具准入、SDK 与裸写、测试、构建分发）。
+契约、工具准入、SDK 与裸写、测试、构建分发）。README 同理
+（README.md + README.en.md，面向人类读者的入口：目录导航 + 快速开始，
+细节一律下沉 docs）。
 
 ## 构建与测试
 

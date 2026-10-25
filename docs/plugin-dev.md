@@ -1,5 +1,7 @@
 # 插件开发规范
 
+**简体中文** | [English](plugin-dev.en.md)
+
 面向为 grf-harness 编写 MCP 插件的开发者：运行时契约、工具准入规则、
 SDK 用法、协议子集、测试与分发。插件的安装配置与内置插件
 （grf-browser / grf-computer）说明见 `docs/plugins.md`——那边讲"用"，
@@ -333,9 +335,10 @@ stdio 主路径同时 `defer cleanup()`（stdin EOF 走 defer）。无重资源�
   stderr（同 §3）。
 - **Streamable HTTP**：POST 单条 JSON-RPC 到端点，应答 200 +
   `application/json`；通知回 202 无体；`Authorization: Bearer <token>`
-  鉴权（配了 token 才校验）；请求体上限 8MB；客户端兼容 SSE 形态
-  应答，但插件只做纯 JSON 即可；CORS 宽松放开（便于 Web 类客户端
-  接入）。SDK 的 `ServeHTTP` 已内置全部语义，拷贝它最省事。
+  鉴权强制（`--token` 缺省时自动生成随机值并打印）；请求体上限 8MB；
+  客户端兼容 SSE 形态应答，但插件只做纯 JSON 即可；**不发 CORS 放行
+  头**——插件驱动浏览器/电脑，ACAO:* 会把环回端点交给任意网页。SDK 的
+  `ServeHTTP` 已内置全部语义，拷贝它最省事。
 
 ## 9. 测试规范
 
@@ -388,8 +391,9 @@ go s.Serve(context.Background(), srvIn, srvOut)
 
 - 插件进程与宿主**同权限**运行，不受 harness 沙箱约束（沙箱只约束
   内置 bash 工具）——只开发/安装可信来源的插件。
-- serve 模式**必须**配 `--token` 并只监听回环或内网地址；端点能驱动
-  的能力（浏览器、鼠标键盘）等价于操作者本人。
+- serve 模式鉴权强制（`--token` 缺省自动生成并打印）且**应该**只监听
+  回环或内网地址；端点能驱动的能力（浏览器、鼠标键盘）等价于操作者
+  本人。
 - `ReadOnly` 标注必须与实际副作用一致（§5.3）：它是计划模式硬拦截的
   放行依据，标错即绕过用户审批语义。
 - 工具描述即对模型的契约：**不得**诱导模型做用户未意图的操作。

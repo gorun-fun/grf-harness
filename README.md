@@ -1,95 +1,102 @@
 # grf-harness（gh）
 
-零依赖的终端 agent harness：**纯 Go 标准库实现**（无任何第三方依赖），
-完整实现 28 个工具（定义内嵌于 `tools/spec/tools.json`，一个不少），OpenAI 兼容接口驱动，
-默认全屏交互（终端宽度变化自动整帧重排重绘），亦可作为 Go 模块被其他应用
-嵌入使用，或经 `gh server` 以 OpenAI Responses API 形状供非 Go 宿主接入。
+**简体中文** | [English](README.en.md)
 
-## 特性
+零依赖的终端 AI agent harness：纯 Go 标准库实现（go.mod 无任何第三方依赖），
+28 个内置工具，默认全屏终端交互，可作为 Go 模块嵌入其他应用，也能经
+`gh server` 以 OpenAI Responses API 形状供任意语言宿主接入。
+它在你的工作区里读代码、跑命令、改文件、拆子任务，直到把活干完。
 
-- **零依赖**：终端 raw 模式、备用屏幕、输入解析（按键/粘贴/SGR 鼠标）、
-  CJK 宽度软换行、SSE 流式解析、迷你 JavaScript 解释器（workflow 用）
-  全部原生实现
-- **28 个工具**：定义内嵌自 `tools/spec/tools.json`（工具定义唯一来源），
-  与 spec 严格一一对齐——ask_user_question / bash / create_goal / edit /
-  enter_plan_mode / exit_plan_mode / get_goal / glob / grep / interrupt_agent /
-  job_kill / job_list / job_output / list_agents / **memory**（跨会话记忆：
-  项目级默认落工作区 `.grf/memory.json`，用户级落 `~/.grf/memory.json`）/ ralph /
-  read / read_image / send_message / set_policy / skill / subagent /
-  subagent_fork / todo_write / update_goal / web_search / workflow / write
-- **全屏交互**（默认）：备用屏幕 + 底部输入框 + 内容滚动区；SIGWINCH /
-  尺寸变化时按新宽度重新软换行整帧重绘；思考进度行、正文原文直出
-  （不渲染 markdown，只显示原文）、连续工具事件合并折叠（Ctrl+O/单击展开）、
-  todo/goal 状态面板、斜杠指令提示、模型/会话弹窗、ask 表单、计划审批、
-  鼠标滚轮/单击/拖选复制（OSC52）
-- **单任务模式**：`gh "<任务描述>"` 直接流式输出结果后退出
-- **子代理系统**：subagent / subagent_fork（后台默认 + 通知注入）、
-  send_message 续聊、interrupt_agent 取消、list_agents 树状列表
-- **goal 自动续跑**：create/get/update_goal 严格 revision 校验、
-  blocked 最少 3 轮、自动续跑直到 complete/blocked/上限
-- **workflow**：文档规定的 JS 脚本编排（agent/pipeline/parallel/phase/
-  log + args + 顶层 await + schema 校验），脚本由内置迷你 JS 解释器执行
-- **ralph**：新鲜代理迭代循环（COMPLETE/BLOCKER 结构化报告）
-- **bash 沙箱**：`write-workspace` 模式下用 macOS sandbox-exec 限制写入
-  工作区；拒绝后按"一次性重试"协议升级（sandbox_permissions +
-  justification + 用户审批）
-- **会话持久化**：`.grf/sessions/` 会话记录，`-resume` / `/resume` 恢复
-- **Responses API 服务**：`gh server` 以 ORS 兼容形状暴露 agent 能力
-  （SSE 流式、client function tools、跨重启的暂停/恢复），见 `docs/server.md`
-- **微信渠道**：`gh connect weixin` 拉起守护进程，微信消息由本地 agent
-  回答（每用户独立会话；发送者白名单默认拒绝，见下方安全须知）
+![Go](https://img.shields.io/badge/Go-1.26-00ADD8) ![Dependencies](https://img.shields.io/badge/deps-0-success) ![Platforms](https://img.shields.io/badge/platforms-macos%20%7C%20linux%20%7C%20windows-9feaf9)
 
-## 用法
+## 目录
+
+| 文档 | 内容 |
+|---|---|
+| [使用指南](docs/usage.md) | 三种运行形态、全屏快捷键、斜杠指令、28 工具速查表 |
+| [配置参考](docs/configuration.md) | `settings.json` 全字段、policy 规则串、环境变量一览 |
+| [安全模型](docs/security.md) | 威胁边界、各渠道默认姿态、部署前必读的使用须知 |
+| [Go 库嵌入](docs/integration.md) | `app.New` 门面、事件流、多会话管理 |
+| [HTTP 接入](docs/server.md) | `gh server`：ORS 兼容的 Responses API 服务 |
+| [MCP 插件](docs/plugins.md) | grf-browser / grf-computer，安装、配置与安全模型 |
+| [插件开发](docs/plugin-dev.md) | mcpserver SDK、运行时契约、构建与分发 |
+| [架构总览](docs/architecture.md) | 功能分层、回合循环、暂停/恢复协议、并发规则 |
+
+## 核心特性
+
+### 🖥 全屏终端体验
+
+备用屏幕 + 底部输入框 + 内容滚动区；终端尺寸变化自动重排重绘；思考进度行、
+正文原文直出（不渲染 markdown）、连续工具事件折叠展开（`Ctrl+O`）、
+todo/goal 状态面板、斜杠指令提示、ask 表单与计划审批弹窗、鼠标滚轮与
+拖选复制（OSC52）。非 TTY 环境（管道/CI）自动回退纯文本行模式。
+
+### 🔧 28 个内置工具
+
+文件读写编辑检索（`read` / `write` / `edit` / `glob` / `grep` / `read_image`）、
+bash 执行与后台作业（`bash` / `job_*`）、跨会话记忆（`memory`，两级作用域）、
+网络检索（`web_search`）、交互问答与计划模式（`ask_user_question` /
+`enter/exit_plan_mode`）、目标管理（`create/get/update_goal`）、
+子代理编排（`subagent` / `subagent_fork` / `send_message` / `interrupt_agent` /
+`list_agents` / `workflow` / `ralph`）。定义全部内嵌于
+`tools/spec/tools.json`（唯一来源），速查表见[使用指南](docs/usage.md#工具速查)。
+
+### 🤖 任务编排
+
+- **子代理**：后台派生独立 agent（继承策略与工具链），落定后通知注入父会话
+- **goal**：带 revision 校验的目标状态机，blocked 自动重试，完成即停
+- **workflow**：JS 脚本编排（`agent()` / `pipeline` / `parallel` + 顶层
+  `await` + schema 校验），由内置迷你 JS 解释器执行（资源受限：深度/步数/内存护栏）
+- **ralph**：新鲜代理迭代循环，直到产出 COMPLETE / BLOCKER 结论
+
+### 🛡 安全边界
+
+- **policy 规则串**：`write-workspace`（macOS 下 bash 经 sandbox-exec 限写工作区
+  + 覆写前须先 read）、`read-workspace`（读边界）、`off`
+- **越权即问**：越界写/沙箱拒绝时挂起征求用户批准，拒绝即终局
+- **审批/计划模式**：逐工具确认 / 先计划后执行，用户把关
+- **秘密隔离**：bash 与插件子进程环境自动剔除疑似密钥变量
+- 详见[安全模型](docs/security.md)
+
+### 📦 三种接入方式
+
+| 方式 | 适用 | 文档 |
+|---|---|---|
+| **终端 CLI**（`gh` 全屏 / `gh "任务"` 单任务直出） | 日常使用、脚本、CI | [使用指南](docs/usage.md) |
+| **Go 库嵌入**（`app.New`，全部能力可编程） | Go 应用 | [Go 库嵌入](docs/integration.md) |
+| **HTTP Responses API**（`gh server`，ORS 兼容） | 任意语言宿主 | [HTTP 接入](docs/server.md) |
+
+### 🔌 MCP 插件
+
+增强能力经独立编译的插件扩展：**grf-browser**（chromedp 浏览器自动化，
+17 工具，对齐 playwright-mcp）与 **grf-computer**（跨平台电脑操作，10 工具）。
+本地 stdio 自动发现或远程 HTTP 接入，`gh plugins` 一键体检。
+见 [MCP 插件](docs/plugins.md)；写自己的插件看[插件开发](docs/plugin-dev.md)。
+
+### 💬 微信渠道
+
+`gh connect weixin` 拉起守护进程，微信消息由本地 agent 回答（每用户独立
+会话）。默认拒绝所有发送者（白名单制），工作区与策略独立收紧，工具审批
+经微信问答转发。
+
+## 快速开始
+
+### 1. 安装
 
 ```sh
-go build -o gh .      # 或 ./run.sh（vet + build；交叉编译见 run.sh macos|linux|linux-arm|windows|all → dist/）
+# 方式一：发布服务器下载（macOS / linux × amd64 / arm64，Windows 同）
+#   https://download.gorun.fun/grf-harness/<平台>/<版本>/gh
+# 下载后 `gh update` 可自更新（SHA256SUMS 校验）
 
-gh                     # 全屏交互（默认模式）
-gh -resume             # 恢复上一次会话
-gh -plan               # 以计划模式启动（exit_plan_mode 呈交计划）
-gh "统计当前目录 go 文件行数"   # 单任务模式：直接输出结果后退出
-gh model               # 模型配置页（多提供商 / 自动检测模型）
-gh model set <p/m>     # 脚本化设置默认模型
-gh model list          # 列出已配置 提供商/模型
-gh config              # 配置摘要
-gh config prompt [set|reset]
-gh config steps [n|reset]
-gh config policy [write-workspace|read-workspace|off]
-
-gh connect weixin      # 连接微信 ClawBot（扫码后转后台守护进程；-workspace 指定工作区）
-gh disconnect weixin   # 停止微信守护进程
-gh server              # 启动 Responses API 服务（ORS 兼容，默认 127.0.0.1:7400；
-                       #   -addr 监听地址 / -data 数据目录 / -token 令牌）
-gh update              # 检查并更新自身（下载服务器最新版；-y 跳过确认）
-gh version
+# 方式二：源码构建（零依赖，克隆即编译）
+git clone https://git.gorun.fun/share/grf-harness
+cd grf-harness
+go build -o gh .        # 或 ./run.sh（vet + build；交叉编译 ./run.sh all）
 ```
 
-全屏交互启动时会后台探测新版本（dev 构建跳过，网络故障静默），有更新则在
-欢迎行下方提示；`GRF_DOWNLOAD_BASE` 可覆盖下载服务器地址（默认
-`https://download.gorun.fun/grf-harness`）。
+### 2. 首次配置
 
-非 TTY（管道/重定向）自动回退纯文本行模式 REPL。
-
-### 全屏快捷键
-
-| 按键 | 功能 |
-|---|---|
-| `↑` / `↓` | 输入历史回溯（~/.grf/history）；指令提示弹出时选择 |
-| `←` `→` `Home` `End`，`Ctrl+A/E/K/U/W` | 行编辑（UTF-8 感知） |
-| `Enter` | 提交（指令提示弹出时先补全） |
-| `Tab` | 补全指令 / 切换鼠标上报 |
-| `PgUp` / `PgDn` / 滚轮 | 内容区翻页/滚动 |
-| `Ctrl+O`、鼠标单击 | 展开/折叠思考摘要与工具调用合并块 |
-| `F2` 或 `/plan` | 进入/退出计划模式 |
-| `Ctrl+C` | 中断当前执行（空闲时退出） |
-| `Ctrl+D` | 空输入时退出 |
-| 鼠标拖选 | 按行选择上方内容，松开 OSC52 复制 |
-
-指令：`/help` `/model` `/resume` `/plan` `/goal` `/save` `/exit`。
-
-## 配置
-
-`~/.grf/settings.json`（`GRF_HOME` 可重定位）：
+`~/.grf/settings.json`（`GRF_HOME` 可重定位）写入任意 OpenAI 兼容端点：
 
 ```json
 {
@@ -101,186 +108,60 @@ gh version
     }
   },
   "default": "deepseek/deepseek-chat",
-  "max_steps": 0,
-  "policy": "write-workspace|read-workspace",
-  "auto_approve": false
+  "policy": "write-workspace"
 }
 ```
 
-环境变量：`OPENAI_BASE_URL` / `OPENAI_API_KEY` / `GRF_MODEL` 临时覆盖；
-`GRF_MOUSE=0/1` 鼠标开关。
+或用环境变量临时指定：`OPENAI_BASE_URL` / `OPENAI_API_KEY` / `GRF_MODEL`。
+完整字段说明见[配置参考](docs/configuration.md)。
 
-- `policy` — 统一规则串，竖线组合：`write-workspace`（bash 用 sandbox-exec 限写
-  工作区（macOS）+ write/edit 覆写前须先 read）、`read-workspace`（read/glob/
-  grep/read_image 仅可读工作区）；空值默认 `off` 全关；非法值回退 `write-workspace`
-- `auto_approve` — 非交互（单任务/嵌入）模式下自动批准沙箱升级与计划
-
-## 接入 grf 的三条路径
-
-| 路径 | 适用 | 文档 |
-|---|---|---|
-| **Go 库嵌入**（`app.New` 门面，28 工具/事件/多会话全可编程） | Go 应用 | `docs/integration.md` |
-| **HTTP Responses API**（`gh server`，ORS 兼容；任意语言经 OpenAI SDK 指向即可） | 非 Go 宿主 / 结构化集成 | `docs/server.md` |
-| **CLI 子进程**（`./gh "任务"` 单任务直出，解析 stdout） | 脚本 / CI / 轻量调用 | integration.md §10 |
-
-架构总览（功能线条分层、暂停/恢复协议、并发规则等）见
-**`docs/architecture.md`**。
-
-### Go 库嵌入速览
-
-模块路径 `git.gorun.fun/share/grf-harness`（与公开仓库地址一致，可直接
-`go get`）；所有包均可公开导入（无 internal/）：
+### 3. 跑起来
 
 ```sh
-GOPRIVATE=git.gorun.fun go get git.gorun.fun/share/grf-harness@v0.0.1-alpha.2
+gh                     # 全屏交互（默认；非 TTY 自动回退行模式）
+gh -resume             # 恢复上一次会话
+gh "统计当前目录 go 文件行数"   # 单任务模式：直接输出结果后退出
 ```
 
-```go
-import (
-    "git.gorun.fun/share/grf-harness/app"    // 应用门面（库入口）
-    "git.gorun.fun/share/grf-harness/agent"  // 回合循环 / 暂停恢复 / goals / 子代理 / workflow
-    "git.gorun.fun/share/grf-harness/tools"  // 28 个工具与注册表
-    "git.gorun.fun/share/grf-harness/llm"    // OpenAI 兼容客户端（SSE / tool calls / 多模态）
-    "git.gorun.fun/share/grf-harness/store"  // 会话持久化
-    "git.gorun.fun/share/grf-harness/config" // ~/.grf/settings.json
-    "git.gorun.fun/share/grf-harness/term"   // 终端底层（raw/输入解析/宽度换行/全屏渲染）
-    "git.gorun.fun/share/grf-harness/tui"    // 全屏聊天 / 模型配置页
-    "git.gorun.fun/share/grf-harness/js"     // 迷你 JS 解释器
-)
-
-a, err := app.New(app.Options{
-    Workspace: "/path/to/ws",
-    Host:      myHost, // 实现 tools.Host：AskUser / 审批 / 事件
-})
-defer a.Close()
-err = a.RunTask(ctx, "做点什么")          // 单次执行
-// 或嵌入自己的 UI：a.Root() 返回 *agent.Agent，可挂流式回调
-```
-
-`tools.Host` 是嵌入方的交互接口：`AskUser`（ask_user_question 表单）、
-`ApproveEscalation`（沙箱升级审批）、`ApprovePlan`（计划审批）、
-`NotifyEvent`（事件流）。
-
-## 工具说明（28 个，定义见 tools/spec/tools.json）
-
-| 类别 | 工具 |
-|---|---|
-| 文件 | `read`（行号/分页）、`write`、`edit`（唯一匹配/replace_all）、`glob`（mtime 序/100 条内联）、`grep`（250 条内联/include 过滤）、`read_image`（PNG/JPEG/GIF 解码缩放，WebP 透传） |
-| 执行 | `bash`（workdir/timeout/exit code 标记/长输出截尾落盘/沙箱与越权即问）、`job_output` / `job_kill` / `job_list`（后台作业，流式增量读取） |
-| 网络 | `web_search`（1-4 查询合并，DDG 摘要 + 来源列表） |
-| 记忆 | `memory`（跨会话 JSON 条目记忆：项目级默认落工作区 `.grf/memory.json`，用户级落 `~/.grf/memory.json`；list/find/add/update/delete，key 自选唯一，find 按 key 精确/子串、内容子串三级检索，单文件 4KB 上限） |
-| 交互 | `ask_user_question`（表单）、`enter_plan_mode`（模型主动申请进入计划模式，经用户批准）、`exit_plan_mode`（计划审批）、`todo_write`（面板展示）、`skill`（SKILL.md 目录）、`set_policy`（模型拉起弹窗说明理由，用户亲自选择 policy，仅本会话生效） |
-| 目标 | `create_goal` / `get_goal` / `update_goal`（revision 校验、自动续跑） |
-| 编排 | `subagent` / `subagent_fork`（后台默认+落定通知）、`send_message` / `interrupt_agent` / `list_agents`、`workflow`（JS 脚本 + 并发/总量上限 + schema 校验）、`ralph`（新鲜代理循环） |
-
-## MCP 插件（plugins/）
-
-增强能力经 **MCP 插件**扩展：插件是独立编译的二进制（`plugins/` 独立
-Go 模块，不参与主程序构建，是仓库唯一允许第三方依赖的地方），主程序既
-能以本地 stdio 直接拉起（自动发现 `~/.grf/plugins/`），也能经
-Streamable HTTP 连接远端 `插件 serve` 启动的实例。`gh plugins` 一键体检。
-
-- **grf-browser**（17 工具，chromedp 纯 Go 实现，工具面对齐 playwright-mcp）：
-  `browser_navigate/back/forward/reload`、`browser_snapshot`（可交互元素
-  大纲 + ref 引用）、`browser_click/type/press_key/hover/select_option`、
-  `browser_evaluate`、`browser_take_screenshot`、`browser_get_text`、
-  `browser_console_messages`、`browser_network_requests`、`browser_tabs`、
-  `browser_close`
-- **grf-computer**（10 工具，macOS/Linux/Windows）：`computer_screenshot`
-  （PNG 多模态回传）、`computer_click/move/drag/scroll`、`computer_type`、
-  `computer_key`、`computer_clipboard`、`computer_screen_size`、
-  `computer_wait`
-
-插件工具与内置工具同表调用：审批模式逐工具确认、计划模式拦截未标只读
-的插件工具。写新插件用 `plugins/internal/mcpserver` SDK（工具实现一次
-注册，stdio/HTTP 双模式自动可用），详见 `docs/plugins.md`。
+## 常用命令
 
 ```sh
-./plugins/build.sh install   # 构建并安装到 ~/.grf/plugins/（自动发现接入）
-gh plugins                   # 插件体检：连接状态 + 工具清单
+gh model               # 模型配置页（多提供商 / 自动检测）
+gh model set <p/m>     # 脚本化设置默认模型
+gh config              # 配置摘要（prompt / steps / policy 子命令）
+gh server              # Responses API 服务（默认 127.0.0.1:7400 + Bearer）
+gh connect weixin      # 连接微信渠道（扫码后转后台守护进程）
+gh plugins             # 插件体检；gh plugins download 下载官方插件
+gh update              # 自更新（-y 跳过确认）
+gh version
 ```
 
-## 结构
+## 安全须知（简版，完整版见安全模型）
 
-```
-main.go + chat.go + settings_cmd.go + connect.go + server_cmd.go
-                      CLI 分发与子命令（package main；
-                      daemon_unix/daemon_other.go 为守护进程平台文件）
-term/                 终端底层：raw 模式、尺寸/SIGWINCH、输入事件解析、
-                      ANSI 宽度与软换行、备用屏幕整帧渲染、行选取助手
-llm/                  OpenAI 兼容客户端（SSE 流式、tool_calls、图像 parts）
-                      + 正文回退工具调用解析（<tool_call> XML / DSML）
-config/               ~/.grf/settings.json
-store/                会话持久化（.grf/sessions）
-tools/                工具注册表 + 28 个工具实现；spec/tools.json 为
-                      工具定义唯一来源（go:embed 内嵌）
-js/                   迷你 JavaScript 解释器（workflow 脚本执行）
-agent/                回合循环（turn.go）与暂停/恢复协议（pause.go）、
-                      Run* 入口族、子代理管理器、goal 状态机、ralph、
-                      workflow 接线、装配（build.go）、系统提示词
-app/                  库门面（app.New）、会话管理、单任务直出渲染、
-                      非 TTY REPL、TaskHost
-tui/                  全屏聊天（事件循环/流式汇聚/组帧渲染分文件：ask
-                      表单、计划审批、弹窗、鼠标、resize 重绘）、模型配置页
-server/               Responses API 接入层（ORS 兼容：会话池、SSE 事件
-                      桥、客户端工具、暂停应答、compact）
-mcp/ + plugin/        MCP 插件接入：零依赖客户端（stdio/HTTP）与插件
-                      管理器（配置/自动发现/注册为工具，进程级共享）
-plugins/              插件二进制源码（独立 Go 模块：grf-browser、
-                      grf-computer、internal/mcpserver SDK；独立 plugins/build.sh）
-weixin/               微信 ClawBot 渠道（每用户 agent 池、消息分发、
-                      登录与媒体处理）
-docs/                 architecture.md（架构总览）、integration.md（Go 库
-                      对接）、server.md（HTTP 接入）、plugins.md（MCP 插件）
-dist/                 交叉编译产物（run.sh，gitignore）
-```
+- gh 驱动**本机 bash 与文件工具**：默认 policy 为 `off`（无沙箱），建议显式
+  配置；**Linux/Windows 无进程级 bash 沙箱**（文件工具边界全平台生效）
+- `gh server` 是受控的本机 RCE 入口：默认仅环回 + Bearer token，绑外网前
+  先读 [docs/server.md](docs/server.md)
+- 微信渠道默认拒绝所有发送者：配置 `weixin.allow_senders` 后可用
+- 插件进程不受 harness policy 约束，只安装可信来源
+- 克隆的仓库携带的 `.grf/`（grants/memory）按不可信输入对待，系统提示词
+  会披露其存在
 
 ## 开发
 
 ```sh
-./run.sh            # vet + build（产物 ./gh，跳过测试；macOS 重做 adhoc 签名）
-./run.sh all        # 交叉编译 macos/linux/linux-arm/windows → dist/
-go test ./...         # 全部测试（无需网络与 API key，agent 回环用 httptest）
+./run.sh              # vet + build（产物 ./gh；macOS 自动 adhoc 签名）
+go test ./...         # 全部测试（无需网络与 API key）
 go test -race ./agent ./tools ./term ./js ./llm ./server
 ```
 
 工作区约定（分层规则、坑清单）见 `AGENTS.md`；架构说明见
-`docs/architecture.md`。
+[docs/architecture.md](docs/architecture.md)。
 
 ## 与原 gh 项目的关系
 
-本仓库是对 `~/AiProjects/gh`（bubbletea + glamour 版）的重构：
-- 去除全部第三方依赖（bubbletea/glamour/ansi → 自研 term 包）
-- 工具链从 gh 的 7 个（read_file/write_file/edit_file/delete_file/
-  list_dir/run_command/http_request + 记忆三件套）替换为新定的 25 个工具规范
-  （现内嵌于 tools/spec/tools.json，后扩至 28 个，其中 memory 以单工具
-  两级作用域重拾记忆能力），agent 核心按其文档语义重写（通知/子代理/goal/
-  workflow/ralph/沙箱等）
-- markdown 不再渲染（原 glamour），按需求显示原始 md 文本
-- 保留：多提供商配置、会话持久化/恢复、输入历史、模型配置页
-
-## 安全须知（务必阅读）
-
-gh 驱动的是**本机 bash 与文件工具**，请按下列边界使用：
-
-- **策略默认**：未配置时 policy 为 `off`（无沙箱）。建议在 settings.json
-  配 `policy: write-workspace`（macOS 下 bash 经 sandbox-exec 限制写边界）；
-  **Linux/Windows 没有进程级 bash 沙箱**——write/edit 的文件工具边界在所有
-  平台生效，但 bash 命令在这些平台不受 OS 级限制，仅在交互形态经升级审批。
-- **gh server 是受控的本机 RCE 入口**：默认仅绑 `127.0.0.1:7400` 并要求
-  Bearer token；绑非环回地址前请读 `docs/server.md`。
-- **微信渠道默认拒绝所有发送者**：首次使用在 `~/.grf/settings.json` 配置
-  `weixin.allow_senders`（收到未授权回执时会附上你的微信 ID 供复制）；
-  渠道默认工作区 `~/.grf/weixin/ws`、默认策略
-  `write-workspace|read-workspace`，工具审批经微信问答转发。
-- **插件（MCP）工具不受 harness policy 约束**：插件是独立进程，读写与命令
-  执行不经过文件工具边界与 bash 沙箱；只安装你信任的插件。插件远程模式
-  （`serve --addr`）强制 Bearer token（缺省自动生成打印），且服务端不发
-  CORS 放行头。
-- **自更新/插件下载的完整性校验与产物同信道**：HTTPS + 同目录 SHA256SUMS
-  可拦传输损坏，防不了下载服务器自身失陷；`GRF_DOWNLOAD_BASE` 可改基址。
-- **工作区随附文件即不可信输入**：克隆的仓库可能携带 `.grf/grants.json`
-  （越工作区写预授权）与 `.grf/memory.json`（跨会话注入文本），两者在系统
-  提示词中有披露提示；不信任仓库请先删除其 `.grf/` 目录。
-- **秘密不会传给子进程**：bash 与插件子进程的环境会剔除名称疑似密钥的
-  变量（`*API_KEY*`/`*TOKEN*`/`*SECRET*` 等，`tools/env.go`）。
+本仓库是对 `~/AiProjects/gh`（bubbletea + glamour 版）的重构：去除全部
+第三方依赖（自研 `term` 包与迷你 JS 解释器），工具链重定义为 28 个工具
+规范（内嵌 `tools/spec/tools.json`），agent 核心按文档语义重写；markdown
+不再渲染，按需求显示原始文本。保留多提供商配置、会话持久化/恢复、输入
+历史与模型配置页。

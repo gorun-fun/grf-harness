@@ -1,5 +1,7 @@
 # grf-harness 接入文档
 
+**简体中文** | [English](integration.en.md)
+
 面向要把 grf 作为 agent 能力嵌入自家应用的宿主程序。grf 零第三方依赖、
 无 `internal/` 目录，所有包（模块路径 `git.gorun.fun/share/grf-harness`）
 均可被外部 Go 项目导入。非 Go 宿主可走 HTTP（`gh server`，见

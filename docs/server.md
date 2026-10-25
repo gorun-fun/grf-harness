@@ -1,5 +1,7 @@
 # gh server：Responses API 接入
 
+**简体中文** | [English](server.en.md)
+
 `gh server` 把 harness 的 agent 能力以 **OpenAI Responses API** 形状暴露为
 HTTP 服务：核心对话/工具路径按 **Open Responses Specification（ORS）
 2026-04-24** 实现（基础文本、instructions、客户端函数工具、流式、多轮、

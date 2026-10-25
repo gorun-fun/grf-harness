@@ -1,5 +1,7 @@
 # MCP 插件（plugins/）
 
+**简体中文** | [English](plugins.en.md)
+
 grf-harness 的增强能力走 **MCP（Model Context Protocol）插件**：插件是
 独立编译的可执行二进制，放在 `plugins/` 目录（独立 Go 模块，**不参与主
 程序构建**）。主程序内置一个零依赖的 MCP 客户端（`mcp` 包 + `plugin`

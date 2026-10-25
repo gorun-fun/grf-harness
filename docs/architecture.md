@@ -1,5 +1,7 @@
 # grf-harness 架构总览
 
+**简体中文** | [English](architecture.en.md)
+
 按功能线条组织的仓库全景。对接嵌入方看 [integration.md](integration.md)（Go 库）与
 [server.md](server.md)（HTTP）；工作区规则看根目录 AGENTS.md。
 
