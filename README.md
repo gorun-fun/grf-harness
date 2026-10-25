@@ -7,7 +7,7 @@
 `gh server` 以 OpenAI Responses API 形状供任意语言宿主接入。
 它在你的工作区里读代码、跑命令、改文件、拆子任务，直到把活干完。
 
-![Go](https://img.shields.io/badge/Go-1.26-00ADD8) ![Dependencies](https://img.shields.io/badge/deps-0-success) ![Platforms](https://img.shields.io/badge/platforms-macos%20%7C%20linux%20%7C%20windows-9feaf9)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) ![Go](https://img.shields.io/badge/Go-1.26-00ADD8) ![Dependencies](https://img.shields.io/badge/deps-0-success) ![Platforms](https://img.shields.io/badge/platforms-macos%20%7C%20linux%20%7C%20windows-9feaf9)
 
 ## 目录
 

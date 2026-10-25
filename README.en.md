@@ -9,7 +9,7 @@ default, embeddable as a Go module, and exposable to any-language hosts via
 commands, edits files and spawns sub-agents in your workspace until the job
 is done.
 
-![Go](https://img.shields.io/badge/Go-1.26-00ADD6) ![Dependencies](https://img.shields.io/badge/deps-0-success) ![Platforms](https://img.shields.io/badge/platforms-macos%20%7C%20linux%20%7C%20windows-9feaf9)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) ![Go](https://img.shields.io/badge/Go-1.26-00ADD8) ![Dependencies](https://img.shields.io/badge/deps-0-success) ![Platforms](https://img.shields.io/badge/platforms-macos%20%7C%20linux%20%7C%20windows-9feaf9)
 
 ## Contents
 
