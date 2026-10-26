@@ -83,6 +83,9 @@ func TestGlobOrderAndBasename(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "old.go"), []byte("1"), 0o644)
 	os.WriteFile(filepath.Join(dir, "sub", "new.go"), []byte("1"), 0o644)
 	os.WriteFile(filepath.Join(dir, "sub", "skip.txt"), []byte("1"), 0o644)
+	// 部分 linux 文件系统 mtime 粒度粗（同刻写入分不出先后），显式回拨
+	// old.go 保证排序确定，勿依赖写入顺序
+	os.Chtimes(filepath.Join(dir, "old.go"), time.Now().Add(-time.Hour), time.Now().Add(-time.Hour))
 	// 无 "/" 模式匹配任意深度 basename
 	m, err := GlobFiles("*.go", dir)
 	if err != nil {
