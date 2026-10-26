@@ -1,0 +1,74 @@
+# ============================================================================
+# grf-harness (gh) GitHub 侧发布流水线
+# 触发：推送 v* tag（git tag v0.0.1 && git push github v0.0.1）
+# 流程：test 门禁 → 交叉编译 6 平台（主程序 ./run.sh all + 插件
+#       ./plugins/build.sh all，linux/windows 产物经 upx 压缩）→ 生成
+#       SHA256SUMS → 创建 GitHub Release 挂全部 18 个产物
+# 与 .gitlab-ci.yml 的分工：下载服务器（download.gorun.fun，selfupdate 与
+#       gh plugins download 的消费端）仍由 GitLab tag 流水线发布；本流程只发
+#       GitHub Release（公开镜像的可见产物），互不冲突——同一 tag 推到两个
+#       远端时两侧各发各的，不产生竞态写。
+# 版本号：run.sh / plugins/build.sh 均读 CI_COMMIT_TAG（GitLab 变量名）注入
+#       产物版本，这里以 GITHUB_REF_NAME 注入同名变量，产物内 config.Version
+#       与 tag 同源（去 v 前缀由脚本完成）。
+# ============================================================================
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+env:
+  CI_COMMIT_TAG: ${{ github.ref_name }}
+  # upx 官方发行版（ubuntu apt 的 upx-ucl 3.96 过旧）；升级只改此值
+  UPX_VERSION: '5.0.1'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+          cache-dependency-path: plugins/go.sum
+      - name: 发布门禁：全量测试（主程序 + 插件）
+        run: |
+          go test ./...
+          cd plugins && go test ./...
+      - name: 安装 upx
+        # 仅 linux/windows 产物压缩；darwin 与 windows/arm64 由构建脚本自行跳过
+        # （upx 破坏 darwin adhoc 签名、至 5.2 不支持 win64/arm64 PE）
+        run: |
+          curl -fsSL -o /tmp/upx.tar.xz \
+            "https://github.com/upx/upx/releases/download/v${UPX_VERSION}/upx-${UPX_VERSION}-amd64_linux.tar.xz"
+          tar -xJf /tmp/upx.tar.xz -C /tmp
+          sudo install -m 0755 "/tmp/upx-${UPX_VERSION}-amd64_linux/upx" /usr/local/bin/upx
+          upx --version
+      - name: 交叉编译 6 平台（主程序 + 插件）
+        run: |
+          ./run.sh all
+          ./plugins/build.sh all
+      - name: 生成 SHA256SUMS
+        # 单清单覆盖全部产物（相对文件名，两目录无重名）；
+        # 与下载服务器侧按平台/版本目录各一份的布局不同，此处 Release 扁平展示
+        run: |
+          rm -f SHA256SUMS
+          ( cd dist && sha256sum * ) >> SHA256SUMS
+          ( cd plugins/dist && sha256sum * ) >> SHA256SUMS
+          cat SHA256SUMS
+      - name: 创建 GitHub Release 并上传产物
+        # 用自带 gh CLI，除官方 actions 外零第三方依赖
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --title "${{ github.ref_name }}" \
+            --generate-notes \
+            dist/* plugins/dist/* SHA256SUMS

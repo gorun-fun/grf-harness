@@ -40,6 +40,11 @@ go test ./...             # 无需网络与 API key（agent 回环用 httptest �
 go test -race ./agent ./tools ./term ./js ./llm ./server
 ```
 
+CI 双轨（互不冲突）：`.gitlab-ci.yml`（tag 触发 → 发布下载服务器，如上）与
+`.github/workflows/`（GitHub 侧：ci.yml = main/PR 测试门禁 + race；release.yml =
+tag 触发构建 6 平台 → 发 GitHub Release，不碰下载服务器，版本号以
+CI_COMMIT_TAG=GITHUB_REF_NAME 注入复用既有脚本变量）。
+
 注意：真实模型端点配置在 `~/.grf/settings.json` 的 providers（GRF_HOME 可
 重定位），默认模型可用时直接 `./gh "任务"` 即可做端到端冒烟；全屏 UI 冒烟可用
 python3 pty.fork 驱动（打字→截图式解析 ANSI→验证帧），历史会话输出落在

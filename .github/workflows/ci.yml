@@ -1,0 +1,46 @@
+# ============================================================================
+# grf-harness (gh) 持续集成（GitHub Actions）
+# 触发：main 分支推送 + 全部 PR（+ 手动）；tag 推送走 release.yml，不在此重复
+# 内容：主程序 + 插件（独立 go.mod）vet/全量测试——均无需网络与 API key
+#       （agent 回环用 httptest 模拟 LLM；插件 go test 下自动空转），
+#       关键并发包追加 -race（同 AGENTS.md 的 go test -race 清单）
+# 分工：下载服务器发布仍由 .gitlab-ci.yml 负责；GitHub 侧见 release.yml
+# ============================================================================
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+          # 主模块零依赖无 go.sum，以插件模块的 go.sum 作缓存键（GOCACHE/GOMODCACHE 一并缓存）
+          cache-dependency-path: plugins/go.sum
+      - name: 主程序 vet + 全量测试
+        run: |
+          go vet ./...
+          go test ./...
+      - name: 关键并发包 -race
+        run: go test -race ./agent ./tools ./term ./js ./llm ./server
+      - name: 插件 vet + 测试（独立模块，测试自动空转）
+        run: |
+          cd plugins
+          go vet ./...
+          go test ./...
