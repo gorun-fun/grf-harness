@@ -44,6 +44,7 @@ opens a controlled RCE entry:
 | GET | `/v1/conversations/{id}` | Conversation details: paused/running/usage (superset) |
 | DELETE | `/v1/conversations/{id}` | Archive: stop the turn → persist → mark; **directory kept** (files the agent wrote are not deleted) |
 | GET | `/v1/conversations/{id}/items` | Full message history (llm.Message wire format, superset) |
+| GET | `/v1/agent/models/resolve?name=` | Structured model-name resolution (bare / qualified / empty = default; `{status: ok\|no_default\|not_found\|ambiguous\|unreadable, resolved?, candidates?}`, candidates listed on ambiguity). The **single authority** for model resolution — goder-serve's host-admin `resolve-model` forwards to this endpoint so headless host tasks can fail fast; re-reads settings.json per request, so provider declarations just written by a host are visible immediately |
 | GET | `/v1/health` | Liveness probe (authenticated) |
 
 ## 3. Session model: disk is truth, previous-chain

@@ -269,12 +269,22 @@ func SplitDefault(def string) (provider, model string) {
 // 优先，否则全表恰一家命中"解析。零命中、歧义（多供应商同名且默认
 // 供应商不含）或供应商未知返回 ok=false——调用方自行决定回退语义。
 // GRF_MODEL 环境覆盖与会话层模型切换（server 的 trySwitchModel）共用。
+// 选解核心在 ResolveModelEx（含歧义候选表），勿在别处复制选解逻辑。
 func (s *Settings) ResolveModel(name string) (provider, model string, ok bool) {
+	provider, model, ok, _ = s.ResolveModelEx(name)
+	return provider, model, ok
+}
+
+// ResolveModelEx ResolveModel 的选解核心，另带回歧义候选供应商表
+// （多家同名命中且默认供应商不含时，candidates 即命中清单，字典序）——
+// /v1/agent/models/resolve 端点消费，宿主（goder-serve 管理面转发）据此
+// 做无头任务的 fail-fast 判定。
+func (s *Settings) ResolveModelEx(name string) (provider, model string, ok bool, candidates []string) {
 	if name == "" {
-		return "", "", false
+		return "", "", false, nil
 	}
 	if s.Providers == nil {
-		return "", "", false
+		return "", "", false, nil
 	}
 	// 限定名以斜杠存在性判断——SplitDefault 对无斜杠输入返回非空
 	// provider（整个字符串），按 provider=="" 判定会让裸名分支永远
@@ -282,42 +292,46 @@ func (s *Settings) ResolveModel(name string) (provider, model string, ok bool) {
 	if strings.Contains(name, "/") {
 		pn, m := SplitDefault(name)
 		if m == "" {
-			return "", "", false
+			return "", "", false, nil
 		}
 		p, exists := s.Providers[pn]
 		if !exists {
-			return "", "", false
+			return "", "", false, nil
 		}
 		for _, x := range p.Models {
 			if x == m {
-				return pn, m, true
+				return pn, m, true, nil
 			}
 		}
-		return "", "", false
+		return "", "", false, nil
 	}
 	defProvider, _ := SplitDefault(s.Default)
 	if p, exists := s.Providers[defProvider]; exists {
 		for _, x := range p.Models {
 			if x == name {
-				return defProvider, name, true
+				return defProvider, name, true, nil
 			}
 		}
 	}
-	single := ""
+	// 全表扫描收集命中（同供应商表内重复登记只计一家；跨供应商多家
+	// 命中且默认供应商不含 = 歧义，候选表如实上报）。
+	var hits []string
 	for _, pn := range s.SortedProviderNames() {
 		for _, x := range s.Providers[pn].Models {
 			if x == name {
-				if single != "" {
-					return "", "", false // 多供应商同名且默认供应商不含：歧义
-				}
-				single = pn
+				hits = append(hits, pn)
+				break
 			}
 		}
 	}
-	if single == "" {
-		return "", "", false // 零命中
+	switch len(hits) {
+	case 0:
+		return "", "", false, nil // 零命中
+	case 1:
+		return hits[0], name, true, nil
+	default:
+		return "", "", false, hits // 歧义
 	}
-	return single, name, true
 }
 
 // SortedProviderNames 提供商名列表（字典序）。

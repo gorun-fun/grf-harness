@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -187,4 +188,53 @@ func (s *Server) handleAgentModelsDetect(w http.ResponseWriter, r *http.Request)
 		models = append(models, m.ID)
 	}
 	writeJSON(w, 200, map[string]any{"models": models, "modelsRich": rich})
+}
+
+// resolveDTO GET /v1/agent/models/resolve 应答。status ∈ ok|no_default|
+// not_found|ambiguous|unreadable，与 goder-serve 宿主管理面 resolve-model
+// 的应答形状逐字段一致（goder 转发本端点，openos 无头任务据此合成可读
+// 错误文案）。resolved 仅 ok 时携带（恒为 provider/model 全限定名，或
+// name 为空时默认串原样）。
+type resolveDTO struct {
+	Status     string   `json:"status"`
+	Resolved   string   `json:"resolved,omitempty"`
+	Candidates []string `json:"candidates,omitempty"`
+}
+
+// handleAgentModelsResolve GET /v1/agent/models/resolve?name= — 模型名
+// 结构化解析（裸名/限定名/空=取默认），fail-fast 语义：歧义/未含如实
+// 上报，绝不静默换路由。选解逻辑唯一实现在 config.ResolveModelEx。
+// 每请求重读 settings.json——宿主（如 openos AI 联动）刚落盘的供应商
+// 声明立即可见，无进程内陈旧性；不用 LoadFileForUpdate（其 policy 归一
+// 化回写会动 mtime，干扰宿主管理面的 (mtime,size) 指纹幂等）。文件不
+// 存在按"无默认/未含"处理，只有读失败或损坏才报 unreadable。
+func (s *Server) handleAgentModelsResolve(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimSpace(r.URL.Query().Get("name"))
+	cfg := &config.Settings{}
+	if raw, err := os.ReadFile(config.Path()); err == nil {
+		if err := json.Unmarshal(raw, cfg); err != nil {
+			writeJSON(w, 200, resolveDTO{Status: "unreadable"})
+			return
+		}
+	} else if !os.IsNotExist(err) {
+		writeJSON(w, 200, resolveDTO{Status: "unreadable"})
+		return
+	}
+	if name == "" {
+		if cfg.Default == "" {
+			writeJSON(w, 200, resolveDTO{Status: "no_default"})
+			return
+		}
+		writeJSON(w, 200, resolveDTO{Status: "ok", Resolved: cfg.Default})
+		return
+	}
+	provider, model, ok, cands := cfg.ResolveModelEx(name)
+	switch {
+	case ok:
+		writeJSON(w, 200, resolveDTO{Status: "ok", Resolved: provider + "/" + model})
+	case len(cands) > 1:
+		writeJSON(w, 200, resolveDTO{Status: "ambiguous", Candidates: cands})
+	default:
+		writeJSON(w, 200, resolveDTO{Status: "not_found"})
+	}
 }

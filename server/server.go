@@ -116,6 +116,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/agent/models", s.guard(s.handleAgentModelsGet))
 	mux.HandleFunc("PUT /v1/agent/models", s.guard(s.handleAgentModelsPut))
 	mux.HandleFunc("POST /v1/agent/models/detect", s.guard(s.handleAgentModelsDetect))
+	mux.HandleFunc("GET /v1/agent/models/resolve", s.guard(s.handleAgentModelsResolve))
 	mux.HandleFunc("GET /v1/agent/plugins", s.guard(s.handleAgentPluginsGet))
 	mux.HandleFunc("PUT /v1/agent/plugins", s.guard(s.handleAgentPluginsPut))
 	mux.HandleFunc("GET /v1/agent/skills", s.guard(s.handleAgentSkillsGet))

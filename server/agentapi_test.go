@@ -242,3 +242,52 @@ func TestAgentSkillsCRUD(t *testing.T) {
 		t.Fatalf("应已删除: %+v", sc)
 	}
 }
+
+func TestAgentModelsResolve(t *testing.T) {
+	ts := newAgentTestServer(t)
+	// 文件尚不存在：空名 = 无默认，裸名 = 未含
+	if code, body := agentDo(t, ts, "GET", "/v1/agent/models/resolve?name=", nil); code != 200 || !strings.Contains(string(body), `"no_default"`) {
+		t.Fatalf("空默认分支: %d %s", code, body)
+	}
+	if code, body := agentDo(t, ts, "GET", "/v1/agent/models/resolve?name=m1", nil); code != 200 || !strings.Contains(string(body), `"not_found"`) {
+		t.Fatalf("未含分支: %d %s", code, body)
+	}
+
+	// provA [m1,m2] 为默认供应商；provB/provC 同含 shared
+	code, _ := agentDo(t, ts, "PUT", "/v1/agent/models", map[string]any{
+		"providers": []map[string]any{
+			{"name": "provA", "baseUrl": "https://a.example.com/v1", "models": []string{"m1", "m2"}},
+			{"name": "provB", "baseUrl": "https://b.example.com/v1", "models": []string{"shared"}},
+			{"name": "provC", "baseUrl": "https://c.example.com/v1", "models": []string{"shared"}},
+		},
+		"default": "provA/m2",
+	})
+	if code != 200 {
+		t.Fatalf("写入供应商失败: %d", code)
+	}
+	cases := []struct {
+		name, want string
+		contains   string
+	}{
+		{"", "no_default-or-ok", `"status":"ok","resolved":"provA/m2"`},
+		{"m2", "默认供应商命中", `"resolved":"provA/m2"`},
+		{"m1", "默认供应商另一模型", `"resolved":"provA/m1"`},
+		{"shared", "多家同名歧义", `"status":"ambiguous","candidates":["provB","provC"]`},
+		{"provB/shared", "限定名", `"resolved":"provB/shared"`},
+		{"provX/m", "未知供应商", `"status":"not_found"`},
+	}
+	for _, c := range cases {
+		_, body := agentDo(t, ts, "GET", "/v1/agent/models/resolve?name="+c.name, nil)
+		if !strings.Contains(string(body), c.contains) {
+			t.Fatalf("%s（%s）应含 %s，实得 %s", c.name, c.want, c.contains, body)
+		}
+	}
+
+	// 损坏文件 = unreadable
+	if err := os.WriteFile(config.Path(), []byte("{oops"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code, body := agentDo(t, ts, "GET", "/v1/agent/models/resolve?name=m1", nil); code != 200 || !strings.Contains(string(body), `"unreadable"`) {
+		t.Fatalf("损坏分支: %d %s", code, body)
+	}
+}

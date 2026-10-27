@@ -40,6 +40,7 @@ gh server [-addr 127.0.0.1:7400] [-data ~/.grf/server] [-token <t>]
 | GET | `/v1/conversations/{id}` | 会话详情：paused/running/用量（超集） |
 | DELETE | `/v1/conversations/{id}` | 归档：终止回合 → 存档 → 标记；**目录保留**（agent 写过的文件不删） |
 | GET | `/v1/conversations/{id}/items` | 完整消息历史（llm.Message 线格式，超集） |
+| GET | `/v1/agent/models/resolve?name=` | 模型名结构化解析（裸名/限定名/空=默认；`{status: ok\|no_default\|not_found\|ambiguous\|unreadable, resolved?, candidates?}`，歧义带候选表）。模型选解的**唯一权威**——goder-serve 宿主管理面 `resolve-model` 转发本端点，无头宿主任务据此 fail-fast；每请求重读 settings.json，宿主刚落盘的供应商声明立即可见 |
 | GET | `/v1/health` | 探活（需鉴权） |
 
 ## 3. 会话模型：磁盘为准，previous 链
