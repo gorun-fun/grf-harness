@@ -23,6 +23,7 @@ always **environment variable > config file > built-in default**.
   "policy": "write-workspace|read-workspace",
   "auto_approve": false,
   "compact_threshold": 0,
+  "orchestrator": false,
   "weixin": {
     "allow_senders": ["wxid_xxxx"],
     "policy": ""
@@ -40,6 +41,7 @@ always **environment variable > config file > built-in default**.
 | `policy` | Unified rule string (see below). Empty = `off` (all disabled); invalid values fall back to `write-workspace` |
 | `auto_approve` | Auto-approve sandbox escalations and plans in non-interactive (one-shot/embedded) modes. Never applies to the WeChat channel (approvals go through WeChat Q&A) |
 | `compact_threshold` | Auto-compaction threshold in estimated tokens: 0 = default (100k), positive overrides, negative disables |
+| `orchestrator` | Orchestrator mode: the root session registers no read/grep/glob/web_search — gathering goes through subagents and the root only synthesizes (subagents keep the full toolset). `GRF_ORCHESTRATOR=1` overrides; skipped when subagent is disabled |
 | `weixin` | WeChat channel security settings (dedicated section below) |
 | `plugins` | MCP plugin wiring: key absent = auto-discover executables under `~/.grf/plugins/`, `[]` = disable discovery, non-empty = use only the listed items. See the [plugin docs](plugins.en.md) |
 
@@ -83,6 +85,7 @@ A pipe-combined token string parsed by `config.ParsePolicy`:
 |---|---|---|
 | `GRF_HOME` | Config root (settings/plugins/sessions/weixin state all live here) | `~/.grf` |
 | `GRF_MODEL` | Model override (bare / qualified / passthrough — see above) | — |
+| `GRF_ORCHESTRATOR` | Orchestrator-mode override (`1/true/yes/on` enables, `0/false/no/off` disables, other values ignored; process-wide, never persisted) | config file |
 | `OPENAI_BASE_URL` | Final LLM endpoint override (highest precedence) | provider `base_url` |
 | `OPENAI_API_KEY` | Final LLM key override (highest precedence) | provider `api_key` |
 | `GRF_MOUSE` | Initial mouse state in full-screen mode; `0`/`false` disables | enabled |

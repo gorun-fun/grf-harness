@@ -82,7 +82,17 @@ the user saw). All tool results pass the shared pruning net
 `pruneResultText` (>8192 bytes keeps head 4096 + tail 1024, UTF-8 aligned;
 tools' own truncation + spillover to disk happens first). Identical
 consecutive calls (name + arguments) draw escalating reminders at 3/5/8
-thresholds (anti-spin). Mid-run steering (`agent/steer.go`): user input
+thresholds (anti-spin). The delegation-first cross-cut
+(`agent/delegate.go`, root sessions only, requires subagent available):
+cumulative inline research (read/grep/glob/web_search) hitting 8/20, a
+single reply fanning out ≥3 parallel reads, or the estimated token count
+entering the 60% band below the compact threshold each draw a one-shot
+notice steering the model to gather via subagents instead (`[system
+notice]` user message, the protocol-safe injection point); orchestrator
+mode (settings `orchestrator` / `GRF_ORCHESTRATOR=1`) routes hard — the
+root session registers none of those four tools, leaving delegation the
+only gathering path (subagents keep the full toolset). Mid-run steering
+(`agent/steer.go`): user input
 queued via `Agent.Steer` merges as a plain user message at step boundaries
 (running tools are not interrupted; idle-period queuing is drained at the
 start of the next turn); the TUI's Enter-during-run is steering, unmerged

@@ -22,6 +22,7 @@
   "policy": "write-workspace|read-workspace",
   "auto_approve": false,
   "compact_threshold": 0,
+  "orchestrator": false,
   "weixin": {
     "allow_senders": ["wxid_xxxx"],
     "policy": ""
@@ -39,6 +40,7 @@
 | `policy` | 统一规则串（见下节）。空值默认 `off`（全关）；非法值回退 `write-workspace` |
 | `auto_approve` | 非交互（单任务/嵌入）模式下自动批准沙箱升级与计划。微信渠道恒不生效（审批走微信问答） |
 | `compact_threshold` | 会话自动压缩阈值（估算 token）：0 用默认（100k），正数覆盖，负数关闭 |
+| `orchestrator` | 编排者模式：根会话不注册 read/grep/glob/web_search，采集经子代理、根只做综合（子代理保持全量工具集）。`GRF_ORCHESTRATOR=1` 环境覆盖；subagent 被禁用时自动失效 |
 | `weixin` | 微信渠道安全配置（见下文专节） |
 | `plugins` | MCP 插件接入配置；缺省键 = 自动发现 `~/.grf/plugins/` 下可执行文件，`[]` = 关闭自动发现，非空 = 仅使用列出的项。详见[插件文档](plugins.md) |
 
@@ -76,6 +78,7 @@
 |---|---|---|
 | `GRF_HOME` | 配置根目录（settings/plugins/sessions/weixin 状态等全在此） | `~/.grf` |
 | `GRF_MODEL` | 模型覆盖（裸名 / 限定名 / 整串透传，见上节） | — |
+| `GRF_ORCHESTRATOR` | 编排者模式覆盖（`1/true/yes/on` 开、`0/false/no/off` 关，其余值忽略；进程级不落盘） | 配置文件 |
 | `OPENAI_BASE_URL` | LLM 端点最终覆盖（优先级最高） | provider 的 `base_url` |
 | `OPENAI_API_KEY` | LLM 密钥最终覆盖（优先级最高） | provider 的 `api_key` |
 | `GRF_MOUSE` | 全屏模式鼠标初始状态；`0`/`false` 关闭 | 开启 |

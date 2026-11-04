@@ -39,6 +39,10 @@ type Settings struct {
 	MaxSteps     int                  `json:"max_steps,omitempty"`
 	Policy       string               `json:"policy,omitempty"`
 	AutoApprove  bool                 `json:"auto_approve,omitempty"` // 非交互时自动批准沙箱升级/计划
+	// Orchestrator 编排者模式：根会话不注册内联调研工具（read/grep/
+	// glob/web_search），采集经子代理、根只做综合（GRF_ORCHESTRATOR=1
+	// 环境覆盖）。
+	Orchestrator bool                `json:"orchestrator,omitempty"`
 	// CompactThreshold 会话自动压缩阈值（估算 token）：0 用默认
 	// （agent.DefaultCompactThreshold），正数显式覆盖，负数关闭自动压缩。
 	CompactThreshold int `json:"compact_threshold,omitempty"`
@@ -227,6 +231,23 @@ func Load() (Effective, error) {
 		eff.APIKey = v
 	}
 	return eff, nil
+}
+
+// OrchestratorRuntime 运行时编排者模式判定：GRF_ORCHESTRATOR 环境覆盖
+//（1/true/yes/on 开，0/false/no/off 关，其他值忽略）优先于 settings 的
+// orchestrator 字段。进程级开关、不落盘——经此判定而非 Load()：Effective
+// 不进 Harness，且 LoadFileForUpdate 的读改写链路若被环境变量污染会把
+// 覆盖值持久化进 settings.json。
+func OrchestratorRuntime(s *Settings) bool {
+	if v := os.Getenv("GRF_ORCHESTRATOR"); v != "" {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "1", "true", "yes", "on":
+			return true
+		case "0", "false", "no", "off":
+			return false
+		}
+	}
+	return s != nil && s.Orchestrator
 }
 
 // Active 解析默认提供商：Default 指向的 "provider/model"，否则字典序第一个。

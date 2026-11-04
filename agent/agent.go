@@ -81,6 +81,11 @@ type Agent struct {
 	maxParallel      int             // 同批并行安全工具的并发上限（dispatchBatch）
 	repeatKey        string          // 连续相同调用（名+参数）的 streak 键（仅回合 goroutine 访问）
 	repeatCount      int             // 该键的连续次数（仅回合 goroutine 访问）
+	rootAgent        bool            // 根会话标记（build 置位；委派提醒仅根生效）
+	inlineCalls      int             // 内联调研类累计调用数（delegate.go；仅回合 goroutine 访问）
+	delegRemindStage int             // 内联阈值提醒已发档位（delegate.go；仅回合 goroutine 访问）
+	fanoutReminded   bool            // 扇出形状提醒已发（每会话至多一次；仅回合 goroutine 访问）
+	pressureReminded bool            // 上下文压力提醒已发（每会话至多一次；仅回合 goroutine 访问）
 	steer            []string        // 运行中插话队列（steer.go；步骤边界/回合开头注入）
 	compactThreshold int             // 自动压缩阈值（compact.go；0 默认 / <0 关闭）
 

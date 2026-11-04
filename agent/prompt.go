@@ -36,6 +36,7 @@ type PromptOptions struct {
 	HostContext    string
 	Skills         *tools.SkillCatalog // 可为 nil
 	Subagent       bool                // 子代理身份（附加说明）
+	Orchestrator   bool                // 编排者模式（根会话未注册内联调研工具）
 	Label          string              // 子代理标签
 	PluginWarnings []string            // 不可用插件（为空不拼段）
 	// TrustWarnings 工作区信任提示（grants 授权目录披露、自带项目记忆
@@ -162,6 +163,13 @@ func BuildSystemPrompt(o PromptOptions, custom string) string {
 	if o.Subagent {
 		b.WriteString("\n## 子代理身份\n")
 		fmt.Fprintf(&b, "You are running as a background subagent (label %q). You do not see the parent conversation; rely only on the prompt you were given and the workspace. Complete the self-contained task and reply with the final result — not your intermediate steps. You may not ask the user questions and may not create session goals. You are a delegated subagent: your permission scope was fixed when you were started and cannot be widened from inside this session — operations that require approval are rejected automatically. When the job needs access beyond that scope, do not retry the denied operation; state the limitation in your reply so the delegating agent can handle it.\n", o.Label)
+	}
+
+	// 编排者模式说明：根会话未注册内联调研工具（read/grep/glob/
+	// web_search），采集只剩委派一条路；说明白这是刻意设计而非缺工具，
+	// 防模型反复尝试不存在的调用
+	if o.Orchestrator {
+		b.WriteString("\n## 编排者模式\nThis session runs as an orchestrator: the inline research tools (read, grep, glob, web_search) are intentionally not available here. Delegate every gathering task — research, multi-file analysis, information retrieval — to subagents (subagent / subagent_fork) and synthesize their results in this conversation. Do not attempt the unavailable tools; the subagents have them.\n")
 	}
 
 	// 模型身份行：最易变（会话内可切换模型被改写），恒在末尾。

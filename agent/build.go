@@ -44,6 +44,7 @@ type Harness struct {
 	hostCtx  string   // 宿主环境简报（Options.HostContext；独立段拼在 custom 身份段后，根与子代理共享）
 	plugWarn []string // 插件状态警告（构建期取一次；子代理提示词复用）
 	trustWarn []string // 工作区信任提示（grants/自带记忆披露；构建期取一次）
+	orchestrated bool  // 编排者模式实际生效（registerTools 剔除成功后置位；提示词段跟随实际生效而非配置意图）
 }
 
 // Options 组装参数。
@@ -159,8 +160,9 @@ func Build(opts Options) (*Harness, error) {
 	root.goals = h.Goals
 	h.Root = root
 
-	// 根工具链（28 个全部注册）
+	// 根工具链（28 个全部注册；orchestrator 模式下剔除根的内联调研工具）
 	h.registerTools(root, true)
+	root.rootAgent = true // 委派优先提醒仅根生效（delegate.go）
 	// 提示词在工具注册后组装：inner prompt 按实际注册结果（含
 	// DisabledTools 剔除）拼装，说明段与真实可用工具集一致。
 	root.SetSystemText(h.systemPromptFor(root.Reg(), false, "", opts.SystemPrompt))
@@ -256,6 +258,7 @@ func (h *Harness) systemPromptFor(reg *tools.Registry, subagent bool, label, ove
 		Skills:         h.Skills,
 		Subagent:       subagent,
 		Label:          label,
+		Orchestrator:   !subagent && h.orchestrated, // 编排者模式段仅根拼装（跟随实际生效）
 		PluginWarnings: h.plugWarn, // 构建期取好，根与子代理同一份
 		TrustWarnings:  h.trustWarn,
 		Tools:          names,
@@ -263,6 +266,12 @@ func (h *Harness) systemPromptFor(reg *tools.Registry, subagent bool, label, ove
 		HostContext:    h.hostCtx, // 宿主环境简报：根与子代理共享（子代理同样需要知道宿主环境）
 		ShellNote:      tools.ShellNote(), // 进程级恒定：windows 无 bash 时告知 PowerShell 语法
 	}, override)
+}
+
+// orchestrator 编排者模式开关：settings 的 orchestrator 字段 +
+// GRF_ORCHESTRATOR 环境覆盖（见 config.OrchestratorRuntime）。
+func (h *Harness) orchestrator() bool {
+	return config.OrchestratorRuntime(h.Settings)
 }
 
 // policyLimit 解析统一规则串（config.ParsePolicy），一次取回写/读限制开关。
@@ -308,6 +317,11 @@ func (h *Harness) Policy() string {
 func (h *Harness) registerTools(a *Agent, root bool) {
 	r := a.reg
 
+	// 禁用标记先落（标记式、与注册顺序无关）：下文 orchestrator 守卫
+	// 经 Has 能看到 DisabledTools 已剔除 subagent 的情形
+	if len(h.disabled) > 0 {
+		r.Disable(h.disabled...)
+	}
 	tools.RegisterFs(r, h.root, h.Fs, h.Artifacts)
 	tools.RegisterReadImage(r, h.Fs)
 	// 沙箱开关经 FsPolicy 实时读取（set_policy 批准后立即生效）
@@ -334,6 +348,12 @@ func (h *Harness) registerTools(a *Agent, root bool) {
 		RegisterRalph(r, a, h.Manager)
 		// enter_plan_mode 仅根：模式切换是根会话状态，子代理不可申请
 		tools.RegisterEnterPlanMode(r, planCtl{a})
+		// orchestrator 模式：剔除根的内联调研工具，采集只剩委派一条路
+		//（子代理保持全量工具集）；subagent 也被禁用时模式无意义，跳过
+		if h.orchestrator() && r.Has("subagent") {
+			r.Disable("read", "grep", "glob", "web_search")
+			h.orchestrated = true
+		}
 	} else {
 		// 子代理问用户：明确拒绝（不可达最终用户）
 		tools.RegisterAskUserDenied(r)
@@ -343,9 +363,6 @@ func (h *Harness) registerTools(a *Agent, root bool) {
 	// 未标只读的插件工具在计划模式下按改动类拦截
 	if h.Plugins != nil {
 		a.planExtra = h.Plugins.RegisterInto(r)
-	}
-	if len(h.disabled) > 0 {
-		r.Disable(h.disabled...)
 	}
 }
 

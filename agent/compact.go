@@ -115,6 +115,7 @@ func (a *Agent) maybeAutoCompact(ctx context.Context) {
 	est := llm.EstimateMessagesTokens(a.history)
 	a.mu.Unlock()
 	if est < int64(th) {
+		a.notePressure(est, int64(th)) // 委派优先：压力带一次性提醒（delegate.go，仅根生效）
 		return
 	}
 	if _, err := a.compactLocked(ctx); err != nil {

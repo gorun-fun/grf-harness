@@ -160,6 +160,7 @@ func (a *Agent) runTurn(ctx context.Context, userMsg *llm.Message, human bool, r
 			return reply.Content, nil, nil
 		}
 
+		a.noteFanout(reply.ToolCalls) // 委派优先：单批扇出形状检测（dispatch 前，仅根生效）
 		pending := a.dispatchBatch(turnCtx, reply.ToolCalls)
 		if len(pending) > 0 {
 			a.mu.Lock()
@@ -237,6 +238,7 @@ func (a *Agent) dispatchBatch(turnCtx context.Context, calls []llm.ToolCall) []P
 	}
 	for _, call := range calls {
 		a.trackRepeat(call) // streak 计数只在回合 goroutine，无并发
+		a.trackDelegateNudge(call) // 委派优先提醒（delegate.go，仅根生效）
 		if parallelSafeTools[call.Name()] && turnCtx.Err() == nil {
 			group = append(group, call)
 			continue
