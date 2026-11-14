@@ -13,11 +13,11 @@ import (
 	"git.gorun.fun/share/grf-harness/tools"
 )
 
-// TestDelegateInlineThreshold 端到端：内联调研累计 8 次触发一次提醒，
-// 20 档不再重复（9 次调用只到 8 档）。
+// TestDelegateInlineThreshold 端到端：内联调研累计 4 次触发第一档提醒
+//（祈使句+简报三要素），10 次触发第二档升级提醒，各一次（闩锁）。
 func TestDelegateInlineThreshold(t *testing.T) {
-	script := make([]string, 0, 10)
-	for i := 0; i < 9; i++ {
+	script := make([]string, 0, 12)
+	for i := 0; i < 11; i++ {
 		script = append(script, `TOOL:read:{"file_path":"no-such-file"}`)
 	}
 	script = append(script, "done")
@@ -29,17 +29,23 @@ func TestDelegateInlineThreshold(t *testing.T) {
 	if _, err := h.Root.Run(context.Background(), "调研一下"); err != nil {
 		t.Fatal(err)
 	}
-	n := 0
+	stage1, stage2 := 0, 0
 	for _, m := range h.Root.History() {
-		if m.Role == "user" && strings.Contains(m.Content, "inline read/search tool calls") {
-			n++
+		if m.Role != "user" {
+			continue
+		}
+		if strings.Contains(m.Content, "you have made 4 inline read/search calls") {
+			stage1++
+		}
+		if strings.Contains(m.Content, "inline gathering continued after being advised to delegate") {
+			stage2++
 		}
 	}
-	if n != 1 {
-		t.Fatalf("expected exactly 1 inline-threshold notice, got %d", n)
+	if stage1 != 1 || stage2 != 1 {
+		t.Fatalf("expected exactly 1 notice per stage, got stage1=%d stage2=%d", stage1, stage2)
 	}
-	if h.Root.inlineCalls != 9 || h.Root.delegRemindStage != 1 {
-		t.Fatalf("inlineCalls=%d stage=%d, want 9/1", h.Root.inlineCalls, h.Root.delegRemindStage)
+	if h.Root.inlineCalls != 11 || h.Root.delegRemindStage != 2 {
+		t.Fatalf("inlineCalls=%d stage=%d, want 11/2", h.Root.inlineCalls, h.Root.delegRemindStage)
 	}
 }
 

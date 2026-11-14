@@ -145,8 +145,9 @@ python3 pty.fork 驱动（打字→截图式解析 ANSI→验证帧），历史�
   回合取消未开始调用的 aborted-before-dispatch 合成结果、崩溃残留未闭合调用
   的 outcome-unknown 占位、取消流的已交付前缀入历史（interrupted 标记）、
   连续相同调用 3/5/8 次递进提醒。委派优先横切件（`agent/delegate.go`，仅根
-  生效）：内联调研累计 8/20 次、单批 ≥3 并行读取扇出、token 进入压缩阈值
-  60% 带三档一次性提醒改用子代理；orchestrator 模式（settings
+  生效）：内联调研累计 4/10 次、单批 ≥3 并行读取扇出、token 进入压缩阈值
+  60% 带三档一次性提醒改用子代理（阈值与祈使句文案经 2026-11 配对实验
+  校准，委派率 64%→86%）；orchestrator 模式（settings
   `orchestrator`/`GRF_ORCHESTRATOR=1`）硬改道——根不注册 read/grep/glob/
   web_search（subagent 被禁时自动失效，`h.orchestrated` 记实际生效）。
   前台 bash 超时晋升后台 job
