@@ -18,8 +18,11 @@ import (
 )
 
 // imageRejectRe 匹配模型端点拒绝图片输入的错误文本（不同服务商措辞
-// 不同，按关键词粗匹配；命中才触发历史图片降级重试）。
-var imageRejectRe = regexp.MustCompile(`(?i)image|multimodal|vision|多模态|图片`)
+// 不同，按关键词粗匹配；命中才触发历史图片降级重试）。末支匹配智谱式
+// 报错「messages.content.type 参数非法，取值范围 ['text']」——允许值
+// 列表只含 text 即宣告端点仅收文本，整串不含 image 关键词；列表含
+// image_url 等其他取值时 \] 不紧跟其后，不会误命中。
+var imageRejectRe = regexp.MustCompile(`(?i)image|multimodal|vision|多模态|图片|content(?:\.\d+)*\.type.{0,40}\[\s*['"]?text['"]?\s*\]`)
 
 // RunTurn 发起一个可暂停的回合（文本输入）。中途暂停时返回
 // (nil, *PausedTurn, nil)；正常结束返回最终回复。

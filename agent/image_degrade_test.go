@@ -17,6 +17,21 @@ import (
 )
 
 func TestImageRejectDegradesAndRecovers(t *testing.T) {
+	// 两族拒绝措辞：OpenAI 式（文案带 image 关键词）与智谱式
+	// （content.type 只允许 text，整串不含 image 关键词，code 1210）
+	cases := []struct{ name, body string }{
+		{"openai措辞", `{"error":{"code":"InvalidParameter","message":"Model do not support image input","param":"image_url"}}`},
+		{"智谱措辞", `{"error":{"code":"1210","message":"messages.content.type 参数非法，取值范围 ['text']"}}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			imageRejectCase(t, c.body)
+		})
+	}
+}
+
+func imageRejectCase(t *testing.T, rejectBody string) {
+	t.Helper()
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -24,7 +39,7 @@ func TestImageRejectDegradesAndRecovers(t *testing.T) {
 		hasImage := strings.Contains(string(body), "image_url")
 		if atomic.AddInt32(&calls, 1) == 1 && hasImage {
 			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(`{"error":{"code":"InvalidParameter","message":"Model do not support image input","param":"image_url"}}`))
+			_, _ = w.Write([]byte(rejectBody))
 			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
