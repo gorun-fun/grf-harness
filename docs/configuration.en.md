@@ -28,6 +28,14 @@ always **environment variable > config file > built-in default**.
     "allow_senders": ["wxid_xxxx"],
     "policy": ""
   },
+  "cluster": {
+    "enabled": false,
+    "role": "node",
+    "name": "",
+    "token": "",
+    "commander_url": "",
+    "nodes": []
+  },
   "plugins": []
 }
 ```
@@ -43,6 +51,7 @@ always **environment variable > config file > built-in default**.
 | `compact_threshold` | Auto-compaction threshold in estimated tokens: 0 = default (100k), positive overrides, negative disables |
 | `orchestrator` | Orchestrator mode: the root session registers no read/grep/glob/web_search — gathering goes through subagents and the root only synthesizes (subagents keep the full toolset). `GRF_ORCHESTRATOR=1` overrides; skipped when subagent is disabled |
 | `weixin` | WeChat channel security settings (dedicated section below) |
+| `cluster` | Cluster mode (M1: static node-table routing + call-home registration/heartbeat). `enabled` master switch; `role` = `node`/`commander`; `name` node name (empty = hostname); `token` cluster shared secret (authenticates the commander's `/cluster/*` endpoints; nodes register with it); `commander_url` call-home address on the node side (registers and heartbeats periodically when set); `nodes` manual node table (the commander's static seed — entries hold `addr`/`token`/`name`/`labels`; a subagent description naming `@name` or a label as a whole word dispatches to that node); `policy` default policy for dispatched tasks; `sync` workspace sync strategy (`none`/`seed`/`git`/`full`; M1 implements `none` only); `route` routing knobs (`allow_local` fall back to local when nothing matches, `max_inflight_per_node` per-node cap, default 4). `GRF_CLUSTER_ENABLED` overrides |
 | `plugins` | MCP plugin wiring: key absent = auto-discover executables under `~/.grf/plugins/`, `[]` = disable discovery, non-empty = use only the listed items. See the [plugin docs](plugins.en.md) |
 
 ## The policy rule string
@@ -86,6 +95,7 @@ A pipe-combined token string parsed by `config.ParsePolicy`:
 | `GRF_HOME` | Config root (settings/plugins/sessions/weixin state all live here) | `~/.grf` |
 | `GRF_MODEL` | Model override (bare / qualified / passthrough — see above) | — |
 | `GRF_ORCHESTRATOR` | Orchestrator-mode override (`1/true/yes/on` enables, `0/false/no/off` disables, other values ignored; process-wide, never persisted) | config file |
+| `GRF_CLUSTER_ENABLED` | Cluster-mode override (same value semantics as `GRF_ORCHESTRATOR`; process-wide, never persisted) | config file |
 | `OPENAI_BASE_URL` | Final LLM endpoint override (highest precedence) | provider `base_url` |
 | `OPENAI_API_KEY` | Final LLM key override (highest precedence) | provider `api_key` |
 | `GRF_MOUSE` | Initial mouse state in full-screen mode; `0`/`false` disables | enabled |

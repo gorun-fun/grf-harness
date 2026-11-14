@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"git.gorun.fun/share/grf-harness/agent"
+	"git.gorun.fun/share/grf-harness/cluster"
 	"git.gorun.fun/share/grf-harness/config"
 	"git.gorun.fun/share/grf-harness/llm"
 	"git.gorun.fun/share/grf-harness/store"
@@ -47,6 +48,9 @@ type Options struct {
 	Policy      string // 统一规则串："write-workspace|read-workspace" | "write-workspace" | "read-workspace" | "off"（空值默认 off），见 config.ParsePolicy
 	AutoApprove *bool  // 非交互自动批准沙箱升级/计划
 	NoPlugins   bool   // 关闭 MCP 插件接入（不发现/不连接外部插件）
+	// Cluster 集群路由层（指挥官侧注入；nil = 按 settings 自动构建
+	//（cluster.enabled 时）。嵌入方可用它自定义路由/禁用）。
+	Cluster *cluster.Router
 }
 
 // App 应用门面。
@@ -75,6 +79,14 @@ func New(opts Options) (*App, error) {
 	if sysPrompt == "" && settings != nil {
 		sysPrompt = settings.SystemPrompt
 	}
+	// 集群路由层：Options 显式注入优先；否则 settings 启用了集群就自动
+	// 构建（终端形态也能当指挥官）
+	router := opts.Cluster
+	if router == nil {
+		if ccfg := config.ClusterRuntime(settings); ccfg != nil {
+			router = cluster.NewRouter(ccfg)
+		}
+	}
 	h, err := agent.Build(agent.Options{
 		Workspace:     opts.Workspace,
 		Client:        client,
@@ -87,6 +99,7 @@ func New(opts Options) (*App, error) {
 		Skills:        opts.Skills,
 		DefaultSkill:  opts.DefaultSkill,
 		NoPlugins:     opts.NoPlugins,
+		Cluster:       router,
 	})
 	if err != nil {
 		return nil, err

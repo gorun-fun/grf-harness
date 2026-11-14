@@ -124,7 +124,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /v1/agent/skills/{name}", s.guard(s.handleAgentSkillPut))
 	mux.HandleFunc("DELETE /v1/agent/skills/{name}", s.guard(s.handleAgentSkillDelete))
 	mux.HandleFunc("POST /v1/agent/skills/{name}/enabled", s.guard(s.handleAgentSkillEnabled))
+	mux.HandleFunc("GET /v1/agent/cluster", s.guard(s.handleAgentClusterGet))
+	mux.HandleFunc("PUT /v1/agent/cluster", s.guard(s.handleAgentClusterPut))
 	mux.HandleFunc("GET /v1/health", s.guard(s.handleHealth))
+	// 集群控制面（EnableCluster 之后装配；任务面复用既有 /v1/* 端点）。
+	// 鉴权双令牌：server token 或集群共享密钥（call-home 节点无需 RCE
+	// 级 server token）。
+	if s.cluster != nil {
+		mux.HandleFunc("GET /cluster/capabilities", s.guardCluster(s.handleClusterCaps))
+		mux.HandleFunc("POST /cluster/register", s.guardCluster(s.handleClusterRegister))
+		mux.HandleFunc("POST /cluster/heartbeat", s.guardCluster(s.handleClusterHeartbeat))
+		mux.HandleFunc("GET /cluster/members", s.guardCluster(s.handleClusterMembers))
+	}
 	return accessLog(mux)
 }
 

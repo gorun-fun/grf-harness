@@ -37,6 +37,9 @@ type PromptOptions struct {
 	Skills         *tools.SkillCatalog // 可为 nil
 	Subagent       bool                // 子代理身份（附加说明）
 	Orchestrator   bool                // 编排者模式（根会话未注册内联调研工具）
+	// ClusterNodes 集群节点行（cluster.Router.PromptLines 的渲染结果；
+	// 仅指挥官根会话传入，空 = 不拼段）。
+	ClusterNodes   []string
 	Label          string              // 子代理标签
 	PluginWarnings []string            // 不可用插件（为空不拼段）
 	// TrustWarnings 工作区信任提示（grants 授权目录披露、自带项目记忆
@@ -170,6 +173,16 @@ func BuildSystemPrompt(o PromptOptions, custom string) string {
 	// 防模型反复尝试不存在的调用
 	if o.Orchestrator {
 		b.WriteString("\n## 编排者模式\nThis session runs as an orchestrator: the inline research tools (read, grep, glob, web_search) are intentionally not available here. Delegate every gathering task — research, multi-file analysis, information retrieval — to subagents (subagent / subagent_fork) and synthesize their results in this conversation. Do not attempt the unavailable tools; the subagents have them.\n")
+	}
+
+	// 集群节点表：指挥官根会话可把 subagent 派往远端设备（@name 或
+	// 能力标签命中即路由；未命中照常本地执行）。任务自包含——远端
+	// agent 只见 prompt，不见本会话历史。
+	if len(o.ClusterNodes) > 0 {
+		b.WriteString("\n## 集群节点\nRemote worker nodes are available: a subagent whose description names a node (with @name or one of its labels) is dispatched to that node instead of running locally — the subagent is a full agent session on the node's own filesystem and tools (its platform/plugins may differ from here). Dispatch remotely when the work needs that node's environment; otherwise omit node references and it runs locally. Remote subagents settle with a notice like local ones; send_message / interrupt_agent / list_agents work on them too. The prompt must be fully self-contained (paths and context of this machine are not visible on the node).\n")
+		for _, line := range o.ClusterNodes {
+			b.WriteString(line + "\n")
+		}
 	}
 
 	// 模型身份行：最易变（会话内可切换模型被改写），恒在末尾。

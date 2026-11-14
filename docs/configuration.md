@@ -27,6 +27,14 @@
     "allow_senders": ["wxid_xxxx"],
     "policy": ""
   },
+  "cluster": {
+    "enabled": false,
+    "role": "node",
+    "name": "",
+    "token": "",
+    "commander_url": "",
+    "nodes": []
+  },
   "plugins": []
 }
 ```
@@ -42,6 +50,7 @@
 | `compact_threshold` | 会话自动压缩阈值（估算 token）：0 用默认（100k），正数覆盖，负数关闭 |
 | `orchestrator` | 编排者模式：根会话不注册 read/grep/glob/web_search，采集经子代理、根只做综合（子代理保持全量工具集）。`GRF_ORCHESTRATOR=1` 环境覆盖；subagent 被禁用时自动失效 |
 | `weixin` | 微信渠道安全配置（见下文专节） |
+| `cluster` | 集群模式配置（M1：静态节点表路由 + call-home 注册/心跳）。`enabled` 总开关；`role` = `node`/`commander`；`name` 节点名（空 = hostname）；`token` 集群共享密钥（指挥官 `/cluster/*` 端点鉴权，节点凭它注册）；`commander_url` 节点侧 call-home 地址（配置后定期注册/心跳）；`nodes` 手动节点表（指挥官侧静态种子，条目含 `addr`/`token`/`name`/`labels`——subagent 的 description 命中 `@name` 或 labels 整词即派往该节点）；`policy` 派发任务默认策略；`sync` 工作区同步策略（`none`/`seed`/`git`/`full`，M1 仅 `none`）；`route` 路由参数（`allow_local` 无匹配回退本地、`max_inflight_per_node` 单节点在跑上限，默认 4）。`GRF_CLUSTER_ENABLED` 环境覆盖 |
 | `plugins` | MCP 插件接入配置；缺省键 = 自动发现 `~/.grf/plugins/` 下可执行文件，`[]` = 关闭自动发现，非空 = 仅使用列出的项。详见[插件文档](plugins.md) |
 
 ## policy 规则串
@@ -79,6 +88,7 @@
 | `GRF_HOME` | 配置根目录（settings/plugins/sessions/weixin 状态等全在此） | `~/.grf` |
 | `GRF_MODEL` | 模型覆盖（裸名 / 限定名 / 整串透传，见上节） | — |
 | `GRF_ORCHESTRATOR` | 编排者模式覆盖（`1/true/yes/on` 开、`0/false/no/off` 关，其余值忽略；进程级不落盘） | 配置文件 |
+| `GRF_CLUSTER_ENABLED` | 集群模式覆盖（取值语义同 `GRF_ORCHESTRATOR`；进程级不落盘） | 配置文件 |
 | `OPENAI_BASE_URL` | LLM 端点最终覆盖（优先级最高） | provider 的 `base_url` |
 | `OPENAI_API_KEY` | LLM 密钥最终覆盖（优先级最高） | provider 的 `api_key` |
 | `GRF_MOUSE` | 全屏模式鼠标初始状态；`0`/`false` 关闭 | 开启 |

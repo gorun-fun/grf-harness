@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"git.gorun.fun/share/grf-harness/agent"
+	"git.gorun.fun/share/grf-harness/cluster"
 	"git.gorun.fun/share/grf-harness/config"
 	"git.gorun.fun/share/grf-harness/llm"
 	"git.gorun.fun/share/grf-harness/store"
@@ -104,6 +105,12 @@ type Server struct {
 	clientFactory func() (*llm.Client, error)
 	// hook 回合终态事件外发（GRF_TURN_WEBHOOK_URL；未配置时 no-op）。
 	hook turnWebhook
+	// cluster 集群路由层（EnableCluster 注入；nil = 集群未启用）。
+	// 指挥官侧：会话构建时挂进 agent（subagent 派发分流），成员表供
+	// /cluster/* 端点。clusterCfg 为运行时生效的集群配置（token 供
+	// /cluster/* 的双令牌鉴权）。
+	cluster    *cluster.Router
+	clusterCfg *config.Cluster
 }
 
 // New 构建 Server。token 为空时自动生成并写入 <data>/token（0600）。
@@ -141,6 +148,11 @@ func defaultClient() (*llm.Client, error) {
 		return nil, err
 	}
 	return llm.NewFromEffective(eff), nil
+}
+
+// SetClientFactory 覆盖每会话的 LLM 客户端构建（测试与嵌入方注入）。
+func (s *Server) SetClientFactory(f func() (*llm.Client, error)) {
+	s.clientFactory = f
 }
 
 // settingsFingerprint settings.json 的轻量指纹（mtime^size），供回合边界
@@ -257,6 +269,7 @@ func (s *Server) buildSession(meta *sessionMeta) (*session, error) {
 		MaxSteps:      meta.MaxSteps,
 		DisabledTools: meta.DisabledTools,
 		StoreRoot:     s.convDir(meta.ID),
+		Cluster:       s.cluster, // 集群路由层（nil = 未启用；指挥官侧会话可分流派发）
 	})
 	if err != nil {
 		return nil, err

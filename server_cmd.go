@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"git.gorun.fun/share/grf-harness/cluster"
 	"git.gorun.fun/share/grf-harness/config"
 	"git.gorun.fun/share/grf-harness/server"
 )
@@ -41,6 +42,27 @@ func runServerCmd(args []string) {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// 集群装配（settings cluster.enabled / GRF_CLUSTER_ENABLED）：
+	// 路由层 + 控制面端点（任何角色——capabilities 恒可用，注册/心跳/
+	// 成员表在指挥官侧生效）。节点角色配了 commander_url 即 call-home
+	// 注册/心跳（随 ctx 退出停止）。须在 Handler() 构建之前（路由表按
+	// 启用状态装配）。
+	if cfg, err := config.LoadFileForUpdate(); err == nil {
+		if ccfg := config.ClusterRuntime(cfg); ccfg != nil {
+			router := cluster.NewRouter(ccfg)
+			srv.EnableCluster(router, ccfg)
+			role := ccfg.Role
+			if role == "" {
+				role = "node"
+			}
+			fmt.Printf("   集群: 已启用（角色 %s，节点表 %d 个）\n", role, len(ccfg.Nodes))
+			if ccfg.CommanderURL != "" {
+				self, _ := cluster.LoadIdentity()
+				go cluster.CallHome(ctx, ccfg.CommanderURL, ccfg.Token, self, srv.RunningTurns)
+				fmt.Printf("   集群: call-home 指挥官 %s\n", ccfg.CommanderURL)
+			}
+		}
+	}
 	httpSrv := &http.Server{
 		Addr:              *addr,
 		Handler:           srv.Handler(),

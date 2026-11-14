@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"git.gorun.fun/share/grf-harness/cluster"
 	"git.gorun.fun/share/grf-harness/config"
 	"git.gorun.fun/share/grf-harness/llm"
 	"git.gorun.fun/share/grf-harness/plugin"
@@ -45,6 +46,7 @@ type Harness struct {
 	plugWarn []string // 插件状态警告（构建期取一次；子代理提示词复用）
 	trustWarn []string // 工作区信任提示（grants/自带记忆披露；构建期取一次）
 	orchestrated bool  // 编排者模式实际生效（registerTools 剔除成功后置位；提示词段跟随实际生效而非配置意图）
+	cluster  *cluster.Router // 集群路由层（指挥官侧；nil = 未启用。仅根会话的 subagent 派发分流）
 }
 
 // Options 组装参数。
@@ -65,6 +67,10 @@ type Options struct {
 	// 多会话进程（如 gh server）必须按会话隔离，否则新会话会恢复到
 	// workspace 里最新一次存档——把别的会话的历史带进来。
 	StoreRoot string
+	// Cluster 集群路由层（指挥官侧注入，进程级共享实例；见 cluster 包）。
+	// nil = 集群未启用，subagent 派发全走本地 Manager。仅根会话生效——
+	// 节点上的子代理继续用本地 Manager（不跨级路由）。
+	Cluster *cluster.Router
 }
 
 // Build 组装根 harness（全部 28 个工具就位）。
@@ -120,6 +126,7 @@ func Build(opts Options) (*Harness, error) {
 		disabled:  opts.DisabledTools,
 		defSkill:  opts.DefaultSkill,
 		hostCtx:   opts.HostContext,
+		cluster:   opts.Cluster,
 	}
 	h.bindClient(opts.Client)
 	h.Fs = h.newFsPolicy(host)
@@ -252,6 +259,11 @@ func (h *Harness) systemPromptFor(reg *tools.Registry, subagent bool, label, ove
 			return n == "ask_user_question"
 		})
 	}
+	// 集群节点表段仅根拼装（指挥官会话才有路由决策权）
+	var clusterNodes []string
+	if !subagent && h.cluster != nil && h.cluster.Enabled() {
+		clusterNodes = h.cluster.PromptLines()
+	}
 	return BuildSystemPrompt(PromptOptions{
 		Workspace:      h.root,
 		Model:          model,
@@ -259,6 +271,7 @@ func (h *Harness) systemPromptFor(reg *tools.Registry, subagent bool, label, ove
 		Subagent:       subagent,
 		Label:          label,
 		Orchestrator:   !subagent && h.orchestrated, // 编排者模式段仅根拼装（跟随实际生效）
+		ClusterNodes:   clusterNodes,
 		PluginWarnings: h.plugWarn, // 构建期取好，根与子代理同一份
 		TrustWarnings:  h.trustWarn,
 		Tools:          names,
@@ -338,7 +351,13 @@ func (h *Harness) registerTools(a *Agent, root bool) {
 	tools.RegisterSkill(r, h.Skills)
 	tools.RegisterTodoWrite(r, h.Todos)
 	tools.RegisterMemory(r, h.memoryDeps())
-	RegisterAgentTools(r, a, h.Manager)
+	// 集群路由层仅根挂载（指挥官会话分流 subagent 派发；子代理与节点
+	// 侧继续本地 Manager，不跨级路由）
+	var rt *cluster.Router
+	if root {
+		rt = h.cluster
+	}
+	RegisterAgentTools(r, a, h.Manager, rt)
 	RegisterWorkflow(r, a, h.Manager)
 	if root {
 		tools.RegisterAskUser(r, func() tools.Host { return a.host })

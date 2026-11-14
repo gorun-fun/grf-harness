@@ -42,7 +42,7 @@ type Settings struct {
 	// Orchestrator 编排者模式：根会话不注册内联调研工具（read/grep/
 	// glob/web_search），采集经子代理、根只做综合（GRF_ORCHESTRATOR=1
 	// 环境覆盖）。
-	Orchestrator bool                `json:"orchestrator,omitempty"`
+	Orchestrator bool `json:"orchestrator,omitempty"`
 	// CompactThreshold 会话自动压缩阈值（估算 token）：0 用默认
 	// （agent.DefaultCompactThreshold），正数显式覆盖，负数关闭自动压缩。
 	CompactThreshold int `json:"compact_threshold,omitempty"`
@@ -53,6 +53,108 @@ type Settings struct {
 	// Weixin 微信渠道（gh connect weixin）的安全配置；nil = 全默认
 	// （白名单空 = 拒绝所有消息，策略 = write-workspace|read-workspace）。
 	Weixin *Weixin `json:"weixin,omitempty"`
+	// Cluster 集群模式配置（多设备 gh 组成"指挥官-节点"集群）；nil = 不启用。
+	Cluster *Cluster `json:"cluster,omitempty"`
+}
+
+// Cluster 集群模式配置。节点 = 开集群开关的 gh server（身份/能力上报、
+// 接收派发任务）；指挥官 = role=commander 的 gh 实例（orchestrator 委派 +
+// 路由层，把 subagent 任务派往远端节点，审批经暂停协议直达本地 Host）。
+// nil 或 Enabled=false 时全部集群行为关闭（端点不注册、路由层不介入）。
+type Cluster struct {
+	Enabled bool `json:"enabled,omitempty"`
+	// Role 角色：commander（指挥官：可路由任务到节点、收注册/心跳）或
+	// node（节点：上报心跳、接收任务）。空 = node。commander 自身也是
+	// 可执行任务的节点（角色可叠加，路由回退本地即指挥官自己执行）。
+	Role string `json:"role,omitempty"`
+	// Name 节点显示名 / 路由名（提示词里 @name 引用）；空 = hostname。
+	Name string `json:"name,omitempty"`
+	// Token 集群共享密钥：commander 的 /cluster/* 端点接受它鉴权（与
+	// server 自身 token 并列）；节点侧凭它注册/心跳。
+	Token string `json:"token,omitempty"`
+	// CommanderURL 节点侧 call-home 地址（http://host:port）；配置后节点
+	// 定期向指挥官注册并心跳（NAT 友好，无需指挥官反向可达）。
+	CommanderURL string `json:"commander_url,omitempty"`
+	// Discover 局域网自动发现开关：off | lan。空 = off（mDNS 自动发现，
+	// 规划中；当前仅静态表 + call-home 两条通道）。
+	Discover string `json:"discover,omitempty"`
+	// Nodes 手动节点表（指挥官侧静态种子，goder 设置页编辑对象）。
+	// 派发任务经既有 ORS 端点直达（addr + 该节点的 server token）。
+	Nodes []ClusterNode `json:"nodes,omitempty"`
+	// Policy 派发任务的默认策略（每次任务的 grf:session.policy）；
+	// 空 = off（节点侧默认）。
+	Policy string `json:"policy,omitempty"`
+	// Sync 任务工作区同步策略：none | seed | git | full（文件传输，
+	// 规划中）；空 = none（任务自包含，M1 无文件同步）。
+	Sync string `json:"sync,omitempty"`
+	// Route 路由参数；nil = 全默认。
+	Route *ClusterRoute `json:"route,omitempty"`
+}
+
+// ClusterNode 手动节点表条目。
+type ClusterNode struct {
+	Addr   string   `json:"addr"`             // gh server 地址 host:port
+	Token  string   `json:"token,omitempty"`  // 该节点的 server 访问令牌
+	Name   string   `json:"name,omitempty"`   // 路由名（@name 引用；空取 addr 主机名）
+	Labels []string `json:"labels,omitempty"` // 能力标签（description 词汇匹配路由）
+}
+
+// ClusterRoute 路由参数。
+type ClusterRoute struct {
+	// AllowLocal 无匹配节点时回退本地子代理（nil/true = 回退，false =
+	// 无匹配即报错，强制显式路由）。指针语义区分"未设置"与"显式 false"。
+	AllowLocal *bool `json:"allow_local,omitempty"`
+	// MaxInflightPerNode 单节点在跑远端任务上限；0 = 默认 4。
+	MaxInflightPerNode int `json:"max_inflight_per_node,omitempty"`
+}
+
+// IsCommander 是否指挥官角色（Enabled 前提）。
+func (c *Cluster) IsCommander() bool {
+	return c != nil && c.Enabled && strings.EqualFold(strings.TrimSpace(c.Role), "commander")
+}
+
+// RouteAllowLocal 无匹配是否回退本地（默认 true）。
+func (c *Cluster) RouteAllowLocal() bool {
+	return c == nil || c.Route == nil || c.Route.AllowLocal == nil || *c.Route.AllowLocal
+}
+
+// RouteMaxInflight 单节点在跑上限（默认 4）。
+func (c *Cluster) RouteMaxInflight() int {
+	if c == nil || c.Route == nil || c.Route.MaxInflightPerNode <= 0 {
+		return 4
+	}
+	return c.Route.MaxInflightPerNode
+}
+
+// ClusterRuntime 运行时生效的集群配置：GRF_CLUSTER_ENABLED 环境覆盖
+// （1/true/yes/on 开，0/false/no/off 关，其他值忽略）优先于 settings 的
+// cluster.enabled。返回 nil = 集群未启用（一切集群行为关闭）。与
+// OrchestratorRuntime 同理经独立函数判定而非 Load()：防止读改写链路把
+// 覆盖值持久化进 settings.json。
+func ClusterRuntime(s *Settings) *Cluster {
+	enabled := s != nil && s.Cluster != nil && s.Cluster.Enabled
+	if v := os.Getenv("GRF_CLUSTER_ENABLED"); v != "" {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "1", "true", "yes", "on":
+			enabled = true
+		case "0", "false", "no", "off":
+			enabled = false
+		}
+	}
+	if !enabled {
+		return nil
+	}
+	if s == nil || s.Cluster == nil {
+		return &Cluster{Enabled: true}
+	}
+	c := *s.Cluster // 值拷贝：运行时覆盖不回写调用方持有的 Settings
+	c.Enabled = true
+	// 节点表深拷贝（含 labels）：运行期对副本的增删不泄漏回 Settings
+	c.Nodes = append([]ClusterNode(nil), s.Cluster.Nodes...)
+	for i := range c.Nodes {
+		c.Nodes[i].Labels = append([]string(nil), s.Cluster.Nodes[i].Labels...)
+	}
+	return &c
 }
 
 // Weixin 微信渠道安全配置：微信消息是任意外部输入，渠道默认必须收紧。
@@ -234,7 +336,7 @@ func Load() (Effective, error) {
 }
 
 // OrchestratorRuntime 运行时编排者模式判定：GRF_ORCHESTRATOR 环境覆盖
-//（1/true/yes/on 开，0/false/no/off 关，其他值忽略）优先于 settings 的
+// （1/true/yes/on 开，0/false/no/off 关，其他值忽略）优先于 settings 的
 // orchestrator 字段。进程级开关、不落盘——经此判定而非 Load()：Effective
 // 不进 Harness，且 LoadFileForUpdate 的读改写链路若被环境变量污染会把
 // 覆盖值持久化进 settings.json。

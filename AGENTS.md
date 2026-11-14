@@ -75,7 +75,8 @@ python3 pty.fork 驱动（打字→截图式解析 ANSI→验证帧），历史�
 核心层    agent（回合循环 turn.go + 暂停/恢复 pause.go + 子代理/goal/workflow/ralph）
 能力层    tools（28 工具+注册表）/ js（workflow 解释器）/ llm（传输+回退解析）
           mcp（MCP 客户端：stdio + Streamable HTTP）/ plugin（MCP 插件管理器 +
-          download.go 官方插件下载）
+          download.go 官方插件下载）/ cluster（集群路由：subagent 分流到远端
+          gh server 节点、成员表/能力上报/call-home，M1 静态节点表）
 基础层    term / config / store / selfupdate（自更新：目录探测 + semver 比较 +
           替换自身；ListDir/Install 通用件供 plugin 下载复用，基址
           https://download.gorun.fun/grf-harness，GRF_DOWNLOAD_BASE 覆盖）
@@ -98,12 +99,27 @@ python3 pty.fork 驱动（打字→截图式解析 ANSI→验证帧），历史�
   image/交互类/记忆）在 `tools` 包。memory 跨会话记忆是 JSON 条目库
   （增删改查），两级落点：project（默认）= 工作区 `.grf/memory.json`，
   user = `~/.grf/memory.json`（`agent/build.go` 的 `memoryDeps` 装配）。
+- `cluster`：集群模式（M1）。指挥官 = 开集群的 gh 实例，subagent 工具的
+  handler（`agent/manager_tools.go`）在派发前咨询 `cluster.Router`——
+  description 命中 `@name` 或 labels 整词即派往远端节点的 ORS 端点
+  （POST /v1/responses background 模式 + 轮询回收），未命中走本地
+  Manager（`Manager` 不接口化、tools.json 零改动）。远端审批/提问经暂停
+  协议直达指挥官 Host（`buildResumeItems`：Host 缺失/失败一律 Dismiss）。
+  节点身份 = `~/.grf/cluster.json`（16 hex，0600）；能力清单
+  `GET /cluster/capabilities`；注册/心跳/成员表 `POST /cluster/register|heartbeat`、
+  `GET /cluster/members`（双令牌鉴权：server token 或 cluster.token）；
+  配置读写 `GET/PUT /v1/agent/cluster`（goder 设置页通道）。call-home
+  （`cluster.CallHome`，节点配 commander_url 即注册+心跳）与 server 装配
+  在 `server_cmd.go`。`GRF_CLUSTER_ENABLED` 环境覆盖不落盘。
 - `app`：库入口（`app.New(app.Options{...})`）+ 会话门面 + 单任务直出渲染 +
   非 TTY REPL + TaskHost。
 - `tui`：全屏聊天（`chat.go` 事件循环 / `hub.go` 流式汇聚 / `render.go` 组帧）
   与模型配置页。
 - `server`：Responses API 接入层（ORS 兼容；会话盘上为真、SSE 事件桥、
   client function tools、暂停应答链式续交、compact），`gh server` 子命令。
+  集群端点（EnableCluster 后装配）：`/cluster/*` 控制面 + `/v1/agent/cluster`
+  配置读写（`cluster_api.go`/`agentapi_cluster.go`）；任务面复用既有 ORS
+  端点，集群路由层见 `cluster` 条目。
   客户端工具同名重注册幂等（ORS 客户端每请求重发 tools 数组是常态，
   `registry.go` RegisterClient 覆盖式；与内置重名/请求内重名在 `applyTools`
   提前 400）；`parseRespID` 校验 sid 为 16 位 hex（sid 拼磁盘路径，防穿越）；
