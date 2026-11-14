@@ -49,6 +49,14 @@ test:
     paths:
       - .gocache/
       - .gomodcache/
+  # alpine 基础镜像不含 bash,而 bash 工具/!直执行/超时晋升/审批后执行等
+  # 测试需要它(alpha.30 起这些测试进入套件,缺 bash 曾致 test 门禁连挂,
+  # alpha.30~33 因此未发布到下载服务器)。给测试环境配 bash 而非给代码加
+  # sh 回退——产品行为(bash 工具)不变,仅补齐测试环境依赖;源同 build 用
+  # 国内镜像加速。
+  before_script:
+    - sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
+    - apk add --no-cache bash
   script:
     - go test ./...
     - cd plugins && go test ./...
