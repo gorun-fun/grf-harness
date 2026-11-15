@@ -58,8 +58,11 @@ func runServerCmd(args []string) {
 			fmt.Printf("   集群: 已启用（角色 %s，节点表 %d 个）\n", role, len(ccfg.Nodes))
 			if ccfg.CommanderURL != "" {
 				self, _ := cluster.LoadIdentity()
-				go cluster.CallHome(ctx, ccfg.CommanderURL, ccfg.Token, self, srv.RunningTurns)
-				fmt.Printf("   集群: call-home 指挥官 %s\n", ccfg.CommanderURL)
+				if ccfg.Name != "" {
+					self.Name = ccfg.Name // settings 显式名 > cluster.json/hostname（与能力清单同名）
+				}
+				go cluster.CallHome(ctx, ccfg.CommanderURL, ccfg.Token, self, srv.ClusterCaps, srv.RunningTurns)
+				fmt.Printf("   集群: call-home 指挥官 %s（节点名 %s）\n", ccfg.CommanderURL, self.Name)
 			}
 		}
 	}

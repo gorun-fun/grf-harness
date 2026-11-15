@@ -11,18 +11,23 @@ import (
 // callHomeInterval 心跳周期（与成员表 heartbeatTTL = 6 个周期配套）。
 const callHomeInterval = 15 * time.Second
 
-// CallHome 注册并心跳直到 ctx 取消。running 回调上报节点负载（在跑
-// 回合数；可为 nil）。commanderURL 为指挥官基地址，token 为集群共享
-// 密钥（指挥官 /cluster/* 的鉴权依据）。
-func CallHome(ctx context.Context, commanderURL, token string, self Identity, running func() int) {
+// CallHome 注册并心跳直到 ctx 取消。caps 回调在每次注册尝试前求值，上报
+// **本节点**的能力清单（装配方注入，如 server.ClusterCaps；曾误从
+// commander_url 拉取——那会把指挥官的身份/模型当成自己的上报；出错跳过
+// 能力上报，注册仍继续）。running 回调上报节点负载（在跑回合数）；两者
+// 均可为 nil。commanderURL 为指挥官基地址，token 为集群共享密钥（指挥官
+// /cluster/* 的鉴权依据）。
+func CallHome(ctx context.Context, commanderURL, token string, self Identity, caps func() (*Capabilities, error), running func() int) {
 	c := NewNodeClient(commanderURL, token)
-	reg := RegisterRequest{NodeID: self.ID, Name: self.Name}
-	if caps, err := c.Capabilities(ctx); err == nil {
-		reg.Capabilities = caps
-	}
 	registered := false
 	tick := func() {
 		if !registered {
+			reg := RegisterRequest{NodeID: self.ID, Name: self.Name}
+			if caps != nil {
+				if own, err := caps(); err == nil {
+					reg.Capabilities = own
+				}
+			}
 			if err := c.Register(ctx, reg); err != nil {
 				return // 指挥官暂不可达：下个周期重试
 			}

@@ -14,8 +14,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"sort"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -46,6 +46,10 @@ type sessionMeta struct {
 	// ClientTools 接入方注册的客户端函数工具定义（暂停类别判定依赖它，
 	// 必须随会话持久化——跨重启恢复暂停回合时仍要正确分类）。
 	ClientTools []toolDef `json:"client_tools,omitempty"`
+	// 集群文件传输（M2）：种子句柄（建会话时已解包，留档溯源）与落定
+	// 回传的产物 glob（collectArtifacts 读取）。
+	SeedRef     string   `json:"seed_ref,omitempty"`
+	ReturnFiles []string `json:"return_files,omitempty"`
 }
 
 // toolDef 持久化的工具定义。
@@ -213,6 +217,13 @@ func (s *Server) newSession(cfg *grfSessionConfig) (*session, error) {
 	if err := os.MkdirAll(ws, 0o755); err != nil {
 		return nil, err
 	}
+	// 种子解包（集群 M2）：指挥官推送的 tar.gz 在建 harness 前落入会话
+	// 工作区，回合开跑即见文件。失败即建会话失败（400 回派发方）。
+	if cfg != nil && cfg.SeedRef != "" {
+		if err := s.unpackSeed(cfg.SeedRef, ws); err != nil {
+			return nil, err
+		}
+	}
 	meta := &sessionMeta{
 		ID:        sid,
 		CreatedAt: time.Now(),
@@ -225,6 +236,8 @@ func (s *Server) newSession(cfg *grfSessionConfig) (*session, error) {
 		meta.Policy = cfg.Policy
 		meta.MaxSteps = cfg.MaxSteps
 		meta.DisabledTools = cfg.DisabledTools
+		meta.SeedRef = cfg.SeedRef
+		meta.ReturnFiles = cfg.ReturnFiles
 		if cfg.AutoApprove != nil {
 			meta.AutoApprove = *cfg.AutoApprove
 		}

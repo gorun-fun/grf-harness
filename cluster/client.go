@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -52,6 +53,8 @@ type Response struct {
 	IncompleteDetails *IncompleteDetails `json:"incomplete_details,omitempty"`
 	Error             *RespError         `json:"error,omitempty"`
 	Output            []OutputItem       `json:"output,omitempty"`
+	// GrfArtifacts 落定回合的产物回传清单（M2；grf_ 前缀扩展字段）。
+	GrfArtifacts []ArtifactMeta `json:"grf_artifacts,omitempty"`
 }
 
 // IncompleteDetails 未完成原因（grf:input_required 时带交互请求索引）。
@@ -188,22 +191,38 @@ func (c *NodeClient) Capabilities(ctx context.Context) (*Capabilities, error) {
 	return &caps, nil
 }
 
+// TaskOpts 一次远端任务创建的完整参数（CreateTask 的载荷组装）。
+type TaskOpts struct {
+	Input       string   // 本回合输入（自包含任务文本 / grf:input_result items 由 Resume 走）
+	PrevID      string   // 链式续聊（send_message / supervise 续跑）
+	Policy      string   // 任务策略覆盖
+	HostCtx     string   // 宿主环境简报（grf:session.host_context）
+	SeedRef     string   // 种子对象句柄（M2；节点建会话时解包进工作区）
+	ReturnFiles []string // 落定回传的产物 glob（M2；随 grf:session 下发）
+}
+
 // CreateTask 派发任务（新回合或续聊）：POST /v1/responses，background
-// 模式立即返回 queued。prevID 非空即链式续聊（send_message 语义）。
-func (c *NodeClient) CreateTask(ctx context.Context, input, prevID, policy, hostCtx string) (*Response, error) {
+// 模式立即返回 queued。PrevID 非空即链式续聊（send_message 语义）。
+func (c *NodeClient) CreateTask(ctx context.Context, t TaskOpts) (*Response, error) {
 	body := map[string]any{
-		"input":      input,
+		"input":      t.Input,
 		"background": true, // 轮询回收（GET retrieve），不占长连接
 	}
-	if prevID != "" {
-		body["previous_response_id"] = prevID
+	if t.PrevID != "" {
+		body["previous_response_id"] = t.PrevID
 	}
-	sess := map[string]string{}
-	if policy != "" {
-		sess["policy"] = policy
+	sess := map[string]any{}
+	if t.Policy != "" {
+		sess["policy"] = t.Policy
 	}
-	if hostCtx != "" {
-		sess["host_context"] = hostCtx
+	if t.HostCtx != "" {
+		sess["host_context"] = t.HostCtx
+	}
+	if t.SeedRef != "" {
+		sess["seed_ref"] = t.SeedRef
+	}
+	if len(t.ReturnFiles) > 0 {
+		sess["return_files"] = t.ReturnFiles
 	}
 	if len(sess) > 0 {
 		body["grf:session"] = sess
@@ -246,6 +265,37 @@ func (c *NodeClient) Cancel(ctx context.Context, id string) error {
 // Register call-home 注册/复活。
 func (c *NodeClient) Register(ctx context.Context, req RegisterRequest) error {
 	return c.call(ctx, http.MethodPost, "/cluster/register", req, nil)
+}
+
+// PushObject 推送共享对象（tar.gz 流）到接收方 POST /cluster/files/obj，
+// 返回接收方声明的 ref/摘要。长传不走 NodeClient.HTTP 的 30s 整体超时——
+// 专用无超时 client，由 ctx 控制总时长；响应体仍小（ObjAck JSON）。
+func (c *NodeClient) PushObject(ctx context.Context, body io.Reader) (ObjAck, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.Base+"/cluster/files/obj", body)
+	if err != nil {
+		return ObjAck{}, err
+	}
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	req.Header.Set("Content-Type", "application/gzip")
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		return ObjAck{}, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return ObjAck{}, err
+	}
+	if resp.StatusCode >= 400 {
+		return ObjAck{}, fmt.Errorf("%d %s: %s", resp.StatusCode, http.StatusText(resp.StatusCode), strings.TrimSpace(string(data)))
+	}
+	var ack ObjAck
+	if err := json.Unmarshal(data, &ack); err != nil || ack.Ref == "" {
+		return ObjAck{}, fmt.Errorf("cluster push: malformed ack from %s", c.Base)
+	}
+	return ack, nil
 }
 
 // Heartbeat call-home 心跳。

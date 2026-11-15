@@ -51,7 +51,10 @@ opens a controlled RCE entry:
 
 - Requests without `previous_response_id` **lazily create** a session; the
   response returns `grf:session_id` (the session is the
-  `<data>/conversations/<sid>/` directory)
+  `<data>/conversations/<sid>/` directory); a cluster-dispatched turn that
+  settles may carry `grf_artifacts` (M2 artifact-return manifest:
+  `ref`/`sha256`/`files`/`error`; the object already sits in the commander's
+  share area)
 - With `previous_response_id` the chat continues; it **must be the latest
   response of that session**, otherwise 409 (no historical forking)
 - After a server restart the in-memory cache is empty — continuation works
@@ -103,7 +106,15 @@ meta.json):
                                // lives in without taking over the whole identity prompt.
   "default_skill": "grf-start", // default skill name (when a skill by that name exists, its SKILL.md full text is injected into the system prompt); by default nothing is injected
   "max_steps": 100,
-  "disabled_tools": ["ralph"]
+  "disabled_tools": ["ralph"],
+  "seed_ref": "1a2b3c4d5e6f7788",  // cluster M2: handle of a tar.gz in this node's share
+                                   // area, unpacked into the session workspace at creation
+                                   // (the commander pushes the seed via POST /cluster/files/obj
+                                   // first; an invalid handle returns 400)
+  "return_files": ["out/*.txt"]    // cluster M2: artifact globs (relative to the session
+                                   // workspace); after the turn completes the node packs
+                                   // matching files and pushes them back to the commander;
+                                   // the manifest lands in the response grf_artifacts field
 }}
 ```
 

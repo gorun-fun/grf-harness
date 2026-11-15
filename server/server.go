@@ -135,6 +135,8 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("POST /cluster/register", s.guardCluster(s.handleClusterRegister))
 		mux.HandleFunc("POST /cluster/heartbeat", s.guardCluster(s.handleClusterHeartbeat))
 		mux.HandleFunc("GET /cluster/members", s.guardCluster(s.handleClusterMembers))
+		// M2 文件传输：共享对象接收（push-only，无拉取端点）。
+		mux.HandleFunc("POST /cluster/files/obj", s.guardCluster(s.handleClusterObjPost))
 	}
 	return accessLog(mux)
 }

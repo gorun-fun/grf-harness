@@ -19,8 +19,8 @@ import (
 )
 
 // EnableCluster 启用集群：注入路由层（指挥官侧任务派发）与集群配置
-//（/cluster/* 端点注册与双令牌鉴权依据）。须在 Handler() 之前调用
-//（路由表按启用状态装配）。幂等。
+// （/cluster/* 端点注册与双令牌鉴权依据）。须在 Handler() 之前调用
+// （路由表按启用状态装配）。幂等。
 func (s *Server) EnableCluster(r *cluster.Router, cfg *config.Cluster) {
 	s.cluster = r
 	if cfg != nil {
@@ -41,7 +41,7 @@ func bearerOK(auth, token string) bool {
 }
 
 // guardCluster 集群端点鉴权：接受 server 自身 token 或集群共享密钥
-//（cluster.token 非空时）。后者让 call-home 节点无需持有指挥官的
+// （cluster.token 非空时）。后者让 call-home 节点无需持有指挥官的
 // RCE 级 server token 即可注册/心跳。
 func (s *Server) guardCluster(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -76,10 +76,21 @@ func (s *Server) RunningTurns() int {
 
 // handleClusterCaps GET /cluster/capabilities：本节点能力清单。
 func (s *Server) handleClusterCaps(w http.ResponseWriter, r *http.Request) {
-	id, err := cluster.LoadIdentity()
+	caps, err := s.ClusterCaps()
 	if err != nil {
 		writeError(w, 500, errServer, "load cluster identity: "+err.Error(), "")
 		return
+	}
+	writeJSON(w, 200, caps)
+}
+
+// ClusterCaps 构建本节点能力清单（/cluster/capabilities 响应与节点侧
+// call-home 注册上报共用一份事实）。settings cluster.name 非空时覆盖
+// 显示名（与注册/心跳的节点路由名对齐）。
+func (s *Server) ClusterCaps() (*cluster.Capabilities, error) {
+	id, err := cluster.LoadIdentity()
+	if err != nil {
+		return nil, err
 	}
 	caps := &cluster.Capabilities{
 		NodeID:   id.ID,
@@ -88,6 +99,9 @@ func (s *Server) handleClusterCaps(w http.ResponseWriter, r *http.Request) {
 		Platform: runtime.GOOS + "/" + runtime.GOARCH,
 		Tools:    tools.SpecNames(),
 		TS:       time.Now().Unix(),
+	}
+	if s.clusterCfg != nil && s.clusterCfg.Name != "" {
+		caps.Name = s.clusterCfg.Name
 	}
 	// 模型与插件按当前 settings 实况上报（不泄密钥：只报名单）
 	if cfg, err := config.LoadFileForUpdate(); err == nil {
@@ -107,11 +121,11 @@ func (s *Server) handleClusterCaps(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	writeJSON(w, 200, caps)
+	return caps, nil
 }
 
 // handleClusterRegister POST /cluster/register：call-home 注册/复活
-//（body 见 cluster.RegisterRequest）。凭集群共享密钥鉴权（guardCluster）。
+// （body 见 cluster.RegisterRequest）。凭集群共享密钥鉴权（guardCluster）。
 func (s *Server) handleClusterRegister(w http.ResponseWriter, r *http.Request) {
 	if s.cluster == nil {
 		writeError(w, 404, errNotFound, "cluster is not enabled on this server", "")

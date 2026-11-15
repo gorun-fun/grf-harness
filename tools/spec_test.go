@@ -58,7 +58,7 @@ var hardcodedArgTags = map[string][]string{
 	"get_goal":    {},
 	"update_goal": {"goal_id", "revision", "action", "objective", "max_goal_rounds", "blocked_reason"},
 	// agent/manager.go
-	"subagent":        {"description", "prompt", "run_in_background"},
+	"subagent":        {"description", "prompt", "run_in_background", "seed_files", "return_files"},
 	"subagent_fork":   {"description", "prompt", "run_in_background"},
 	"send_message":    {"subagent_id", "message"},
 	"interrupt_agent": {"agent_id"},

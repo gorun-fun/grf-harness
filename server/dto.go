@@ -5,7 +5,11 @@
 // 冒号前缀，既有对象上加字段用 grf_ 前缀命名。
 package server
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"git.gorun.fun/share/grf-harness/cluster"
+)
 
 // 响应状态机（OpenAI 六值枚举，超 ORS 散文但兼容 OpenAI 客户端）。
 const (
@@ -110,6 +114,13 @@ type grfSessionConfig struct {
 	// Workspace 指定会话工作区（GUI 等宿主把会话绑到某个项目目录）。
 	// 必须是已存在的目录绝对/相对路径；缺省用 <data>/conversations/<sid>/workspace。
 	Workspace string `json:"workspace,omitempty"`
+	// SeedRef 集群文件传输（M2）：本节点共享区的 tar.gz 句柄，建会话时
+	// 解包进会话工作区（指挥官派发方先推种子再引用；仅会话首建生效）。
+	SeedRef string `json:"seed_ref,omitempty"`
+	// ReturnFiles 集群文件传输（M2）：落定回传的产物 glob（相对会话
+	// 工作区）；回合 completed 后节点打包匹配文件推回指挥官共享区，
+	// 清单见响应的 grf_artifacts 字段。
+	ReturnFiles []string `json:"return_files,omitempty"`
 }
 
 // inputItem 请求 input 数组的项。
@@ -250,6 +261,10 @@ type ResponseResource struct {
 	PromptCacheKey     string             `json:"prompt_cache_key"`
 	// grf 扩展字段
 	SessionID string `json:"grf:session_id,omitempty"`
+	// GrfArtifacts 落定回合的产物回传清单（M2 集群文件传输；ORS §11——
+	// 既有对象加字段用 grf_ 前缀）。节点侧在快照持久化前写入，指挥官
+	// 路由层轮询读取后从本地共享区解包、经落定通知告知模型路径。
+	GrfArtifacts []cluster.ArtifactMeta `json:"grf_artifacts,omitempty"`
 }
 
 // CompactResource /responses/compact 的响应。

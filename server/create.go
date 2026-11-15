@@ -119,6 +119,11 @@ func (s *Server) locateSession(w http.ResponseWriter, req *createRequest) (*sess
 	}
 	sess, err := s.newSession(req.GrfSession)
 	if err != nil {
+		// 坏 seed_ref 是客户端输入错误（400），其余建会话失败按 500
+		if errors.Is(err, errSeedBad) {
+			writeError(w, 400, errInvalid, err.Error(), "grf:session.seed_ref")
+			return nil, false
+		}
 		writeError(w, 500, errServer, "create session: "+err.Error(), "")
 		return nil, false
 	}
@@ -277,6 +282,9 @@ func (s *Server) execute(ctx context.Context, sess *session, req *createRequest,
 	base.CompletedAt = &now
 	base.Usage = usageFrom(sess.root.LLMStats(), pre)
 	finalizeStatus(base, reply, pausedTurn, runErr, br, extCanceled)
+	// 产物回传（集群 M2）：在快照持久化之前打包推送并把清单写进
+	// grf_artifacts——指挥官轮询到终态时产物必然已在其共享区。
+	s.collectArtifacts(sess, base)
 	s.persistTurn(sess, base, store)
 	return base, nil
 }

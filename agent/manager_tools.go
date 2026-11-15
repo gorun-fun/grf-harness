@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"git.gorun.fun/share/grf-harness/cluster"
@@ -24,9 +25,11 @@ func RegisterAgentTools(r *tools.Registry, a *Agent, m *Manager, router *cluster
 	sub := func(fork bool) tools.Handler {
 		return func(ctx context.Context, args string) (tools.Result, error) {
 			var p struct {
-				Description     string `json:"description"`
-				Prompt          string `json:"prompt"`
-				RunInBackground *bool  `json:"run_in_background"`
+				Description     string   `json:"description"`
+				Prompt          string   `json:"prompt"`
+				RunInBackground *bool    `json:"run_in_background"`
+				SeedFiles       []string `json:"seed_files"`
+				ReturnFiles     []string `json:"return_files"`
 			}
 			if err := tools.DecodeJSON(args, &p); err != nil {
 				return tools.Result{}, err
@@ -43,7 +46,11 @@ func RegisterAgentTools(r *tools.Registry, a *Agent, m *Manager, router *cluster
 			}
 			// 集群分流（仅 subagent；fork 的历史种子是本地概念，不跨节点）
 			if router != nil && !fork && router.ShouldRoute(p.Description) {
-				return dispatchRemote(ctx, router, a, p.Description, p.Prompt, bg)
+				return dispatchRemote(ctx, router, a, p.Description, p.Prompt, bg, p.SeedFiles, p.ReturnFiles)
+			}
+			// 文件传输参数只对集群路由派发有意义；本地子代理同机可见文件
+			if len(p.SeedFiles) > 0 || len(p.ReturnFiles) > 0 {
+				return tools.Result{}, fmt.Errorf("seed_files/return_files only apply to cluster-routed subagents (mention a cluster node like @name in the description); local subagents share this machine's filesystem already")
 			}
 			var (
 				id, out string
@@ -134,11 +141,16 @@ func RegisterAgentTools(r *tools.Registry, a *Agent, m *Manager, router *cluster
 // dispatchRemote 集群派发：任务经路由层发往远端节点（完整 agent 会话，
 // 节点本地工作区与工具），落定通知与本地子代理同格式回流（含节点标注）；
 // 前台同步等终态。审批/提问经暂停协议直达本地 Host，模型无感知。
-func dispatchRemote(ctx context.Context, router *cluster.Router, a *Agent, description, prompt string, bg bool) (tools.Result, error) {
+// M2 文件传输：seedFiles 打包下发（Fs 读边界）、returnFiles 声明回传，
+// 产物落定时从本地共享区解包进工作区 cluster-artifacts/<句柄>/。
+func dispatchRemote(ctx context.Context, router *cluster.Router, a *Agent, description, prompt string, bg bool, seedFiles, returnFiles []string) (tools.Result, error) {
 	id, out, err := router.Dispatch(ctx, cluster.DispatchReq{
 		Description: description,
 		Prompt:      prompt,
 		Background:  bg,
+		SeedFiles:   seedFiles,
+		ReturnFiles: returnFiles,
+		Fs:          a.Fs,
 		Host:        func() tools.Host { return a.host }, // 懒取：SetHost 后生效
 		Notify: func(id, label, outcome, final string) {
 			// 与 Manager.settle 同格式（远端标注），模型侧体验一致
@@ -146,6 +158,9 @@ func dispatchRemote(ctx context.Context, router *cluster.Router, a *Agent, descr
 				final = "(no final message)"
 			}
 			a.EnqueueNotice(fmt.Sprintf("your background subagent settled — id: %s, label: %s, outcome: %s\nfinal assistant message:\n%s\nUse send_message(subagent_id=%s, ...) to give it more work on the same conversation.", id, label, outcome, final, id))
+		},
+		Artifacts: func(id string, arts []cluster.ArtifactMeta) {
+			a.EnqueueNotice(unpackArtifacts(router, a.Fs, id, arts))
 		},
 	})
 	if err != nil {
@@ -160,4 +175,39 @@ func dispatchRemote(ctx context.Context, router *cluster.Router, a *Agent, descr
 		return tools.TextResult(fmt.Sprintf("remote subagent started in the background: id=%s label=%q\nYou will be notified when it settles; recall continuable subagents with list_agents and give follow-up work via send_message.", id, description)), nil
 	}
 	return tools.TextResult(fmt.Sprintf("remote subagent %s (%s) result:\n\n%s", id, description, out)), nil
+}
+
+// unpackArtifacts 产物落地：远端回传清单逐项从本地共享区取对象，解包到
+// 工作区 cluster-artifacts/<句柄>/，返回给模型的说明文本（失败项如实
+// 列出，不静默吞）。
+func unpackArtifacts(router *cluster.Router, fs *tools.FsPolicy, handleID string, arts []cluster.ArtifactMeta) string {
+	ws := ""
+	if fs != nil {
+		ws = fs.Workspace
+	}
+	var lines []string
+	for _, am := range arts {
+		switch {
+		case am.Error != "":
+			lines = append(lines, fmt.Sprintf("remote subagent %s: artifact return failed on the node: %s", handleID, am.Error))
+		case am.Ref == "":
+			continue
+		default:
+			f, _, err := router.Share().Open(am.Ref)
+			if err != nil {
+				lines = append(lines, fmt.Sprintf("remote subagent %s: artifacts unavailable locally (%v)", handleID, err))
+				continue
+			}
+			dest := filepath.Join(ws, "cluster-artifacts", handleID)
+			n, err := cluster.UnpackTo(f, dest)
+			f.Close()
+			if err != nil {
+				lines = append(lines, fmt.Sprintf("remote subagent %s: artifact unpack failed (%v)", handleID, err))
+				continue
+			}
+			lines = append(lines, fmt.Sprintf("remote subagent %s: %d artifact files unpacked to %s (relative to the workspace): %s",
+				handleID, n, filepath.Join("cluster-artifacts", handleID), strings.Join(am.Files, ", ")))
+		}
+	}
+	return strings.Join(lines, "\n")
 }

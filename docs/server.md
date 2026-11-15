@@ -46,7 +46,7 @@ gh server [-addr 127.0.0.1:7400] [-data ~/.grf/server] [-token <t>]
 ## 3. 会话模型：磁盘为准，previous 链
 
 - 不带 `previous_response_id` 的请求**懒创建**新会话，响应里返回
-  `grf:session_id`（会话即 `<data>/conversations/<sid>/` 目录）
+  `grf:session_id`（会话即 `<data>/conversations/<sid>/` 目录）；集群派发的回合落定后可含 `grf_artifacts`（M2 产物回传清单：`ref`/`sha256`/`files`/`error`，对象已在指挥官共享区）
 - 带 `previous_response_id` 续聊；**必须是该会话最新一个 response**，
   否则 409（不支持历史分叉）
 - server 重启后内存缓存清空，**凭 previous_response_id 直接续接**——
@@ -94,7 +94,13 @@ gh server [-addr 127.0.0.1:7400] [-data ~/.grf/server] [-token <t>]
                                // 接管整段身份提示词。
   "default_skill": "grf-start", // 默认技能名（目录中存在该名字时 SKILL.md 全文注入系统提示词）；缺省不注入任何默认技能
   "max_steps": 100,
-  "disabled_tools": ["ralph"]
+  "disabled_tools": ["ralph"],
+  "seed_ref": "1a2b3c4d5e6f7788",  // 集群 M2：本节点共享区的 tar.gz 句柄，建会话时
+                                   // 解包进会话工作区（指挥官先经 POST /cluster/files/obj
+                                   // 推种子再引用；无效句柄 400）
+  "return_files": ["out/*.txt"]    // 集群 M2：落定回传的产物 glob（相对会话工作区）；
+                                   // 回合 completed 后节点打包匹配文件推回指挥官，清单写入
+                                   // 响应的 grf_artifacts 字段
 }}
 ```
 

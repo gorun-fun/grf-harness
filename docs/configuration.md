@@ -50,7 +50,7 @@
 | `compact_threshold` | 会话自动压缩阈值（估算 token）：0 用默认（100k），正数覆盖，负数关闭 |
 | `orchestrator` | 编排者模式：根会话不注册 read/grep/glob/web_search，采集经子代理、根只做综合（子代理保持全量工具集）。`GRF_ORCHESTRATOR=1` 环境覆盖；subagent 被禁用时自动失效 |
 | `weixin` | 微信渠道安全配置（见下文专节） |
-| `cluster` | 集群模式配置（M1：静态节点表路由 + call-home 注册/心跳）。`enabled` 总开关；`role` = `node`/`commander`；`name` 节点名（空 = hostname）；`token` 集群共享密钥（指挥官 `/cluster/*` 端点鉴权，节点凭它注册）；`commander_url` 节点侧 call-home 地址（配置后定期注册/心跳）；`nodes` 手动节点表（指挥官侧静态种子，条目含 `addr`/`token`/`name`/`labels`——subagent 的 description 命中 `@name` 或 labels 整词即派往该节点）；`policy` 派发任务默认策略；`sync` 工作区同步策略（`none`/`seed`/`git`/`full`，M1 仅 `none`）；`route` 路由参数（`allow_local` 无匹配回退本地、`max_inflight_per_node` 单节点在跑上限，默认 4）。`GRF_CLUSTER_ENABLED` 环境覆盖 |
+| `cluster` | 集群模式配置（M1：静态节点表路由 + call-home 注册/心跳）。`enabled` 总开关；`role` = `node`/`commander`；`name` 节点名（空 = hostname）；`token` 集群共享密钥（指挥官 `/cluster/*` 端点鉴权，节点凭它注册）；`commander_url` 节点侧 call-home 地址（配置后定期注册/心跳）；`nodes` 手动节点表（指挥官侧静态种子，条目含 `addr`/`token`/`name`/`labels`——subagent 的 description 命中 `@name` 或 labels 整词即派往该节点）；`policy` 派发任务默认策略；`sync` 文件传输策略（`none`/`seed`/`git`/`full`；M2 实现 `seed`：subagent 的 `seed_files`（工作区相对路径，打包下发到命中节点、建会话时解包进其会话工作区）与 `return_files`（远端会话工作区 glob，回合落定后打包推回指挥官、解包到本方工作区 `cluster-artifacts/<子代理id>/`）；对象通道 `POST /cluster/files/obj`（双令牌、tar.gz、单对象 ≤256MB、共享区 `~/.grf/cluster-share/` 30 分钟 TTL）；空/`none` 保持任务自包含）；`route` 路由参数（`allow_local` 无匹配回退本地、`max_inflight_per_node` 单节点在跑上限，默认 4）。`GRF_CLUSTER_ENABLED` 环境覆盖 |
 | `plugins` | MCP 插件接入配置；缺省键 = 自动发现 `~/.grf/plugins/` 下可执行文件，`[]` = 关闭自动发现，非空 = 仅使用列出的项。详见[插件文档](plugins.md) |
 
 ## policy 规则串

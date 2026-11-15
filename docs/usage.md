@@ -78,5 +78,5 @@ gh disconnect weixin    # 停止
 | 记忆 | `memory`（跨会话 JSON 条目记忆：项目级默认落工作区 `.grf/memory.json`，用户级落 `~/.grf/memory.json`；list/find/add/update/delete，key 自选唯一，find 按 key 精确/子串、内容子串三级检索，单文件 4KB 上限） |
 | 交互 | `ask_user_question`（表单）、`enter_plan_mode` / `exit_plan_mode`（计划审批）、`todo_write`（面板展示）、`skill`（SKILL.md 目录）、`set_policy`（模型拉起弹窗说明理由，用户亲自选择，仅本会话生效） |
 | 目标 | `create_goal` / `get_goal` / `update_goal`（revision 校验、blocked 自动续跑） |
-| 编排 | `subagent` / `subagent_fork`（后台默认+落定通知）、`send_message` / `interrupt_agent` / `list_agents`、`workflow`（JS 脚本 + 并发/总量上限 + schema 校验 + 资源护栏）、`ralph`（新鲜代理循环） |
+| 编排 | `subagent` / `subagent_fork`（后台默认+落定通知；集群路由命中时可用 `seed_files` 种子下发 / `return_files` 产物回传，见配置 `cluster.sync`）、`send_message` / `interrupt_agent` / `list_agents`、`workflow`（JS 脚本 + 并发/总量上限 + schema 校验 + 资源护栏）、`ralph`（新鲜代理循环） |
 | 插件 | 由 MCP 插件动态注册（grf-browser 17 个 / grf-computer 10 个，见[插件文档](plugins.md)） |
