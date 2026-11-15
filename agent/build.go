@@ -358,13 +358,13 @@ func (h *Harness) registerTools(a *Agent, root bool) {
 		rt = h.cluster
 	}
 	RegisterAgentTools(r, a, h.Manager, rt)
-	RegisterWorkflow(r, a, h.Manager)
+	RegisterWorkflow(r, a, h.Manager, rt)
 	if root {
 		tools.RegisterAskUser(r, func() tools.Host { return a.host })
 		// set_policy 仅根：策略是会话级安全边界，子代理不可申请变更
 		tools.RegisterSetPolicy(r, func() tools.Host { return a.host }, h.applyPolicy)
 		RegisterGoalTools(r, a, h.Goals)
-		RegisterRalph(r, a, h.Manager)
+		RegisterRalph(r, a, h.Manager, rt)
 		// enter_plan_mode 仅根：模式切换是根会话状态，子代理不可申请
 		tools.RegisterEnterPlanMode(r, planCtl{a})
 		// orchestrator 模式：剔除根的内联调研工具，采集只剩委派一条路

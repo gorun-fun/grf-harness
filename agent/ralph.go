@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"git.gorun.fun/share/grf-harness/cluster"
 	"git.gorun.fun/share/grf-harness/tools"
 )
 
@@ -30,12 +31,14 @@ You are a Ralph round worker. Rules:
 - Otherwise end with: PROGRESS: <what got done and what remains>
 Do not ask questions; make reasonable assumptions and keep working.`
 
-// RegisterRalph 注册 ralph 工具。
-func RegisterRalph(r *tools.Registry, a *Agent, m *Manager) {
+// RegisterRalph 注册 ralph 工具。router 非 nil 且 objective 命中集群节点
+//（@name 或 labels）时每轮 worker 派往该节点（M5c 跨节点迭代：目标需要
+// 节点环境——远端文件系统/GPU/浏览器插件——的 ralph 循环）。
+func RegisterRalph(r *tools.Registry, a *Agent, m *Manager, router *cluster.Router) {
 	r.Register("ralph", func(ctx context.Context, args string) (tools.Result, error) {
 		var p struct {
 			Objective string `json:"objective"`
-			MaxRounds int    `json:"maxRounds"`
+			MaxRounds int    `json:"max_rounds"`
 		}
 		if err := tools.DecodeJSON(args, &p); err != nil {
 			return tools.Result{}, err
@@ -58,6 +61,9 @@ func RegisterRalph(r *tools.Registry, a *Agent, m *Manager) {
 		if rounds > ralphMaxRounds {
 			rounds = ralphMaxRounds
 		}
+		// objective 命中集群节点 → 整循环派往该节点（循环外一次判定：
+		// 工作区连续性是 ralph 的记忆载体，跨节点跳会丢上下文）
+		remote := router != nil && router.ShouldRoute(p.Objective)
 
 		var report string
 		for i := 1; i <= rounds; i++ {
@@ -70,7 +76,18 @@ func RegisterRalph(r *tools.Registry, a *Agent, m *Manager) {
 				i, rounds, strings.TrimSpace(p.Objective), ralphPromptTail)
 			// 新鲜子代理：不注入任何父对话种子。ctx = 回合取消链：
 			// ralph 每轮都是前台子代理，回合取消必须能中止当前轮。
-			_, out, err := m.Subagent(ctx, a, label, prompt, false)
+			var out string
+			var err error
+			if remote {
+				_, out, err = router.Dispatch(ctx, cluster.DispatchReq{
+					Description: p.Objective,
+					Prompt:      prompt,
+					Background:  false,
+					Host:        func() tools.Host { return a.host },
+				})
+			} else {
+				_, out, err = m.Subagent(ctx, a, label, prompt, false)
+			}
 			if err != nil {
 				return tools.Result{}, fmt.Errorf("ralph round %d failed to start: %w", i, err)
 			}

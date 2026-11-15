@@ -177,9 +177,11 @@ func BuildSystemPrompt(o PromptOptions, custom string) string {
 
 	// 集群节点表：指挥官根会话可把 subagent 派往远端设备（@name 或
 	// 能力标签命中即路由；未命中照常本地执行）。任务自包含——远端
-	// agent 只见 prompt，不见本会话历史。
+	// agent 只见 prompt，不见本会话历史。节点行携带实时状态/负载/能力
+	//（谁在线、谁有什么插件与平台），路由决策据此做；标注中继可达的
+	// call-home 节点（NAT 后）同样可派发。
 	if len(o.ClusterNodes) > 0 {
-		b.WriteString("\n## 集群节点\nRemote worker nodes are available: a subagent whose description names a node (with @name or one of its labels) is dispatched to that node instead of running locally — the subagent is a full agent session on the node's own filesystem and tools (its platform/plugins may differ from here). Dispatch remotely when the work needs that node's environment; otherwise omit node references and it runs locally. Remote subagents settle with a notice like local ones; send_message / interrupt_agent / list_agents work on them too. The prompt must be fully self-contained (paths and context of this machine are not visible on the node).\n")
+		b.WriteString("\n## 集群节点\nRemote worker nodes are available: a subagent whose description names a node (with @name or one of its labels) is dispatched to that node instead of running locally — the subagent is a full agent session on the node's own filesystem and tools (its platform/plugins may differ from here). Dispatch remotely when the work needs that node's environment; otherwise omit node references and it runs locally. Node lines below carry live status, load and capabilities (models/plugins/platform) — prefer nodes that are online and suited to the task. Nodes marked dispatchable via the command inbox relay may be dispatched even without a static address. Remote subagents settle with a notice like local ones; send_message / interrupt_agent / list_agents work on them too. The prompt must be fully self-contained (paths and context of this machine are not visible on the node).\n")
 		for _, line := range o.ClusterNodes {
 			b.WriteString(line + "\n")
 		}

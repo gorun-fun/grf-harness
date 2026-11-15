@@ -100,29 +100,53 @@ python3 pty.fork 驱动（打字→截图式解析 ANSI→验证帧），历史�
   image/交互类/记忆）在 `tools` 包。memory 跨会话记忆是 JSON 条目库
   （增删改查），两级落点：project（默认）= 工作区 `.grf/memory.json`，
   user = `~/.grf/memory.json`（`agent/build.go` 的 `memoryDeps` 装配）。
-- `cluster`：集群模式（M1 路由 + M2 文件传输）。指挥官 = 开集群的 gh 实例，
-  subagent 工具的 handler（`agent/manager_tools.go`）在派发前咨询
-  `cluster.Router`——description 命中 `@name` 或 labels 整词即派往远端节点
-  的 ORS 端点（POST /v1/responses background 模式 + 轮询回收），未命中走本地
-  Manager（`Manager` 不接口化、tools.json 零改动）。远端审批/提问经暂停
-  协议直达指挥官 Host（`buildResumeItems`：Host 缺失/失败一律 Dismiss）。
-  节点身份 = `~/.grf/cluster.json`（16 hex，0600）；能力清单
-  `GET /cluster/capabilities`；注册/心跳/成员表 `POST /cluster/register|heartbeat`、
-  `GET /cluster/members`（双令牌鉴权：server token 或 cluster.token）；
-  配置读写 `GET/PUT /v1/agent/cluster`（goder 设置页通道）。call-home
-  （`cluster.CallHome`，节点配 commander_url 即注册+心跳）与 server 装配
-  在 `server_cmd.go`。`GRF_CLUSTER_ENABLED` 环境覆盖不落盘。
-  M2 文件传输（settings `cluster.sync = "seed"` 门禁，默认关）：push-only
-  对象通道 `POST /cluster/files/obj`（tar.gz 流式、SHA256、≤256MB、共享区
-  `~/.grf/cluster-share/` 30min TTL）；种子 = 指挥官打包（`PackPaths` 过
-  `FsPolicy.CheckRead` 读边界）推节点、节点建会话时解包进会话工作区
-  （`grf:session.seed_ref`，无效句柄 400）；产物 = 节点落定后按
-  `grf:session.return_files` glob 打包推回自己 commander_url、清单随快照
-  `grf_artifacts` 字段、指挥官 `runSegment` 读到经 `DispatchReq.Artifacts`
-  回调解包到工作区 `cluster-artifacts/<ragent id>/` 并通知。安全解包
-  `UnpackTo` 拒绝绝对路径/..//符号链接条目、限总量与条目数（防穿越与
-  压缩炸弹）。subagent 工具 `seed_files`/`return_files` 参数与 spec 三处
-  同步（tools.json / spec_test 键集 / manager_tools 结构体）。
+- `cluster`：集群模式（M1 路由 + M2 文件传输 + M3 发现/收件箱/邀请码 +
+  M5 回投/TLS/跨节点编排）。指挥官 = 开集群的 gh 实例，subagent 工具的
+  handler（`agent/manager_tools.go`）在派发前咨询 `cluster.Router`——
+  description 命中 `@name` 或 labels 整词即派往远端节点，未命中走本地
+  Manager（`Manager` 不接口化、tools.json 零改动）。路由双路径
+  （`pickTarget`）：静态条目（有 addr+token）**直连** ORS 端点
+  （POST /v1/responses background + 轮询回收）；call-home/mDNS 成员
+  （无静态条目）**中继**——指令经收件箱 SSE 下行、终态经 `/cluster/events`
+  回投（`runRelaySegment` 等事件为权威，节点掉线按失败收敛）。远端审批/
+  提问经暂停协议直达指挥官 Host（`buildResumeItems`：Host 缺失/失败一律
+  Dismiss），直连走 ORS Resume、中继走 resume 指令。提示词集群段 =
+  `PromptLines` 合并静态表与成员表实时快照（在线/负载/模型数/插件/平台，
+  中继可达标注），模型按状态路由。
+  节点身份 = `~/.grf/cluster.json`（16 hex，0600）；控制面端点（双令牌：
+  server token 或 cluster.token）：`GET /cluster/capabilities`、`POST
+  /cluster/register|heartbeat`（invite_code 门：指挥官配了邀请码则注册与
+  未知节点心跳必须带码，常量时间比较；已知节点免验）、`GET
+  /cluster/members`、`GET /cluster/inbox`（节点指令收件箱 SSE，TTL 30min）、
+  `POST /cluster/events`（落定回投：直连=轮询提前量、中继=权威终态）、
+  `POST /cluster/files/obj`（M2 对象接收）；配置读写 `GET/PUT
+  /v1/agent/cluster`、状态快照 `GET /v1/agent/cluster/status`（goder 面板
+  数据源）。call-home（`cluster.CallHome`，节点配 commander_url 即注册+
+  心跳+挂收件箱 `InboxLoop`）与 server 装配在 `server_cmd.go`（含 TLS：
+  `-tls-cert`/`-tls-key`；节点侧 pin 指纹锁定在 `NodeClient.SetPinnedTLS`）。
+  `GRF_CLUSTER_ENABLED` 环境覆盖不落盘。
+  M3 发现（`cluster.discover = "lan"`）：mDNS 子集（`mdns.go`/`mdns_codec.go`，
+  `_grf-cluster._udp.local.`，纯 net 包组播 + 自研 wire codec 支持压缩指针），
+  双向通告（应答点名查询 + 周期重宣）、指挥官侧浏览聚合 SRV/TXT/A 出
+  Peer 入成员表（能力用 cluster token 拉取回填）；组播不可用降级告警。
+  M2 文件传输（settings `cluster.sync`，四档 none/seed/git/full 默认关）：
+  push-only 对象通道 `POST /cluster/files/obj`（tar.gz 流式、SHA256、
+  ≤256MB、共享区 `~/.grf/cluster-share/` 30min TTL）；种子 = 指挥官打包
+  （`PackPaths` 过 `FsPolicy.CheckRead` 读边界）——seed 档模型经
+  seed_files 点名、git/full 档未点名时自动打包（`GitTrackedFiles`/
+  `AllWorkspaceFiles`，跳过 .git），直连走对象推送、中继内联 base64
+  （≤4MB）；节点建会话时解包进会话工作区（`grf:session.seed_ref`，无效
+  句柄 400）；产物 = 节点落定后按 `grf:session.return_files` glob 打包推回
+  自己 commander_url、清单随快照 `grf_artifacts` 字段、指挥官 `runSegment`
+  读到经 `DispatchReq.Artifacts` 回调解包到工作区
+  `cluster-artifacts/<ragent id>/` 并通知。安全解包 `UnpackTo` 拒绝绝对
+  路径/..//符号链接条目、限总量与条目数（防穿越与压缩炸弹）。subagent
+  工具 `seed_files`/`return_files` 参数与 spec 三处同步（tools.json /
+  spec_test 键集 / manager_tools 结构体）。
+  M5 跨节点编排：workflow 的 `agent()` opts.node（或 label）命中节点即
+  远端派发（`runAgent` 分支）、ralph 的 objective 命中即整循环派往该节点
+  （循环外一次判定，保轮次工作区连续）；两者与 subagent 共用同一
+  Dispatch 语义（审批直达/文件传输/中继全部生效）。
 - `app`：库入口（`app.New(app.Options{...})`）+ 会话门面 + 单任务直出渲染 +
   非 TTY REPL + TaskHost。
 - `app`：库入口（`app.New(app.Options{...})`）+ 会话门面 + 单任务直出渲染 +
@@ -131,12 +155,17 @@ python3 pty.fork 驱动（打字→截图式解析 ANSI→验证帧），历史�
   与模型配置页。
 - `server`：Responses API 接入层（ORS 兼容；会话盘上为真、SSE 事件桥、
   client function tools、暂停应答链式续交、compact），`gh server` 子命令。
-  集群端点（EnableCluster 后装配）：`/cluster/*` 控制面 + `POST
-  /cluster/files/obj`（M2 文件传输对象接收，`cluster_files.go`）+
-  `/v1/agent/cluster` 配置读写（`cluster_api.go`/`agentapi_cluster.go`）；
-  任务面复用既有 ORS 端点，集群路由层见 `cluster` 条目；种子解包在
-  newSession（建 harness 前，坏句柄按 400 客户端错误）、产物回传在
-  execute 终态与快照持久化之间（`collectArtifacts`，失败不致败回合）。
+  集群端点（EnableCluster 后装配）：`/cluster/*` 控制面（capabilities/
+  register|heartbeat（invite 门）/members/inbox SSE/events/files obj）+
+  `/v1/agent/cluster` 配置读写与 `/v1/agent/cluster/status` 状态快照
+  （`cluster_api.go`/`agentapi_cluster.go`/`cluster_files.go`）；任务面复用
+  既有 ORS 端点，集群路由层见 `cluster` 条目；种子解包在 newSession（建
+  harness 前，坏句柄按 400 客户端错误）、产物回传在 execute 终态与快照
+  持久化之间（`collectArtifacts`，失败不致败回合）；中继指令执行
+  （task/resume/cancel → 本地会话/回合，`cluster_tasks.go` 的
+  `ExecuteClusterCommand`）与落定回投（runBackground 的
+  `settleHookBackground` → `postClusterSettle`：会话带 host_context 且配了
+  commander_url 才发）也在本包。
   客户端工具同名重注册幂等（ORS 客户端每请求重发 tools 数组是常态，
   `registry.go` RegisterClient 覆盖式；与内置重名/请求内重名在 `applyTools`
   提前 400）；`parseRespID` 校验 sid 为 16 位 hex（sid 拼磁盘路径，防穿越）；

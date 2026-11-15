@@ -400,6 +400,9 @@ func (s *Server) runBackground(w http.ResponseWriter, sess *session,
 		}
 		// 回合终态事件外发（宿主无头编排：事件驱动收尾，轮询降级为兜底）。
 		s.hook.postTurn(res)
+		// 集群落定回投（M5b）：集群派发的后台回合向指挥官 /cluster/events
+		// 主动报终态——指挥官轮询降级为兜底，中继句柄则以事件为权威。
+		s.settleHookBackground(sess, res)
 	}()
 }
 

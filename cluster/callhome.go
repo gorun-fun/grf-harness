@@ -16,13 +16,14 @@ const callHomeInterval = 15 * time.Second
 // commander_url 拉取——那会把指挥官的身份/模型当成自己的上报；出错跳过
 // 能力上报，注册仍继续）。running 回调上报节点负载（在跑回合数）；两者
 // 均可为 nil。commanderURL 为指挥官基地址，token 为集群共享密钥（指挥官
-// /cluster/* 的鉴权依据）。
-func CallHome(ctx context.Context, commanderURL, token string, self Identity, caps func() (*Capabilities, error), running func() int) {
+// /cluster/* 的鉴权依据），invite 为指挥官的邀请码（配置了 invite_code
+// 的集群必须携带；空集群免验）。
+func CallHome(ctx context.Context, commanderURL, token, invite string, self Identity, caps func() (*Capabilities, error), running func() int) {
 	c := NewNodeClient(commanderURL, token)
 	registered := false
 	tick := func() {
 		if !registered {
-			reg := RegisterRequest{NodeID: self.ID, Name: self.Name}
+			reg := RegisterRequest{NodeID: self.ID, Name: self.Name, Invite: invite}
 			if caps != nil {
 				if own, err := caps(); err == nil {
 					reg.Capabilities = own
@@ -38,7 +39,7 @@ func CallHome(ctx context.Context, commanderURL, token string, self Identity, ca
 		if running != nil {
 			n = running()
 		}
-		_ = c.Heartbeat(ctx, HeartbeatRequest{NodeID: self.ID, Name: self.Name, Running: n})
+		_ = c.Heartbeat(ctx, HeartbeatRequest{NodeID: self.ID, Name: self.Name, Running: n, Invite: invite})
 	}
 	tick()
 	t := time.NewTicker(callHomeInterval)

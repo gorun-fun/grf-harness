@@ -8,6 +8,8 @@ package server
 
 import (
 	"crypto/subtle"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"runtime"
 	"time"
@@ -125,7 +127,8 @@ func (s *Server) ClusterCaps() (*cluster.Capabilities, error) {
 }
 
 // handleClusterRegister POST /cluster/register：call-home 注册/复活
-// （body 见 cluster.RegisterRequest）。凭集群共享密钥鉴权（guardCluster）。
+// （body 见 cluster.RegisterRequest）。凭集群共享密钥鉴权（guardCluster）；
+// 指挥官配了 invite_code 时额外校验邀请码（防局域网内任意 gh 实例接入）。
 func (s *Server) handleClusterRegister(w http.ResponseWriter, r *http.Request) {
 	if s.cluster == nil {
 		writeError(w, 404, errNotFound, "cluster is not enabled on this server", "")
@@ -139,6 +142,10 @@ func (s *Server) handleClusterRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, errInvalid, "node_id and name are required", "")
 		return
 	}
+	if !s.inviteOK(req.Invite, true) {
+		writeError(w, 403, errInvalid, "invalid or missing invite code; ask the commander operator for cluster.invite_code", "")
+		return
+	}
 	s.cluster.Table().Register(cluster.Member{
 		NodeID: req.NodeID,
 		Name:   req.Name,
@@ -148,8 +155,26 @@ func (s *Server) handleClusterRegister(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
+// inviteOK 邀请码校验：指挥官未配 invite_code 时恒过（开放注册，LAN
+// 信任）；配置后要求常量时间精确匹配。unknown=false（已知节点）免验——
+// 掉线重连的节点不必反复出示邀请码。
+func (s *Server) inviteOK(got string, unknown bool) bool {
+	want := ""
+	if s.clusterCfg != nil {
+		want = s.clusterCfg.InviteCode
+	}
+	if want == "" {
+		return true
+	}
+	if !unknown {
+		return true
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+}
+
 // handleClusterHeartbeat POST /cluster/heartbeat：刷新成员在线状态与
-// 负载。未知节点自动以最小条目入表（等价一次匿名注册）。
+// 负载。未知节点自动以最小条目入表（等价一次匿名注册——同样过邀请码门，
+// 防绕过 register 直发心跳）。
 func (s *Server) handleClusterHeartbeat(w http.ResponseWriter, r *http.Request) {
 	if s.cluster == nil {
 		writeError(w, 404, errNotFound, "cluster is not enabled on this server", "")
@@ -163,6 +188,10 @@ func (s *Server) handleClusterHeartbeat(w http.ResponseWriter, r *http.Request) 
 		writeError(w, 400, errInvalid, "node_id or name is required", "")
 		return
 	}
+	if !s.inviteOK(req.Invite, !s.cluster.Table().Known(req.Name)) {
+		writeError(w, 403, errInvalid, "invalid or missing invite code; ask the commander operator for cluster.invite_code", "")
+		return
+	}
 	s.cluster.Table().Heartbeat(req.NodeID, req.Name, req.Running)
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
@@ -174,4 +203,124 @@ func (s *Server) handleClusterMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, s.cluster.Table().Snapshot())
+}
+
+// handleClusterInbox GET /cluster/inbox：节点的指令收件箱 SSE 流（M3b）。
+// 查询参数 name（路由名，必填）与 node_id。先冲积压指令，再保持长连推送；
+// 15s 注释行 keepalive。断开重连由节点侧 InboxLoop 负责，未消费指令在
+// 收件箱队列里等待（TTL 内）。
+func (s *Server) handleClusterInbox(w http.ResponseWriter, r *http.Request) {
+	if s.cluster == nil {
+		writeError(w, 404, errNotFound, "cluster is not enabled on this server", "")
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, 500, errServer, "streaming unsupported", "")
+		return
+	}
+	name := r.URL.Query().Get("name")
+	if name == "" {
+		writeError(w, 400, errInvalid, "query parameter name is required", "")
+		return
+	}
+	cmds, unsubscribe := s.cluster.InboxSubscribe(name)
+	defer unsubscribe()
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(200)
+	fmt.Fprint(w, "data: {\"type\":\"ready\"}\n\n")
+	flusher.Flush()
+	keep := time.NewTicker(15 * time.Second)
+	defer keep.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-keep.C:
+			if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		case cmd := <-cmds:
+			data, err := json.Marshal(cmd)
+			if err != nil {
+				continue
+			}
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
+}
+
+// handleClusterEvents POST /cluster/events：节点落定回投（M5b）。事件投给
+// 路由层匹配远端句柄（中继 = 权威终态；直连 = 轮询提前量）。未知/迟到
+// 事件同样 200——不该让节点重试。
+func (s *Server) handleClusterEvents(w http.ResponseWriter, r *http.Request) {
+	if s.cluster == nil {
+		writeError(w, 404, errNotFound, "cluster is not enabled on this server", "")
+		return
+	}
+	var ev cluster.InboxEvent
+	if !decodeJSON(w, r, &ev, bodyLimitMain) {
+		return
+	}
+	s.cluster.NotifySettle(ev)
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// clusterStatusSelf /v1/agent/cluster/status 的自身段。
+type clusterStatusSelf struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Version  string `json:"version"`
+	Platform string `json:"platform"`
+}
+
+// clusterStatus /v1/agent/cluster/status 响应：goder 节点面板数据源。
+type clusterStatus struct {
+	Enabled         bool                   `json:"enabled"`
+	Role            string                 `json:"role"`
+	Self            clusterStatusSelf      `json:"self"`
+	CommanderURL    string                 `json:"commander_url,omitempty"`
+	Sync            string                 `json:"sync,omitempty"`
+	Discover        string                 `json:"discover,omitempty"`
+	InviteRequired  bool                   `json:"invite_required,omitempty"`
+	Members         []cluster.Member       `json:"members,omitempty"`
+	InboxConnected  []string               `json:"inbox_connected,omitempty"`
+	RemoteHandles   []cluster.HandleStatus `json:"remote_handles,omitempty"`
+	RunningTurns    int                    `json:"running_turns"`
+}
+
+// handleAgentClusterStatus GET /v1/agent/cluster/status：本节点集群状态
+// 快照（成员表/收件箱在线/远端句柄）。goder 设置页节点面板轮询此端点；
+// 节点角色（无指挥官路由层权威表）时 members 为空——面板应指向指挥官。
+func (s *Server) handleAgentClusterStatus(w http.ResponseWriter, r *http.Request) {
+	if s.clusterCfg == nil {
+		writeJSON(w, 200, clusterStatus{Enabled: false})
+		return
+	}
+	role := s.clusterCfg.Role
+	if role == "" {
+		role = "node"
+	}
+	id, _ := cluster.LoadIdentity()
+	st := clusterStatus{
+		Enabled:        true,
+		Role:           role,
+		Self:           clusterStatusSelf{ID: id.ID, Name: s.clusterSelfName(), Version: config.Version, Platform: runtime.GOOS + "/" + runtime.GOARCH},
+		CommanderURL:   s.clusterCfg.CommanderURL,
+		Sync:           cluster.SyncMode(s.clusterCfg.Sync),
+		Discover:       s.clusterCfg.Discover,
+		InviteRequired: s.clusterCfg.InviteCode != "",
+		RunningTurns:   s.RunningTurns(),
+	}
+	if s.cluster != nil {
+		st.Members = s.cluster.Table().Snapshot()
+		st.InboxConnected = s.cluster.InboxConnectedNodes()
+		st.RemoteHandles = s.cluster.HandlesSnapshot()
+	}
+	writeJSON(w, 200, st)
 }

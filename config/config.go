@@ -72,11 +72,17 @@ type Cluster struct {
 	// Token 集群共享密钥：commander 的 /cluster/* 端点接受它鉴权（与
 	// server 自身 token 并列）；节点侧凭它注册/心跳。
 	Token string `json:"token,omitempty"`
+	// InviteCode 加入邀请码（指挥官侧）：非空时 register/心跳新节点必须
+	// 携带匹配的 invite 才准入（防局域网内任意 gh 实例接入）；节点侧把它
+	// 作为注册凭据随 register/heartbeat 上送。空 = 开放注册（LAN 信任）。
+	InviteCode string `json:"invite_code,omitempty"`
 	// CommanderURL 节点侧 call-home 地址（http://host:port）；配置后节点
-	// 定期向指挥官注册并心跳（NAT 友好，无需指挥官反向可达）。
+	// 定期向指挥官注册并心跳（NAT 友好，无需指挥官反向可达），并保持
+	// /cluster/inbox SSE 指令通道（指挥官经中继向 NAT 后的节点派发任务）。
 	CommanderURL string `json:"commander_url,omitempty"`
-	// Discover 局域网自动发现开关：off | lan。空 = off（mDNS 自动发现，
-	// 规划中；当前仅静态表 + call-home 两条通道）。
+	// Discover 局域网自动发现开关：off | lan。空 = off。lan = mDNS 子集
+	//（_grf-cluster._udp.local.）双向通告/发现：本机服务对外应答，指挥官
+	// 侧浏览并把发现的节点并入成员表（能力清单用 cluster.token 拉取）。
 	Discover string `json:"discover,omitempty"`
 	// Nodes 手动节点表（指挥官侧静态种子，goder 设置页编辑对象）。
 	// 派发任务经既有 ORS 端点直达（addr + 该节点的 server token）。
@@ -84,8 +90,11 @@ type Cluster struct {
 	// Policy 派发任务的默认策略（每次任务的 grf:session.policy）；
 	// 空 = off（节点侧默认）。
 	Policy string `json:"policy,omitempty"`
-	// Sync 任务工作区同步策略：none | seed | git | full（文件传输，
-	// 规划中）；空 = none（任务自包含，M1 无文件同步）。
+	// Sync 任务工作区同步策略：none | seed | git | full。空/none = 关闭
+	//（任务自包含）；seed = 模型经 subagent 的 seed_files 显式点名下发；
+	// git = 派发时自动打包工作区 git 跟踪文件（未显式 seed_files 时）；
+	// full = 自动打包整个工作区（跳过 .git）。档位只影响"打包什么"，
+	// 传输/解包/产物回传通道一致。
 	Sync string `json:"sync,omitempty"`
 	// Route 路由参数；nil = 全默认。
 	Route *ClusterRoute `json:"route,omitempty"`
@@ -97,6 +106,10 @@ type ClusterNode struct {
 	Token  string   `json:"token,omitempty"`  // 该节点的 server 访问令牌
 	Name   string   `json:"name,omitempty"`   // 路由名（@name 引用；空取 addr 主机名）
 	Labels []string `json:"labels,omitempty"` // 能力标签（description 词汇匹配路由）
+	// Pin TLS 证书指纹（sha256 hex，叶子证书 DER）：https 节点自签部署时
+	// 的 TOFU 信任锚——设置后跳过系统 CA 校验、只比对该指纹（未设置则走
+	// 系统默认校验）。内网自签 + pin 即可免搭建私有 CA。
+	Pin string `json:"pin,omitempty"`
 }
 
 // ClusterRoute 路由参数。

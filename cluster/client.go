@@ -7,6 +7,10 @@ package cluster
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -26,6 +30,9 @@ type NodeClient struct {
 	Base  string // 基地址（含 scheme，不带尾斜杠）
 	Token string // 节点的 server 访问令牌（call-home 场景为集群共享密钥）
 	HTTP  *http.Client
+	// pinnedTLS 非 nil 表示启用证书指纹锁定（自签 https 部署）：常规校验
+	// 关闭，叶子证书 sha256 必须匹配 pin。PushObject 等旁路 client 共用。
+	pinnedTLS *tls.Config
 }
 
 // NewNodeClient 构建客户端；addr 无 scheme 时补 http://。
@@ -40,6 +47,40 @@ func NewNodeClient(addr, token string) *NodeClient {
 		addr = addr[:len(addr)-1]
 	}
 	return &NodeClient{Base: addr, Token: token, HTTP: &http.Client{Timeout: 30 * time.Second}}
+}
+
+// SetPinnedTLS 启用证书指纹锁定（cluster.nodes[].pin，sha256 hex）：
+// 校验链关闭、只比叶子证书 DER 的 sha256——内网自签部署免私有 CA 的
+// TOFU 信任锚。指纹格式非法立即报错（配置错误不应静默放行）。
+func (c *NodeClient) SetPinnedTLS(pin string) error {
+	sum, err := hex.DecodeString(strings.TrimSpace(pin))
+	if err != nil || len(sum) != sha256.Size {
+		return fmt.Errorf("cluster: node pin %q is not a sha256 hex digest", pin)
+	}
+	want := strings.ToLower(strings.TrimSpace(pin))
+	c.pinnedTLS = &tls.Config{
+		InsecureSkipVerify: true, // 常规校验关闭：pin 是唯一信任锚（本函数语义即如此）
+		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+			if len(rawCerts) == 0 {
+				return fmt.Errorf("cluster: node presented no certificate")
+			}
+			got := sha256.Sum256(rawCerts[0])
+			if !strings.EqualFold(hex.EncodeToString(got[:]), want) {
+				return fmt.Errorf("cluster: server certificate pin mismatch (got %s)", hex.EncodeToString(got[:]))
+			}
+			return nil
+		},
+	}
+	c.HTTP = &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{TLSClientConfig: c.pinnedTLS}}
+	return nil
+}
+
+// pushHTTP 长传用的无整体超时 client（ctx 控制总时长）；复用 pin 配置。
+func (c *NodeClient) pushHTTP() *http.Client {
+	if c.pinnedTLS == nil {
+		return &http.Client{}
+	}
+	return &http.Client{Transport: &http.Transport{TLSClientConfig: c.pinnedTLS}}
 }
 
 func hasScheme(addr string) bool {
@@ -128,6 +169,7 @@ type RegisterRequest struct {
 	NodeID       string        `json:"node_id"`
 	Name         string        `json:"name"`
 	Addr         string        `json:"addr,omitempty"`
+	Invite       string        `json:"invite,omitempty"` // 指挥官配了 invite_code 时的加入凭据
 	Capabilities *Capabilities `json:"capabilities,omitempty"`
 }
 
@@ -136,6 +178,7 @@ type HeartbeatRequest struct {
 	NodeID  string `json:"node_id"`
 	Name    string `json:"name"`
 	Running int    `json:"running_turns"`
+	Invite  string `json:"invite,omitempty"` // 未知节点首次心跳等价注册，同样过邀请码门
 }
 
 // call 单次 JSON POST/GET 封装：Bearer 头、状态码检查、错误体解包。
@@ -279,7 +322,7 @@ func (c *NodeClient) PushObject(ctx context.Context, body io.Reader) (ObjAck, er
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
 	req.Header.Set("Content-Type", "application/gzip")
-	resp, err := (&http.Client{}).Do(req)
+	resp, err := c.pushHTTP().Do(req)
 	if err != nil {
 		return ObjAck{}, err
 	}

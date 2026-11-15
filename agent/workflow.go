@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"git.gorun.fun/share/grf-harness/cluster"
 	"git.gorun.fun/share/grf-harness/js"
 	"git.gorun.fun/share/grf-harness/tools"
 )
@@ -27,12 +28,14 @@ type workflowCtx struct {
 	used    int
 	a       *Agent
 	m       *Manager
+	router  *cluster.Router // 集群路由层（指挥官根会话非 nil；agent() 跨节点）
 	ctx     context.Context // 回合取消链：agent() 的前台子代理跑在它的派生上
 	failErr error
 }
 
-// RegisterWorkflow 注册 workflow 工具。
-func RegisterWorkflow(r *tools.Registry, a *Agent, m *Manager) {
+// RegisterWorkflow 注册 workflow 工具。router 非 nil 时（指挥官根会话）
+// agent() 的 opts.node / label 命中集群节点即跨节点派发（M5c）。
+func RegisterWorkflow(r *tools.Registry, a *Agent, m *Manager, router *cluster.Router) {
 	r.Register("workflow", func(ctx context.Context, args string) (tools.Result, error) {
 		var p struct {
 			Script string         `json:"script"`
@@ -51,10 +54,11 @@ func RegisterWorkflow(r *tools.Registry, a *Agent, m *Manager) {
 		name, _ := p.Meta["name"].(string)
 
 		wc := &workflowCtx{
-			sem: make(chan struct{}, workflowConcurrency),
-			a:   a,
-			m:   m,
-			ctx: ctx,
+			sem:    make(chan struct{}, workflowConcurrency),
+			a:      a,
+			m:      m,
+			router: router,
+			ctx:    ctx,
 		}
 
 		host := map[string]js.HostFn{
@@ -176,7 +180,9 @@ func (w *workflowCtx) release() {
 }
 
 // runAgent 执行一个 workflow 子代理（带并发守卫），返回最终文本或结构
-// 化结果；子代理失败返回 nil（配合 .filter(Boolean)）。
+// 化结果；子代理失败返回 nil（配合 .filter(Boolean)）。opts.node（或
+// label）命中集群节点时跨节点派发（M5c）：远端是完整 agent 会话，schema
+// 契约（最终消息带 JSON）同样适用。
 func (w *workflowCtx) runAgent(prompt string, opts map[string]any) js.Value {
 	if err := w.acquire(); err != nil {
 		panicWorkflow(err)
@@ -185,6 +191,7 @@ func (w *workflowCtx) runAgent(prompt string, opts map[string]any) js.Value {
 
 	label := "workflow-agent"
 	phase := ""
+	node := ""
 	if opts != nil {
 		if l, ok := opts["label"].(string); ok && l != "" {
 			label = l
@@ -192,11 +199,14 @@ func (w *workflowCtx) runAgent(prompt string, opts map[string]any) js.Value {
 		if ph, ok := opts["phase"].(string); ok && ph != "" {
 			phase = ph
 		}
+		if n, ok := opts["node"].(string); ok {
+			node = n
+		}
 		for k := range opts {
 			switch k {
-			case "label", "phase", "schema", "provider", "model":
+			case "label", "phase", "schema", "provider", "model", "node":
 			default:
-				panicWorkflow(fmt.Errorf("agent() opts.%s is rejected (allowed: label, phase, schema, provider, model)", k))
+				panicWorkflow(fmt.Errorf("agent() opts.%s is rejected (allowed: label, phase, schema, provider, model, node)", k))
 			}
 		}
 	}
@@ -212,7 +222,28 @@ func (w *workflowCtx) runAgent(prompt string, opts map[string]any) js.Value {
 			promptText += "\n\n(End your final message with a single JSON object — no prose around it — satisfying the requested schema.)"
 		}
 	}
-	_, out, err := w.m.Subagent(w.ctx, w.a, label, promptText, false)
+	var out string
+	var err error
+	// 跨节点分支（M5c）：opts.node 显式点名优先，label 命中次之（与
+	// subagent 的 @name/labels 路由同判定）。显式点名未命中报错——脚本
+	// 作者的意图必须可验证；label 未命中静默本地（默认本地语义不变）。
+	if w.router != nil && w.router.ShouldRoute(node) {
+		_, out, err = w.router.Dispatch(w.ctx, cluster.DispatchReq{
+			Description: node,
+			Prompt:      promptText,
+			Background:  false,
+			Host:        func() tools.Host { return w.a.host },
+		})
+	} else if w.router != nil && node == "" && w.router.ShouldRoute(label) {
+		_, out, err = w.router.Dispatch(w.ctx, cluster.DispatchReq{
+			Description: label,
+			Prompt:      promptText,
+			Background:  false,
+			Host:        func() tools.Host { return w.a.host },
+		})
+	} else {
+		_, out, err = w.m.Subagent(w.ctx, w.a, label, promptText, false)
+	}
 	if err != nil {
 		// null 契约不变（.filter(Boolean) 过滤），但失败原因必须可见——
 		// 静默 null 会把"偶发子代理失败"伪装成"schema 用法问题"

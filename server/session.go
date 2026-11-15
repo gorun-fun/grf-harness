@@ -115,6 +115,9 @@ type Server struct {
 	// /cluster/* 的双令牌鉴权）。
 	cluster    *cluster.Router
 	clusterCfg *config.Cluster
+	// clusterTasks 中继任务登记（M3b：taskID → 会话/链尾；节点侧
+	// ExecuteClusterCommand 的续聊/取消/回投定位）。s.mu 保护。
+	clusterTasks map[string]*clusterTask
 }
 
 // New 构建 Server。token 为空时自动生成并写入 <data>/token（0600）。

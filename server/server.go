@@ -126,6 +126,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/agent/skills/{name}/enabled", s.guard(s.handleAgentSkillEnabled))
 	mux.HandleFunc("GET /v1/agent/cluster", s.guard(s.handleAgentClusterGet))
 	mux.HandleFunc("PUT /v1/agent/cluster", s.guard(s.handleAgentClusterPut))
+	mux.HandleFunc("GET /v1/agent/cluster/status", s.guard(s.handleAgentClusterStatus))
 	mux.HandleFunc("GET /v1/health", s.guard(s.handleHealth))
 	// 集群控制面（EnableCluster 之后装配；任务面复用既有 /v1/* 端点）。
 	// 鉴权双令牌：server token 或集群共享密钥（call-home 节点无需 RCE
@@ -137,6 +138,10 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET /cluster/members", s.guardCluster(s.handleClusterMembers))
 		// M2 文件传输：共享对象接收（push-only，无拉取端点）。
 		mux.HandleFunc("POST /cluster/files/obj", s.guardCluster(s.handleClusterObjPost))
+		// M3b 指令收件箱（节点 SSE 长连下行）与 M5b 落定回投（节点→
+		// 指挥官终态事件）。
+		mux.HandleFunc("GET /cluster/inbox", s.guardCluster(s.handleClusterInbox))
+		mux.HandleFunc("POST /cluster/events", s.guardCluster(s.handleClusterEvents))
 	}
 	return accessLog(mux)
 }

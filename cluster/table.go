@@ -23,6 +23,7 @@ const (
 const (
 	SourceStatic     = "static"
 	SourceRegistered = "registered"
+	SourceMdns       = "mdns"
 )
 
 // heartbeatTTL 心跳过期阈值（15s 间隔 × 6 个周期）；超时成员转 offline。
@@ -122,9 +123,71 @@ func (t *Table) Heartbeat(nodeID, name string, running int) bool {
 	return true
 }
 
-// Snapshot 成员快照（路由名字典序）。心跳过期的 registered 成员转
-// offline（不影响存储的 LastSeen）；static 成员无心跳概念，保持
-// unknown/最近注册状态。
+// Get 按路由名取成员快照（不存在返回 nil）。
+func (t *Table) Get(name string) *Member {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if m, ok := t.members[name]; ok {
+		c := *m
+		if c.Labels != nil {
+			c.Labels = append([]string(nil), m.Labels...)
+		}
+		return &c
+	}
+	return nil
+}
+
+// SetCaps 补录成员能力清单（mDNS 发现后拉取 /cluster/capabilities 的
+// 回填；静态/注册成员的能力由注册上报，一般不走这里）。未知成员忽略。
+func (t *Table) SetCaps(name string, caps *Capabilities) {
+	if caps == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if m, ok := t.members[name]; ok {
+		c := *caps
+		m.Caps = &c
+	}
+}
+
+// Known 节点是否已在表中（邀请码门用：未知节点的首次心跳等价注册，
+// 须过门；已知节点心跳免验——掉线重连不必反复出示邀请码）。
+func (t *Table) Known(name string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	_, ok := t.members[name]
+	return ok
+}
+
+// Announce 发现通道（mDNS）存活上报：按路由名 upsert（保留静态条目属性），
+// 刷新在线状态与 LastSeen。与 heartbeat 分开命名——语义来源不同，快照
+// 渲染时可区分 trust 级别（call-home 是节点主动投靠，mDNS 是局域网广播）。
+func (t *Table) Announce(nodeID, name, addr string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if name == "" {
+		return
+	}
+	cur, ok := t.members[name]
+	if !ok {
+		t.members[name] = &Member{
+			NodeID: nodeID, Name: name, Addr: addr, Source: SourceMdns,
+			Status: StatusOnline, LastSeen: time.Now().Unix(),
+		}
+		return
+	}
+	cur.NodeID = nodeID
+	if cur.Source == SourceMdns && addr != "" {
+		cur.Addr = addr
+	}
+	cur.Status = StatusOnline
+	cur.LastSeen = time.Now().Unix()
+}
+
+// Snapshot 成员快照（路由名字典序）。心跳/发现过期的 registered 与
+// mdns 成员转 offline（不影响存储的 LastSeen）；static 成员无心跳概念，
+// 保持 unknown/最近注册状态。
 func (t *Table) Snapshot() []Member {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -135,7 +198,7 @@ func (t *Table) Snapshot() []Member {
 		if c.Labels != nil {
 			c.Labels = append([]string(nil), m.Labels...)
 		}
-		if c.Source == SourceRegistered && c.LastSeen > 0 &&
+		if (c.Source == SourceRegistered || c.Source == SourceMdns) && c.LastSeen > 0 &&
 			now.Sub(time.Unix(c.LastSeen, 0)) > heartbeatTTL {
 			c.Status = StatusOffline
 		}

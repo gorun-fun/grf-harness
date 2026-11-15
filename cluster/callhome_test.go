@@ -55,7 +55,7 @@ func TestCallHomeRegistersOwnCaps(t *testing.T) {
 		capsCalls++
 		return &Capabilities{NodeID: self.ID, Name: self.Name, Models: []string{"p/m"}}, nil
 	}
-	go CallHome(ctx, fc.srv.URL, "tok", self, caps, func() int { return 2 })
+	go CallHome(ctx, fc.srv.URL, "tok", "", self, caps, func() int { return 2 })
 
 	select {
 	case reg := <-fc.registered:
@@ -94,7 +94,7 @@ func TestCallHomeNilCaps(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	self := Identity{ID: "0123456789abcdef", Name: "bare"}
-	go CallHome(ctx, fc.srv.URL, "tok", self, nil, nil)
+	go CallHome(ctx, fc.srv.URL, "tok", "", self, nil, nil)
 	select {
 	case reg := <-fc.registered:
 		if reg.Capabilities != nil {

@@ -47,6 +47,50 @@ opens a controlled RCE entry:
 | GET | `/v1/agent/models/resolve?name=` | Structured model-name resolution (bare / qualified / empty = default; `{status: ok\|no_default\|not_found\|ambiguous\|unreadable, resolved?, candidates?}`, candidates listed on ambiguity). The **single authority** for model resolution — goder-serve's host-admin `resolve-model` forwards to this endpoint so headless host tasks can fail fast; re-reads settings.json per request, so provider declarations just written by a host are visible immediately |
 | GET | `/v1/health` | Liveness probe (authenticated) |
 
+## 2.5 Cluster control plane (multi-device gh mesh)
+
+The cluster feature (settings `cluster` section, see the
+[configuration reference](configuration.en.md)) turns gh servers on several
+machines into a commander/nodes mesh: **the task plane reuses the existing
+`/v1/responses` endpoints** (the commander dispatches in background mode and
+polls); this section covers the control plane. Every endpoint takes dual-token
+auth: the server's own token or the cluster shared secret `cluster.token`.
+
+| Method | Path | Purpose |
+|------|------|------|
+| GET | `/cluster/capabilities` | This node's capability list (tools/plugins/models/platform, no secrets) |
+| POST | `/cluster/register` | Call-home registration/revival (`node_id`/`name`/`addr?`/`invite?`/`capabilities?`) |
+| POST | `/cluster/heartbeat` | Heartbeat: refresh online status and load (unknown nodes register implicitly — invite gate applies equally) |
+| GET | `/cluster/members` | Member-table snapshot (commander-authoritative; sources: static/registered/mdns) |
+| POST | `/cluster/files/obj` | Shared-object intake (streaming tar.gz, SHA256, ≤256MB, 30-minute TTL) |
+| GET | `/cluster/inbox` | Node command inbox (SSE): connect with `?name=` and hold the stream; on reconnect undelivered commands are replayed (30-minute TTL) |
+| POST | `/cluster/events` | Settle report from nodes (`turn.settled` events: an early wake-up for polling on the direct path, the authoritative terminal state on the relay path) |
+| GET | `/v1/agent/cluster/status` | This node's cluster status snapshot (self/member table/inbox online/remote handles; data source for the goder panel, server-token auth) |
+
+**Two dispatch paths**:
+
+- **Direct**: static node-table entries carry `addr` plus that node's server
+  token. Tasks/cancels/pause answers hit the node's ORS endpoints directly;
+  the settle report (`/cluster/events`) merely shortens the polling. For https
+  deployments, set `pin` (sha256 cert fingerprint) to skip system CAs in favor
+  of TOFU pinning.
+- **Relay** (NAT traversal): nodes that call home without a static `addr`
+  receive `task`/`resume`/`cancel` commands over their `/cluster/inbox` SSE
+  stream; they execute locally and report terminal states via
+  `/cluster/events` (paused interaction requests ride the same event — the
+  commander's Host answers, then a `resume` command continues the run).
+  Relay-inline seeds are capped at 4MB; larger seeds need the direct channel.
+  If the node goes offline (heartbeat expiry), relayed tasks fail closed.
+
+**Invite code**: with `cluster.invite_code` set on the commander, register and
+unknown-node heartbeats must carry a matching invite (constant-time compare);
+known nodes skip re-checking. Empty = open registration (LAN trust model).
+
+**Security notes**: `cluster.token` equals full cluster authority (registering
+makes a machine eligible for dispatched tasks = controlled execution) — guard
+it like the server token; for cross-network deployments prefer `gh server
+-tls-cert ... -tls-key ...` plus per-node `pin` fingerprint pinning.
+
 ## 3. Session model: disk is truth, previous-chain
 
 - Requests without `previous_response_id` **lazily create** a session; the

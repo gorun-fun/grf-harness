@@ -43,6 +43,45 @@ gh server [-addr 127.0.0.1:7400] [-data ~/.grf/server] [-token <t>]
 | GET | `/v1/agent/models/resolve?name=` | 模型名结构化解析（裸名/限定名/空=默认；`{status: ok\|no_default\|not_found\|ambiguous\|unreadable, resolved?, candidates?}`，歧义带候选表）。模型选解的**唯一权威**——goder-serve 宿主管理面 `resolve-model` 转发本端点，无头宿主任务据此 fail-fast；每请求重读 settings.json，宿主刚落盘的供应商声明立即可见 |
 | GET | `/v1/health` | 探活（需鉴权） |
 
+## 2.5 集群控制面（多设备 gh 组网）
+
+集群（settings `cluster` 段，详见[配置参考](configuration.md)）把多台
+设备上的 gh server 组成"指挥官-节点"集群：**任务面完全复用既有
+`/v1/responses` 端点**（指挥官以 background 模式派发 + 轮询回收），本节
+是控制面端点。全部端点双令牌鉴权：server 自身 token 或集群共享密钥
+`cluster.token`。
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/cluster/capabilities` | 本节点能力清单（工具/插件/模型/平台，不含密钥） |
+| POST | `/cluster/register` | call-home 注册/复活（`node_id`/`name`/`addr?`/`invite?`/`capabilities?`） |
+| POST | `/cluster/heartbeat` | 心跳刷新在线状态与负载（未知节点等价注册，同样过邀请码门） |
+| GET | `/cluster/members` | 成员表快照（指挥官权威；static/registered/mdns 三来源） |
+| POST | `/cluster/files/obj` | 共享对象接收（tar.gz 流式、SHA256、≤256MB、30 分钟 TTL） |
+| GET | `/cluster/inbox` | 节点指令收件箱（SSE）：`?name=` 挂长连收指令，断线重连补投未消费指令（TTL 30 分钟） |
+| POST | `/cluster/events` | 节点落定回投（`turn.settled` 事件：直连场景提前唤醒轮询，中继场景是权威终态） |
+| GET | `/v1/agent/cluster/status` | 本节点集群状态快照（自身/成员表/收件箱在线/远端句柄；goder 面板数据源，server token 鉴权） |
+
+**两条派发路径**：
+
+- **直连**：静态节点表条目带 `addr` + 该节点 server token。任务/取消/
+  暂停应答直接打节点 ORS 端点；落定回投（`/cluster/events`）只是轮询的
+  提前量。https 部署可配 `pin`（证书 sha256 指纹）跳过系统 CA 做 TOFU
+  信任。
+- **中继**（NAT 穿透）：call-home 注册但无静态 `addr` 的节点，指挥官经
+  其 `/cluster/inbox` SSE 长连下发 `task`/`resume`/`cancel` 指令，节点本地
+  执行后经 `/cluster/events` 回投终态（暂停的交互请求也走事件，指挥官
+  Host 应答后经 resume 指令续跑）。指令内联种子上限 4MB，更大种子需直连
+  通道。节点掉线（心跳过期）后中继任务按失败收敛。
+
+**邀请码**：指挥官配 `cluster.invite_code` 后，register 与未知节点心跳
+必须携带匹配 invite（常量时间比较）；已知节点心跳免验。空 = 开放注册
+（LAN 信任模型）。
+
+**安全要点**：`cluster.token` 等同集群级全权（注册即可被派发任务 =
+受控执行）——与 server token 同级保密；跨网部署建议 `gh server
+-tls-cert ... -tls-key ...` 启用 TLS，配合节点条目 `pin` 指纹锁定。
+
 ## 3. 会话模型：磁盘为准，previous 链
 
 - 不带 `previous_response_id` 的请求**懒创建**新会话，响应里返回

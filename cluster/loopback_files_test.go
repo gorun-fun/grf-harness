@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -238,5 +239,94 @@ func TestClusterObjEndpoint(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 || !strings.Contains(string(body), `"ref"`) {
 		t.Fatalf("推送应 200 + ref，得到 %d %s", resp.StatusCode, body)
+	}
+}
+
+// TestLoopbackSyncGitAuto sync=git 自动档：未显式 seed_files 时打包 git
+// 跟踪文件下发（未跟踪文件不带）；节点读到跟踪文件内容。
+func TestLoopbackSyncGitAuto(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git 不可用")
+	}
+	c := newM2Cluster(t, []string{
+		`TOOL:read:{"file_path":"tracked.txt"}`,
+		"read done",
+	})
+	ws := t.TempDir()
+	runGit := func(args ...string) {
+		cmd := exec.Command("git", append([]string{"-C", ws}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	runGit("init", "-q")
+	os.WriteFile(filepath.Join(ws, "tracked.txt"), []byte("git-payload-9"), 0o644)
+	os.WriteFile(filepath.Join(ws, "untracked.txt"), []byte("nope"), 0o644)
+	runGit("add", "tracked.txt")
+	runGit("commit", "-q", "-m", "x")
+	// 指挥官切 git 档
+	c.cmdr.SetSyncModeForTest("git")
+
+	ch := make(chan settle, 4)
+	_, _, err := c.cmdr.Dispatch(context.Background(), cluster.DispatchReq{
+		Description: "read tracked @node1",
+		Prompt:      "read tracked.txt",
+		Background:  true,
+		Fs:          tools.NewFsPolicy(ws, false, false, nil),
+		Notify:      func(id, label, outcome, final string) { ch <- settle{id, label, outcome, final} },
+	})
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	s := waitSettle(t, ch)
+	if s.outcome != "completed" {
+		t.Fatalf("落定 = %q（final=%q）", s.outcome, s.final)
+	}
+	msgs := c.nodeLLM.callMessages(2)
+	if !strings.Contains(msgs, "git-payload-9") {
+		t.Fatalf("节点应看到 git 跟踪文件内容：\n%s", msgs)
+	}
+	if strings.Contains(msgs, "nope") {
+		t.Fatalf("未跟踪文件不应下发")
+	}
+}
+
+// TestLoopbackSyncFullAuto sync=full 自动档：整个工作区（跳过 .git）
+// 自动打包下发，无需 seed_files。
+func TestLoopbackSyncFullAuto(t *testing.T) {
+	c := newM2Cluster(t, []string{
+		`TOOL:read:{"file_path":"data/notes.md"}`,
+		"read done",
+	})
+	ws := t.TempDir()
+	os.MkdirAll(filepath.Join(ws, "data"), 0o755)
+	os.WriteFile(filepath.Join(ws, "data", "notes.md"), []byte("full-payload-3"), 0o644)
+	os.MkdirAll(filepath.Join(ws, ".git", "objects"), 0o755)
+	os.WriteFile(filepath.Join(ws, ".git", "objects", "big.pack"), []byte("packjunk"), 0o644)
+	c.cmdr.SetSyncModeForTest("full")
+
+	ch := make(chan settle, 4)
+	_, _, err := c.cmdr.Dispatch(context.Background(), cluster.DispatchReq{
+		Description: "read notes @node1",
+		Prompt:      "read data/notes.md",
+		Background:  true,
+		Fs:          tools.NewFsPolicy(ws, false, false, nil),
+		Notify:      func(id, label, outcome, final string) { ch <- settle{id, label, outcome, final} },
+	})
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	s := waitSettle(t, ch)
+	if s.outcome != "completed" {
+		t.Fatalf("落定 = %q（final=%q）", s.outcome, s.final)
+	}
+	msgs := c.nodeLLM.callMessages(2)
+	if !strings.Contains(msgs, "full-payload-3") {
+		t.Fatalf("节点应看到全工作区文件：\n%s", msgs)
+	}
+	if strings.Contains(msgs, "packjunk") {
+		t.Fatalf(".git 不应下发")
 	}
 }
