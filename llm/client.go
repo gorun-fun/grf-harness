@@ -543,10 +543,12 @@ func (c *toolCallCollector) finish() []ToolCall {
 	return out
 }
 
-// ModelInfo 一条模型信息（GET /models 解析）。
+// ModelInfo 一条模型信息（GET /models 解析）。json tag 小写是
+// /v1/agent/models/detect 应答契约(goder 前端读 id/ctxLen):缺 tag 时
+// Go 默认序列化 "ID"/"CtxLen",前端读不到 id 会把检测结果变成 [null]。
 type ModelInfo struct {
-	ID     string
-	CtxLen int // 上下文窗口（按社区常见字段名探测，未提供为 0）
+	ID     string `json:"id"`
+	CtxLen int    `json:"ctxLen"` // 上下文窗口（按社区常见字段名探测，未提供为 0）
 }
 
 // ModelsRich 查询模型列表（含上下文窗口）：data[].id 与裸数组 [{id}]
